@@ -15,6 +15,8 @@
 //     allocation-free when capacity suffices.
 package storage
 
+import "github.com/vmihailenco/msgpack/v5"
+
 // DefaultBufCap is the initial capacity for reusable key/value buffers in Batch and Store I/O.
 const DefaultBufCap = 1024
 
@@ -30,3 +32,21 @@ const (
 
 // Blake3DigestLen is the size of a raw Blake3 hash stored in KV blob pointers.
 const Blake3DigestLen = 32
+
+// MarshalPersist msgpack-encodes v and appends a wire envelope to buf.
+func MarshalPersist(buf []byte, version byte, v any) ([]byte, error) {
+	raw, err := msgpack.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	return AppendEnvelope(buf, version, raw)
+}
+
+// UnmarshalPersist decodes an envelope and msgpack-decodes into v.
+func UnmarshalPersist(data []byte, v any) error {
+	raw, err := DecodeEnvelope(data)
+	if err != nil {
+		return err
+	}
+	return msgpack.Unmarshal(raw, v)
+}
