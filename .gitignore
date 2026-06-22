@@ -1,0 +1,21 @@
+# Go build output
+/beaver
+/bin/
+*.exe
+*.test
+vendor/
+
+
+# Local scratch
+/target
+*.failed
+*_failed
+run.sh
+
+# Editor / tooling
+.*
+!.gitignore
+!.gitattributes
+!.github
+.specs
+.agents
