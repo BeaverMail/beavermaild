@@ -5,6 +5,7 @@ go 1.26
 require (
 	github.com/pierrec/lz4/v4 v4.1.27
 	github.com/vmihailenco/msgpack/v5 v5.4.1
+	github.com/zeebo/blake3 v0.2.4
 	github.com/zeebo/xxh3 v1.1.0
 	modernc.org/sqlite v1.53.0
 )
