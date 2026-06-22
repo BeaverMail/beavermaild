@@ -11,3 +11,19 @@ const (
 	SubspaceAdmin   byte = 'a' // admin objects (msgpack)
 	SubspaceAccount byte = 'u' // account / quota data
 )
+
+// SchemaVersion is the current storage schema migration level.
+const SchemaVersion = 1
+
+// Subspaces returns every subspace byte with a dedicated KV table.
+func Subspaces() []byte {
+	return []byte{
+		SubspaceMail,
+		SubspaceIndex,
+		SubspaceQueue,
+		SubspaceTags,
+		SubspaceLookup,
+		SubspaceAdmin,
+		SubspaceAccount,
+	}
+}
