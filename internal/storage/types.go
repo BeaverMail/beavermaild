@@ -1,7 +1,7 @@
 // Core persisted record types (msgpack in KV envelope).
 package storage
 
-// Tenant groups domains for multi-tenant installs (single-tenant M1 uses id 1).
+// Tenant groups domains for multi-tenant installs (default install uses id 1).
 type Tenant struct {
 	ID   uint32 `msgpack:"id"`
 	Name string `msgpack:"n"`

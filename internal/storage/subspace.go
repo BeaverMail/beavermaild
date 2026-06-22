@@ -1,7 +1,7 @@
-// Subspace identifiers: one SQL table per letter in M1.
+// Subspace identifiers: one SQL table per letter.
 package storage
 
-// M1 subspace bytes (one KV table per value).
+// Subspace bytes (one KV table per value).
 const (
 	SubspaceMail    byte = 'm' // mail / document properties
 	SubspaceIndex   byte = 'i' // secondary and inverse indexes

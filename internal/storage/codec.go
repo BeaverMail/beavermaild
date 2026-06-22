@@ -2,8 +2,8 @@
 //
 // Design notes (see .specs/storage.md):
 //
-//   - Store: every method on the Store interface takes context.Context (Postgres
-//     timeouts, Redis locks in M2, graceful shutdown). MarshalPersist / UnmarshalPersist
+//   - Store: every method on the Store interface takes context.Context (timeouts,
+//     cancellation, cluster locks, graceful shutdown). MarshalPersist / UnmarshalPersist
 //     are local CPU and do not take ctx.
 //
 //   - Keys: prefer AppendKey(buf, ...) over MakeKey(...) so hot paths reuse a []byte
