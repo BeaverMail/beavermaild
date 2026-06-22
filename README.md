@@ -11,6 +11,8 @@ Complete mail and collaboration server in Go. One deploy for SMTP, IMAP, POP3, J
 ```bash
 go build -o beaver ./cmd/beaver
 ./beaver version
+./beaver init
+./beaver serve
 ```
 
 ## License
