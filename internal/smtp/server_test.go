@@ -39,7 +39,7 @@ func TestSMTPDeliverMessage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := smtp.NewServer(log.New("error"), ln.Addr().String(), dir, inbox)
+	srv := smtp.NewServer(log.New("error"), ln.Addr().String(), dir, inbox, "", smtp.Options{})
 	sctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go func() { _ = srv.ServeListener(sctx, ln) }()
@@ -53,7 +53,7 @@ func TestSMTPDeliverMessage(t *testing.T) {
 
 	read := bufio.NewReader(conn)
 	expect(t, read, "220")
-	send(t, conn, "EHLO test")
+	send(t, conn, "HELO test")
 	expect(t, read, "250")
 	send(t, conn, "MAIL FROM:<sender@example.com>")
 	expect(t, read, "250")

@@ -46,7 +46,7 @@ func TestIMAPFetchInbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := imap.NewServer(log.New("error"), ln.Addr().String(), dir, inbox)
+	srv := imap.NewServer(log.New("error"), ln.Addr().String(), dir, inbox, imap.Options{})
 	sctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go func() { _ = srv.ServeListener(sctx, ln) }()

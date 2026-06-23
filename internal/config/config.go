@@ -16,23 +16,34 @@ const DefaultDataDir = "data"
 
 // Config is the on-disk bootstrap configuration (JSON).
 type Config struct {
-	DataDir  string     `json:"data_dir"`
-	LogLevel string     `json:"log_level"`
-	Secrets  Secrets    `json:"secrets"`
+	DataDir  string      `json:"data_dir"`
+	LogLevel string      `json:"log_level"`
+	Secrets  Secrets     `json:"secrets"`
+	TLS      TLSConfig   `json:"tls"`
 	SMTP     SMTPConfig  `json:"smtp"`
 	IMAP     IMAPConfig  `json:"imap"`
 	Queue    QueueConfig `json:"queue"`
 }
 
+// TLSConfig holds PEM paths for server TLS (M5a manual certs).
+type TLSConfig struct {
+	CertFile   string `json:"cert_file"`
+	KeyFile    string `json:"key_file"`
+	MinVersion string `json:"min_version"`
+	Required   bool   `json:"required"`
+}
+
 // SMTPConfig holds inbound SMTP listener settings.
 type SMTPConfig struct {
-	Listen string `json:"listen"`
-	Relay  string `json:"relay"`
+	Listen           string `json:"listen"`
+	SubmissionListen string `json:"submission_listen"`
+	Relay            string `json:"relay"`
 }
 
 // IMAPConfig holds IMAP listener settings.
 type IMAPConfig struct {
-	Listen string `json:"listen"`
+	Listen    string `json:"listen"`
+	TLSListen string `json:"tls_listen"`
 }
 
 // QueueConfig holds outbound queue schedule defaults.
@@ -143,12 +154,22 @@ func (c *Config) SMTPRelay() string {
 	return strings.TrimSpace(c.SMTP.Relay)
 }
 
-// IMAPListen returns the IMAP bind address.
+// IMAPListen returns the plain IMAP bind address.
 func (c *Config) IMAPListen() string {
 	if c.IMAP.Listen != "" {
 		return c.IMAP.Listen
 	}
 	return "127.0.0.1:1143"
+}
+
+// IMAPTLSListen returns the implicit-TLS IMAP bind address (empty if disabled).
+func (c *Config) IMAPTLSListen() string {
+	return strings.TrimSpace(c.IMAP.TLSListen)
+}
+
+// SMTPSubmissionListen returns the submission SMTP bind address (may be empty).
+func (c *Config) SMTPSubmissionListen() string {
+	return strings.TrimSpace(c.SMTP.SubmissionListen)
 }
 
 // ConfigPath returns data_dir/config.json.
@@ -164,6 +185,27 @@ func (c *Config) StorePath() string {
 // BlobDir returns the filesystem blob store root.
 func (c *Config) BlobDir() string {
 	return filepath.Join(c.DataDir, "blobs")
+}
+
+// TLSPair returns absolute cert and key paths when TLS is configured.
+func (c *Config) TLSPair() (certFile, keyFile string, ok bool) {
+	certFile = strings.TrimSpace(c.TLS.CertFile)
+	keyFile = strings.TrimSpace(c.TLS.KeyFile)
+	if certFile == "" || keyFile == "" {
+		return "", "", false
+	}
+	if !filepath.IsAbs(certFile) {
+		certFile = filepath.Join(c.DataDir, certFile)
+	}
+	if !filepath.IsAbs(keyFile) {
+		keyFile = filepath.Join(c.DataDir, keyFile)
+	}
+	return certFile, keyFile, true
+}
+
+// TLSRequired reports whether plain-text auth must be rejected.
+func (c *Config) TLSRequired() bool {
+	return c.TLS.Required
 }
 
 // QueueTimings holds parsed outbound queue schedule values.

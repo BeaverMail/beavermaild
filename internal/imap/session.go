@@ -14,6 +14,7 @@ import (
 	"github.com/BeaverMail/beaver/internal/directory"
 	"github.com/BeaverMail/beaver/internal/mail"
 	"github.com/BeaverMail/beaver/internal/storage"
+	"github.com/BeaverMail/beaver/internal/tlsload"
 )
 
 type session struct {
@@ -22,6 +23,10 @@ type session struct {
 	r     *bufio.Reader
 	dir   *directory.Local
 	inbox *mail.Inbox
+	tls   *tlsload.Certs
+
+	secure      bool
+	tlsRequired bool
 
 	principal directory.Principal
 	selected  bool
@@ -30,13 +35,16 @@ type session struct {
 	messages  []mail.Message
 }
 
-func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *mail.Inbox) *session {
+func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *mail.Inbox, certs *tlsload.Certs, secure, tlsRequired bool) *session {
 	return &session{
-		log:   log,
-		conn:  conn,
-		r:     bufio.NewReader(conn),
-		dir:   dir,
-		inbox: inbox,
+		log:         log,
+		conn:        conn,
+		r:           bufio.NewReader(conn),
+		dir:         dir,
+		inbox:       inbox,
+		tls:         certs,
+		secure:      secure,
+		tlsRequired: tlsRequired,
 	}
 }
 
@@ -58,7 +66,7 @@ func (s *session) run(ctx context.Context) error {
 		}
 		switch cmd {
 		case "CAPABILITY":
-			if err := s.untagged("CAPABILITY IMAP4rev1 MOVE"); err != nil {
+			if err := s.untagged(s.capabilityLine()); err != nil {
 				return err
 			}
 			if err := s.tagged(tag, "OK CAPABILITY completed"); err != nil {
@@ -69,6 +77,12 @@ func (s *session) run(ctx context.Context) error {
 				return err
 			}
 		case "LOGIN":
+			if s.tlsRequired && !s.secure {
+				if err := s.tagged(tag, "NO TLS required"); err != nil {
+					return err
+				}
+				continue
+			}
 			user, pass, ok := parseLogin(arg)
 			if !ok {
 				if err := s.tagged(tag, "BAD LOGIN requires user and password"); err != nil {
@@ -179,6 +193,10 @@ func (s *session) run(ctx context.Context) error {
 					return err
 				}
 			}
+		case "STARTTLS":
+			if err := s.cmdStartTLS(tag); err != nil {
+				return err
+			}
 		case "LOGOUT":
 			_ = s.untagged("BYE logging out")
 			_ = s.tagged(tag, "OK LOGOUT completed")
@@ -189,6 +207,34 @@ func (s *session) run(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+func (s *session) capabilityLine() string {
+	caps := "IMAP4rev1 MOVE"
+	if s.tls != nil && !s.secure {
+		caps += " STARTTLS"
+	}
+	return "CAPABILITY " + caps
+}
+
+func (s *session) cmdStartTLS(tag string) error {
+	if s.secure {
+		return s.tagged(tag, "BAD TLS already active")
+	}
+	if s.tls == nil {
+		return s.tagged(tag, "BAD TLS not available")
+	}
+	if err := s.tagged(tag, "OK Begin TLS negotiation now"); err != nil {
+		return err
+	}
+	tlsConn := s.tls.WrapServer(s.conn)
+	if err := tlsConn.Handshake(); err != nil {
+		return err
+	}
+	s.conn = tlsConn
+	s.r = bufio.NewReader(tlsConn)
+	s.secure = true
+	return nil
 }
 
 func (s *session) openMailbox(ctx context.Context, tag, name string, examine bool) error {

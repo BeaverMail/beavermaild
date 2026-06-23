@@ -14,6 +14,7 @@ import (
 	"github.com/BeaverMail/beaver/internal/storage"
 	"github.com/BeaverMail/beaver/internal/storage/blob"
 	"github.com/BeaverMail/beaver/internal/storage/sqlite"
+	"github.com/BeaverMail/beaver/internal/tlsload"
 )
 
 // App holds runtime resources opened by beaver serve.
@@ -39,6 +40,14 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 	dir := directory.NewLocal(store)
 	inbox := mail.NewInbox(store, blobs)
 	queue := mail.NewQueue(store, blobs)
+
+	certs, err := openTLSCerts(cfg)
+	if err != nil {
+		_ = store.Close()
+		return nil, err
+	}
+	tlsOpts := tlsOptions(cfg, certs)
+
 	return &App{
 		log:   log,
 		cfg:   cfg,
@@ -47,9 +56,41 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 		dir:   dir,
 		inbox: inbox,
 		queue: queue,
-		smtp:  smtp.NewServer(log, cfg.SMTPListen(), dir, inbox),
-		imap:  imap.NewServer(log, cfg.IMAPListen(), dir, inbox),
+		smtp: smtp.NewServer(log, cfg.SMTPListen(), dir, inbox, cfg.SMTPSubmissionListen(), smtp.Options{
+			Certs:       certs,
+			TLSRequired: tlsOpts.required,
+		}),
+		imap: imap.NewServer(log, cfg.IMAPListen(), dir, inbox, imap.Options{
+			Certs:       certs,
+			TLSListen:   tlsOpts.imapTLSListen,
+			TLSRequired: tlsOpts.required,
+		}),
 	}, nil
+}
+
+type tlsRuntime struct {
+	required     bool
+	imapTLSListen string
+}
+
+func tlsOptions(cfg *config.Config, certs *tlsload.Certs) tlsRuntime {
+	r := tlsRuntime{required: cfg.TLSRequired()}
+	if certs != nil && cfg.IMAPTLSListen() != "" {
+		r.imapTLSListen = cfg.IMAPTLSListen()
+	}
+	return r
+}
+
+func openTLSCerts(cfg *config.Config) (*tlsload.Certs, error) {
+	certFile, keyFile, ok := cfg.TLSPair()
+	if !ok {
+		return nil, nil
+	}
+	certs, err := tlsload.Load(certFile, keyFile, cfg.TLS.MinVersion)
+	if err != nil {
+		return nil, fmt.Errorf("load tls: %w", err)
+	}
+	return certs, nil
 }
 
 // Store returns the KV store.
@@ -75,13 +116,17 @@ func (a *App) Run(ctx context.Context) error {
 	go func() { errCh <- a.imap.Serve(ctx) }()
 	go mail.NewWorker(a.log, a.queue, a.inbox, a.dir, remoteDeliverer{relay: a.cfg.SMTPRelay()}, policy).Run(ctx)
 
+	_, _, tlsOn := a.cfg.TLSPair()
 	a.log.Info("beaver ready",
 		"data_dir", a.cfg.DataDir,
 		"store", a.cfg.StorePath(),
 		"blobs", a.cfg.BlobDir(),
 		"smtp", a.cfg.SMTPListen(),
+		"smtp_submission", a.cfg.SMTPSubmissionListen(),
 		"imap", a.cfg.IMAPListen(),
+		"imap_tls", a.cfg.IMAPTLSListen(),
 		"smtp_relay", a.cfg.SMTPRelay(),
+		"tls", tlsOn,
 	)
 
 	select {

@@ -9,61 +9,106 @@ import (
 
 	"github.com/BeaverMail/beaver/internal/directory"
 	"github.com/BeaverMail/beaver/internal/mail"
+	"github.com/BeaverMail/beaver/internal/tlsload"
 )
+
+// Options configures optional TLS for IMAP listeners.
+type Options struct {
+	Certs       *tlsload.Certs
+	TLSListen   string
+	TLSRequired bool
+}
 
 // Server accepts IMAP connections.
 type Server struct {
-	log   *slog.Logger
-	addr  string
-	dir   *directory.Local
-	inbox *mail.Inbox
-	ln    net.Listener
+	log         *slog.Logger
+	plainAddr   string
+	tlsAddr     string
+	dir         *directory.Local
+	inbox       *mail.Inbox
+	certs       *tlsload.Certs
+	tlsRequired bool
 }
 
-// NewServer returns an IMAP server bound to addr later via Serve.
-func NewServer(log *slog.Logger, addr string, dir *directory.Local, inbox *mail.Inbox) *Server {
-	return &Server{log: log, addr: addr, dir: dir, inbox: inbox}
+// NewServer returns an IMAP server bound to plainAddr; tlsAddr enables implicit TLS on :993.
+func NewServer(log *slog.Logger, plainAddr string, dir *directory.Local, inbox *mail.Inbox, opts Options) *Server {
+	return &Server{
+		log:         log,
+		plainAddr:   plainAddr,
+		tlsAddr:     opts.TLSListen,
+		dir:         dir,
+		inbox:       inbox,
+		certs:       opts.Certs,
+		tlsRequired: opts.TLSRequired,
+	}
 }
 
-// Serve listens on s.addr until ctx is canceled.
+type listenerSlot struct {
+	ln     net.Listener
+	secure bool
+}
+
+// Serve listens until ctx is canceled.
 func (s *Server) Serve(ctx context.Context) error {
-	ln, err := net.Listen("tcp", s.addr)
+	var slots []listenerSlot
+	plain, err := net.Listen("tcp", s.plainAddr)
 	if err != nil {
 		return err
 	}
-	return s.serve(ctx, ln)
+	slots = append(slots, listenerSlot{ln: plain, secure: false})
+	s.log.Info("imap listening", "addr", plain.Addr().String())
+
+	if s.tlsAddr != "" && s.certs != nil {
+		tlsLn, err := s.certs.Listen("tcp", s.tlsAddr)
+		if err != nil {
+			_ = plain.Close()
+			return err
+		}
+		slots = append(slots, listenerSlot{ln: tlsLn, secure: true})
+		s.log.Info("imap tls listening", "addr", tlsLn.Addr().String())
+	}
+
+	return s.serve(ctx, slots)
 }
 
 // ServeListener serves on an existing listener (for tests).
 func (s *Server) ServeListener(ctx context.Context, ln net.Listener) error {
-	return s.serve(ctx, ln)
+	return s.serve(ctx, []listenerSlot{{ln: ln, secure: false}})
 }
 
-func (s *Server) serve(ctx context.Context, ln net.Listener) error {
-	s.ln = ln
-	s.log.Info("imap listening", "addr", ln.Addr().String())
+// ServeTLSListener serves implicit TLS on an existing listener (for tests).
+func (s *Server) ServeTLSListener(ctx context.Context, ln net.Listener) error {
+	return s.serve(ctx, []listenerSlot{{ln: ln, secure: true}})
+}
 
-	go func() {
-		<-ctx.Done()
-		_ = ln.Close()
-	}()
-
-	for {
-		conn, err := ln.Accept()
-		if err != nil {
-			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
-				return nil
+func (s *Server) serve(ctx context.Context, slots []listenerSlot) error {
+	for _, slot := range slots {
+		slot := slot
+		go func() {
+			for {
+				conn, err := slot.ln.Accept()
+				if err != nil {
+					if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
+						return
+					}
+					s.log.Warn("imap accept", slog.Any("err", err))
+					continue
+				}
+				go s.serveConn(ctx, conn, slot.secure)
 			}
-			s.log.Warn("imap accept", slog.Any("err", err))
-			continue
-		}
-		go s.serveConn(ctx, conn)
+		}()
 	}
+
+	<-ctx.Done()
+	for _, slot := range slots {
+		_ = slot.ln.Close()
+	}
+	return nil
 }
 
-func (s *Server) serveConn(ctx context.Context, conn net.Conn) {
+func (s *Server) serveConn(ctx context.Context, conn net.Conn, secure bool) {
 	defer conn.Close()
-	sess := newSession(s.log, conn, s.dir, s.inbox)
+	sess := newSession(s.log, conn, s.dir, s.inbox, s.certs, secure, s.tlsRequired)
 	if err := sess.run(ctx); err != nil && ctx.Err() == nil {
 		s.log.Debug("imap session", slog.Any("err", err))
 	}

@@ -12,6 +12,7 @@ import (
 
 	"github.com/BeaverMail/beaver/internal/directory"
 	"github.com/BeaverMail/beaver/internal/mail"
+	"github.com/BeaverMail/beaver/internal/tlsload"
 )
 
 type session struct {
@@ -20,6 +21,10 @@ type session struct {
 	r     *bufio.Reader
 	dir   *directory.Local
 	inbox *mail.Inbox
+	tls   *tlsload.Certs
+
+	secure      bool
+	tlsRequired bool
 
 	mailFrom string
 	rcpt     []rcptTarget
@@ -30,13 +35,16 @@ type rcptTarget struct {
 	accountID uint32
 }
 
-func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *mail.Inbox) *session {
+func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *mail.Inbox, certs *tlsload.Certs, secure, tlsRequired bool) *session {
 	return &session{
-		log:   log,
-		conn:  conn,
-		r:     bufio.NewReader(conn),
-		dir:   dir,
-		inbox: inbox,
+		log:         log,
+		conn:        conn,
+		r:           bufio.NewReader(conn),
+		dir:         dir,
+		inbox:       inbox,
+		tls:         certs,
+		secure:      secure,
+		tlsRequired: tlsRequired,
 	}
 }
 
@@ -54,8 +62,16 @@ func (s *session) run(ctx context.Context) error {
 		}
 		cmd, arg := parseCommand(line)
 		switch cmd {
-		case "EHLO", "HELO":
-			if err := s.writef("250 localhost"); err != nil {
+		case "EHLO":
+			if err := s.writeEHLO(true); err != nil {
+				return err
+			}
+		case "HELO":
+			if err := s.writeEHLO(false); err != nil {
+				return err
+			}
+		case "STARTTLS":
+			if err := s.cmdStartTLS(); err != nil {
 				return err
 			}
 		case "MAIL":
@@ -148,6 +164,41 @@ func (s *session) run(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+func (s *session) writeEHLO(extended bool) error {
+	if !extended {
+		return s.writef("250 localhost")
+	}
+	if err := s.writef("250-localhost"); err != nil {
+		return err
+	}
+	if s.tls != nil && !s.secure {
+		if err := s.writef("250-STARTTLS"); err != nil {
+			return err
+		}
+	}
+	return s.writef("250 OK")
+}
+
+func (s *session) cmdStartTLS() error {
+	if s.secure {
+		return s.writef("503 TLS already active")
+	}
+	if s.tls == nil {
+		return s.writef("502 TLS not available")
+	}
+	if err := s.writef("220 Ready to start TLS"); err != nil {
+		return err
+	}
+	tlsConn := s.tls.WrapServer(s.conn)
+	if err := tlsConn.Handshake(); err != nil {
+		return err
+	}
+	s.conn = tlsConn
+	s.r = bufio.NewReader(tlsConn)
+	s.secure = true
+	return nil
 }
 
 func (s *session) reset() {
