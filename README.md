@@ -35,6 +35,20 @@ IMAP listens on `127.0.0.1:1143` by default (`imap.listen` or `BEAVER_IMAP_LISTE
 printf 'a1 LOGIN alice@localhost beaver\r\na2 SELECT INBOX\r\na3 FETCH 1 BODY[]\r\na4 LOGOUT\r\n' | nc 127.0.0.1 1143
 ```
 
+Outbound mail uses a queue drained by `beaver serve` (local recipients go to INBOX; set `smtp.relay` or `BEAVER_SMTP_RELAY` for remote). Enqueue manually:
+
+```bash
+./beaver send -config .data/config.json -from sender@example.com -to alice@localhost hello via queue
+```
+
+Queue retry uses a fixed interval table (`queue.retry_intervals`): `2m, 5m, 10m, 15m, 30m, 1h, 2h, 24h, 3d` by default; `max_lifetime` 3d; worker poll `run_delay` 1s. Override in `config.json`:
+
+```json
+"queue": { "run_delay": "5s" }
+```
+
+Or set `BEAVER_QUEUE_RUN_DELAY=5s` for faster local testing.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/BeaverMail/beaver/internal/app"
@@ -16,6 +17,8 @@ import (
 	"github.com/BeaverMail/beaver/internal/config"
 	"github.com/BeaverMail/beaver/internal/directory"
 	"github.com/BeaverMail/beaver/internal/log"
+	"github.com/BeaverMail/beaver/internal/mail"
+	"github.com/BeaverMail/beaver/internal/storage/blob"
 	"github.com/BeaverMail/beaver/internal/storage/sqlite"
 )
 
@@ -43,6 +46,8 @@ func run(args []string) int {
 		return runSeed(args[1:])
 	case "auth":
 		return runAuth(args[1:])
+	case "send":
+		return runSend(args[1:])
 	case "help", "-h", "--help":
 		usage()
 		return cli.ExitOK
@@ -168,6 +173,46 @@ func runAuth(args []string) int {
 	return cli.ExitOK
 }
 
+func runSend(args []string) int {
+	fs := flag.NewFlagSet("send", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	configPath := fs.String("config", filepath.Join(config.DefaultDataDir, "config.json"), "config file path")
+	from := fs.String("from", "sender@example.com", "MAIL FROM address")
+	to := fs.String("to", "", "recipient address")
+	if err := fs.Parse(args); err != nil {
+		return cli.ExitUsage
+	}
+	body := strings.TrimSpace(strings.Join(fs.Args(), " "))
+	if *to == "" || body == "" {
+		fmt.Fprintln(os.Stderr, "usage: beaver send [-config path] -from addr -to addr message...")
+		return cli.ExitUsage
+	}
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "send: load config: %v\n", err)
+		return cli.ExitError
+	}
+
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, cfg.StorePath())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "send: open store: %v\n", err)
+		return cli.ExitError
+	}
+	defer store.Close()
+
+	queue := mail.NewQueue(store, blob.NewFS(cfg.BlobDir()))
+	raw := mail.BuildSimpleMessage(*from, *to, body)
+	id, err := queue.Enqueue(ctx, *from, []string{*to}, raw)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "send: %v\n", err)
+		return cli.ExitError
+	}
+	fmt.Fprintf(os.Stderr, "queued id=%d to=%s\n", id, *to)
+	return cli.ExitOK
+}
+
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage:")
 	fmt.Fprintln(os.Stderr, "  beaver version")
@@ -175,4 +220,5 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  beaver serve [-config data/config.json]")
 	fmt.Fprintln(os.Stderr, "  beaver seed [-config data/config.json]")
 	fmt.Fprintln(os.Stderr, "  beaver auth [-config path] email password")
+	fmt.Fprintln(os.Stderr, "  beaver send [-config path] -from addr -to addr message...")
 }

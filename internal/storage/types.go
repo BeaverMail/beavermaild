@@ -44,9 +44,11 @@ type EmailMeta struct {
 
 // QueueRecipient is one RCPT in an outbound queue record.
 type QueueRecipient struct {
-	Address string `msgpack:"a"`
-	Retry   uint32 `msgpack:"r"`
-	Flags   uint64 `msgpack:"f"`
+	Address     string `msgpack:"a"`
+	Retry       uint32 `msgpack:"r"`
+	Flags       uint64 `msgpack:"f"`
+	LastAttempt int64  `msgpack:"la,omitempty"` // unix milliseconds; 0 = never tried
+	NextDue     int64  `msgpack:"nd,omitempty"` // unix milliseconds; 0 = due now
 }
 
 // QueueMessage is an SMTP queue entry (SubspaceQueue).

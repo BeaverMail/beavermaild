@@ -24,6 +24,7 @@ type App struct {
 	blobs *blob.FS
 	dir   *directory.Local
 	inbox *mail.Inbox
+	queue *mail.Queue
 	smtp  *smtp.Server
 	imap  *imap.Server
 }
@@ -37,6 +38,7 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 	blobs := blob.NewFS(cfg.BlobDir())
 	dir := directory.NewLocal(store)
 	inbox := mail.NewInbox(store, blobs)
+	queue := mail.NewQueue(store, blobs)
 	return &App{
 		log:   log,
 		cfg:   cfg,
@@ -44,6 +46,7 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 		blobs: blobs,
 		dir:   dir,
 		inbox: inbox,
+		queue: queue,
 		smtp:  smtp.NewServer(log, cfg.SMTPListen(), dir, inbox),
 		imap:  imap.NewServer(log, cfg.IMAPListen(), dir, inbox),
 	}, nil
@@ -57,9 +60,20 @@ func (a *App) Blobs() *blob.FS { return a.blobs }
 
 // Run blocks until ctx is canceled, then closes resources.
 func (a *App) Run(ctx context.Context) error {
+	qt, err := a.cfg.QueueTimings()
+	if err != nil {
+		return fmt.Errorf("queue policy: %w", err)
+	}
+	policy := mail.QueuePolicy{
+		RetryIntervals: qt.RetryIntervals,
+		MaxLifetime:    qt.MaxLifetime,
+		RunDelay:       qt.RunDelay,
+	}
+
 	errCh := make(chan error, 2)
 	go func() { errCh <- a.smtp.Serve(ctx) }()
 	go func() { errCh <- a.imap.Serve(ctx) }()
+	go mail.NewWorker(a.log, a.queue, a.inbox, a.dir, a.cfg.SMTPRelay(), relaySender{}, policy).Run(ctx)
 
 	a.log.Info("beaver ready",
 		"data_dir", a.cfg.DataDir,
@@ -67,6 +81,7 @@ func (a *App) Run(ctx context.Context) error {
 		"blobs", a.cfg.BlobDir(),
 		"smtp", a.cfg.SMTPListen(),
 		"imap", a.cfg.IMAPListen(),
+		"smtp_relay", a.cfg.SMTPRelay(),
 	)
 
 	select {

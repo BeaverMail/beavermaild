@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // DefaultDataDir is the relative data root when not overridden.
@@ -18,18 +19,27 @@ type Config struct {
 	DataDir  string     `json:"data_dir"`
 	LogLevel string     `json:"log_level"`
 	Secrets  Secrets    `json:"secrets"`
-	SMTP     SMTPConfig `json:"smtp"`
-	IMAP     IMAPConfig `json:"imap"`
+	SMTP     SMTPConfig  `json:"smtp"`
+	IMAP     IMAPConfig  `json:"imap"`
+	Queue    QueueConfig `json:"queue"`
 }
 
 // SMTPConfig holds inbound SMTP listener settings.
 type SMTPConfig struct {
 	Listen string `json:"listen"`
+	Relay  string `json:"relay"`
 }
 
 // IMAPConfig holds IMAP listener settings.
 type IMAPConfig struct {
 	Listen string `json:"listen"`
+}
+
+// QueueConfig holds outbound queue schedule defaults.
+type QueueConfig struct {
+	RetryIntervals []string `json:"retry_intervals"`
+	MaxLifetime    string   `json:"max_lifetime"`
+	RunDelay       string   `json:"run_delay"`
 }
 
 // Secrets holds generated credentials written by beaver init.
@@ -86,8 +96,14 @@ func (c *Config) ApplyEnv() {
 	if v := os.Getenv("BEAVER_SMTP_LISTEN"); v != "" {
 		c.SMTP.Listen = v
 	}
+	if v := os.Getenv("BEAVER_SMTP_RELAY"); v != "" {
+		c.SMTP.Relay = v
+	}
 	if v := os.Getenv("BEAVER_IMAP_LISTEN"); v != "" {
 		c.IMAP.Listen = v
+	}
+	if v := os.Getenv("BEAVER_QUEUE_RUN_DELAY"); v != "" {
+		c.Queue.RunDelay = v
 	}
 }
 
@@ -105,6 +121,12 @@ func (c *Config) Validate() error {
 	if c.IMAP.Listen == "" {
 		c.IMAP.Listen = "127.0.0.1:1143"
 	}
+	if c.Queue.MaxLifetime == "" {
+		c.Queue.MaxLifetime = "3d"
+	}
+	if c.Queue.RunDelay == "" {
+		c.Queue.RunDelay = "1s"
+	}
 	return nil
 }
 
@@ -114,6 +136,11 @@ func (c *Config) SMTPListen() string {
 		return c.SMTP.Listen
 	}
 	return "127.0.0.1:1025"
+}
+
+// SMTPRelay returns the outbound SMTP relay (may be empty).
+func (c *Config) SMTPRelay() string {
+	return strings.TrimSpace(c.SMTP.Relay)
 }
 
 // IMAPListen returns the IMAP bind address.
@@ -137,4 +164,40 @@ func (c *Config) StorePath() string {
 // BlobDir returns the filesystem blob store root.
 func (c *Config) BlobDir() string {
 	return filepath.Join(c.DataDir, "blobs")
+}
+
+// QueueTimings holds parsed outbound queue schedule values.
+type QueueTimings struct {
+	RetryIntervals []time.Duration
+	MaxLifetime    time.Duration
+	RunDelay       time.Duration
+}
+
+// QueueTimings parses queue schedule settings.
+func (c *Config) QueueTimings() (QueueTimings, error) {
+	intervals := c.Queue.RetryIntervals
+	if len(intervals) == 0 {
+		intervals = []string{"2m", "5m", "10m", "15m", "30m", "1h", "2h", "24h", "3d"}
+	}
+	parsed := make([]time.Duration, len(intervals))
+	for i, s := range intervals {
+		d, err := ParseDuration(s)
+		if err != nil {
+			return QueueTimings{}, err
+		}
+		parsed[i] = d
+	}
+	life, err := ParseDuration(c.Queue.MaxLifetime)
+	if err != nil {
+		return QueueTimings{}, err
+	}
+	run, err := ParseDuration(c.Queue.RunDelay)
+	if err != nil {
+		return QueueTimings{}, err
+	}
+	return QueueTimings{
+		RetryIntervals: parsed,
+		MaxLifetime:    life,
+		RunDelay:       run,
+	}, nil
 }
