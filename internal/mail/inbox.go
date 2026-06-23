@@ -11,8 +11,6 @@ import (
 	"github.com/BeaverMail/beaver/internal/storage/blob"
 )
 
-const InboxMailboxID uint32 = 1
-
 // Inbox stores received messages for an account.
 type Inbox struct {
 	store storage.Store

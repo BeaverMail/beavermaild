@@ -13,6 +13,7 @@ import (
 
 	"github.com/BeaverMail/beaver/internal/directory"
 	"github.com/BeaverMail/beaver/internal/mail"
+	"github.com/BeaverMail/beaver/internal/storage"
 )
 
 type session struct {
@@ -24,6 +25,7 @@ type session struct {
 
 	principal directory.Principal
 	selected  bool
+	mbox      mail.Mailbox
 	messages  []mail.Message
 }
 
@@ -89,104 +91,60 @@ func (s *session) run(ctx context.Context) error {
 			if err := s.tagged(tag, "OK LOGIN completed"); err != nil {
 				return err
 			}
-		case "SELECT":
+		case "LIST":
 			if s.principal.AccountID == 0 {
 				if err := s.tagged(tag, "NO LOGIN required"); err != nil {
 					return err
 				}
 				continue
 			}
-			name := strings.TrimSpace(strings.ToUpper(arg))
-			if name != "INBOX" {
-				if err := s.tagged(tag, "NO mailbox does not exist"); err != nil {
-					return err
-				}
-				continue
-			}
-			msgs, err := s.inbox.List(ctx, s.principal.AccountID, mail.InboxMailboxID)
+			mboxes, err := s.inbox.ListMailboxes(ctx, s.principal.AccountID)
 			if err != nil {
 				return err
 			}
-			s.messages = msgs
-			s.selected = true
-			if err := s.untagged(mail.IMAPCapabilityFlags); err != nil {
+			for _, mb := range mboxes {
+				if err := s.untagged(fmt.Sprintf(`LIST (\HasNoChildren) "/" %s`, formatListMailbox(mb.Name))); err != nil {
+					return err
+				}
+			}
+			if err := s.tagged(tag, "OK LIST completed"); err != nil {
 				return err
 			}
-			if err := s.untagged(fmt.Sprintf("%d EXISTS", len(msgs))); err != nil {
-				return err
-			}
-			if err := s.untagged("0 RECENT"); err != nil {
-				return err
-			}
-			if err := s.untagged("OK [UIDVALIDITY 1]"); err != nil {
-				return err
-			}
-			if err := s.tagged(tag, "OK [READ-WRITE] SELECT completed"); err != nil {
+		case "SELECT":
+			if err := s.selectMailbox(ctx, tag, parseMailboxName(arg)); err != nil {
 				return err
 			}
 		case "FETCH":
-			if !s.selected {
-				if err := s.tagged(tag, "NO not selected"); err != nil {
-					return err
-				}
-				continue
-			}
-			seq, items, ok := parseFetch(arg)
-			if !ok {
-				if err := s.tagged(tag, "BAD FETCH syntax"); err != nil {
-					return err
-				}
-				continue
-			}
-			if seq < 1 || int(seq) > len(s.messages) {
-				if err := s.tagged(tag, "OK FETCH completed"); err != nil {
-					return err
-				}
-				continue
-			}
-			msg := s.messages[seq-1]
-			if err := s.writeFetch(ctx, int(seq), msg, items); err != nil {
-				return err
-			}
-			if err := s.tagged(tag, "OK FETCH completed"); err != nil {
+			if err := s.cmdFetch(ctx, tag, arg, false); err != nil {
 				return err
 			}
 		case "STORE":
-			if !s.selected {
-				if err := s.tagged(tag, "NO not selected"); err != nil {
-					return err
-				}
-				continue
-			}
-			seq, op, set, clear, ok := parseStore(arg)
-			if !ok {
-				if err := s.tagged(tag, "BAD STORE syntax"); err != nil {
-					return err
-				}
-				continue
-			}
-			if seq < 1 || int(seq) > len(s.messages) {
-				if err := s.tagged(tag, "OK STORE completed"); err != nil {
-					return err
-				}
-				continue
-			}
-			msg := s.messages[seq-1]
-			if err := s.inbox.SetFlags(ctx, s.principal.AccountID, msg.UID, set, clear); err != nil {
+			if err := s.cmdStore(ctx, tag, arg, false); err != nil {
 				return err
 			}
-			meta, err := s.inbox.GetMeta(ctx, s.principal.AccountID, msg.UID)
-			if err != nil {
+		case "SEARCH":
+			if err := s.cmdSearch(ctx, tag, arg, false); err != nil {
 				return err
 			}
-			s.messages[seq-1].Meta = meta
-			if op != storeSilent {
-				if err := s.untagged(fmt.Sprintf("%d FETCH (FLAGS %s)", seq, mail.FormatIMAPFlags(meta.Flags))); err != nil {
+		case "UID":
+			sub, rest := splitCommand(arg)
+			switch sub {
+			case "FETCH":
+				if err := s.cmdFetch(ctx, tag, rest, true); err != nil {
 					return err
 				}
-			}
-			if err := s.tagged(tag, "OK STORE completed"); err != nil {
-				return err
+			case "STORE":
+				if err := s.cmdStore(ctx, tag, rest, true); err != nil {
+					return err
+				}
+			case "SEARCH":
+				if err := s.cmdSearch(ctx, tag, rest, true); err != nil {
+					return err
+				}
+			default:
+				if err := s.tagged(tag, "BAD command not supported"); err != nil {
+					return err
+				}
 			}
 		case "LOGOUT":
 			_ = s.untagged("BYE logging out")
@@ -198,6 +156,129 @@ func (s *session) run(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+func (s *session) selectMailbox(ctx context.Context, tag, name string) error {
+	if s.principal.AccountID == 0 {
+		return s.tagged(tag, "NO LOGIN required")
+	}
+	mbox, err := s.inbox.ResolveMailbox(ctx, s.principal.AccountID, name)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			return s.tagged(tag, "NO mailbox does not exist")
+		}
+		return err
+	}
+	msgs, err := s.inbox.List(ctx, s.principal.AccountID, mbox.ID)
+	if err != nil {
+		return err
+	}
+	s.messages = msgs
+	s.mbox = mbox
+	s.selected = true
+	if err := s.untagged(mail.IMAPCapabilityFlags); err != nil {
+		return err
+	}
+	if err := s.untagged(fmt.Sprintf("%d EXISTS", len(msgs))); err != nil {
+		return err
+	}
+	if err := s.untagged("0 RECENT"); err != nil {
+		return err
+	}
+	if err := s.untagged(fmt.Sprintf("OK [UIDVALIDITY %d]", mbox.UIDValidity)); err != nil {
+		return err
+	}
+	return s.tagged(tag, "OK [READ-WRITE] SELECT completed")
+}
+
+func (s *session) cmdFetch(ctx context.Context, tag, arg string, byUID bool) error {
+	if !s.selected {
+		return s.tagged(tag, "NO not selected")
+	}
+	setStr, items, ok := parseFetchArg(arg)
+	if !ok {
+		return s.tagged(tag, "BAD FETCH syntax")
+	}
+	set, err := parseSeqSet(setStr)
+	if err != nil {
+		return s.tagged(tag, "BAD FETCH syntax")
+	}
+	indices := s.resolveIndices(set, byUID)
+	for _, idx := range indices {
+		if err := s.writeFetch(ctx, idx+1, s.messages[idx], items); err != nil {
+			return err
+		}
+	}
+	return s.tagged(tag, "OK FETCH completed")
+}
+
+func (s *session) cmdStore(ctx context.Context, tag, arg string, byUID bool) error {
+	if !s.selected {
+		return s.tagged(tag, "NO not selected")
+	}
+	setStr, mode, set, clear, ok := parseStoreArg(arg)
+	if !ok {
+		return s.tagged(tag, "BAD STORE syntax")
+	}
+	setParsed, err := parseSeqSet(setStr)
+	if err != nil {
+		return s.tagged(tag, "BAD STORE syntax")
+	}
+	indices := s.resolveIndices(setParsed, byUID)
+	for _, idx := range indices {
+		msg := s.messages[idx]
+		if err := s.inbox.SetFlags(ctx, s.principal.AccountID, msg.UID, set, clear); err != nil {
+			return err
+		}
+		meta, err := s.inbox.GetMeta(ctx, s.principal.AccountID, msg.UID)
+		if err != nil {
+			return err
+		}
+		s.messages[idx].Meta = meta
+		if mode != storeSilent {
+			if err := s.untagged(fmt.Sprintf("%d FETCH (FLAGS %s)", idx+1, mail.FormatIMAPFlags(meta.Flags))); err != nil {
+				return err
+			}
+		}
+	}
+	return s.tagged(tag, "OK STORE completed")
+}
+
+func (s *session) cmdSearch(ctx context.Context, tag, arg string, byUID bool) error {
+	if !s.selected {
+		return s.tagged(tag, "NO not selected")
+	}
+	_ = ctx
+	criteria, ok := parseSearchCriteria(arg)
+	if !ok {
+		return s.tagged(tag, "BAD SEARCH syntax")
+	}
+	var nums []uint32
+	if byUID {
+		nums = mail.MatchSearchUID(s.messages, criteria)
+	} else {
+		nums = mail.MatchSearch(s.messages, criteria)
+	}
+	if err := s.untagged(formatSearch(nums)); err != nil {
+		return err
+	}
+	return s.tagged(tag, "OK SEARCH completed")
+}
+
+func (s *session) resolveIndices(set seqSet, byUID bool) []int {
+	if byUID {
+		refs := make([]messageRef, len(s.messages))
+		for i, m := range s.messages {
+			refs[i] = messageRef{uid: m.UID}
+		}
+		return set.expandUID(refs)
+	}
+	seqs := set.expandSeq(uint32(len(s.messages)))
+	out := make([]int, len(seqs))
+	for i, seq := range seqs {
+		out[i] = int(seq) - 1
+	}
+	return out
 }
 
 func (s *session) writeFetch(ctx context.Context, seq int, msg mail.Message, items fetchItems) error {
@@ -227,6 +308,41 @@ func (s *session) writeFetch(ctx context.Context, seq int, msg mail.Message, ite
 		return err
 	}
 	return s.untagged(fmt.Sprintf("%d FETCH (%s)", seq, strings.Join(parts, " ")))
+}
+
+func formatSearch(nums []uint32) string {
+	if len(nums) == 0 {
+		return "SEARCH"
+	}
+	parts := make([]string, len(nums))
+	for i, n := range nums {
+		parts[i] = strconv.FormatUint(uint64(n), 10)
+	}
+	return "SEARCH " + strings.Join(parts, " ")
+}
+
+func formatListMailbox(name string) string {
+	if strings.EqualFold(name, "INBOX") {
+		return "INBOX"
+	}
+	return `"` + strings.ReplaceAll(name, `"`, `\"`) + `"`
+}
+
+func parseMailboxName(arg string) string {
+	arg = strings.TrimSpace(arg)
+	if len(arg) >= 2 && arg[0] == '"' && arg[len(arg)-1] == '"' {
+		return arg[1 : len(arg)-1]
+	}
+	return arg
+}
+
+func splitCommand(arg string) (cmd, rest string) {
+	arg = strings.TrimSpace(arg)
+	i := strings.IndexByte(arg, ' ')
+	if i < 0 {
+		return strings.ToUpper(arg), ""
+	}
+	return strings.ToUpper(strings.TrimSpace(arg[:i])), strings.TrimSpace(arg[i+1:])
 }
 
 func (s *session) untagged(line string) error {
@@ -318,27 +434,31 @@ type fetchItems struct {
 	uid, flags, size, body bool
 }
 
-func parseFetch(arg string) (seq uint32, items fetchItems, ok bool) {
+func parseFetchArg(arg string) (setStr string, items fetchItems, ok bool) {
 	arg = strings.TrimSpace(arg)
 	i := strings.IndexByte(arg, ' ')
 	if i < 0 {
-		n, err := strconv.ParseUint(arg, 10, 32)
-		if err != nil {
-			return 0, items, false
+		if _, err := strconv.ParseUint(arg, 10, 32); err != nil {
+			return "", items, false
 		}
-		items.body = true
-		return uint32(n), items, true
+		return arg, fetchItems{body: true}, true
 	}
-	n, err := strconv.ParseUint(strings.TrimSpace(arg[:i]), 10, 32)
-	if err != nil {
-		return 0, items, false
+	setStr = strings.TrimSpace(arg[:i])
+	items, ok = parseFetchItems(arg[i+1:])
+	return setStr, items, ok
+}
+
+func parseFetchItems(rest string) (fetchItems, bool) {
+	upper := strings.ToUpper(rest)
+	var items fetchItems
+	items.uid = strings.Contains(upper, "UID")
+	items.flags = strings.Contains(upper, "FLAGS")
+	items.size = strings.Contains(upper, "RFC822.SIZE")
+	items.body = strings.Contains(upper, "BODY[]") || strings.Contains(upper, "RFC822")
+	if !items.uid && !items.flags && !items.size && !items.body {
+		return items, false
 	}
-	rest := strings.ToUpper(arg[i:])
-	items.uid = strings.Contains(rest, "UID")
-	items.flags = strings.Contains(rest, "FLAGS")
-	items.size = strings.Contains(rest, "RFC822.SIZE")
-	items.body = strings.Contains(rest, "BODY[]") || strings.Contains(rest, "RFC822")
-	return uint32(n), items, true
+	return items, true
 }
 
 type storeMode int
@@ -349,17 +469,18 @@ const (
 	storeRemove
 )
 
-func parseStore(arg string) (seq uint32, mode storeMode, set, clear uint32, ok bool) {
+func parseStoreArg(arg string) (setStr string, mode storeMode, set, clear uint32, ok bool) {
 	arg = strings.TrimSpace(arg)
 	i := strings.IndexByte(arg, ' ')
 	if i < 0 {
-		return 0, storeSilent, 0, 0, false
+		return "", storeSilent, 0, 0, false
 	}
-	n, err := strconv.ParseUint(strings.TrimSpace(arg[:i]), 10, 32)
-	if err != nil {
-		return 0, storeSilent, 0, 0, false
-	}
-	rest := strings.TrimSpace(arg[i+1:])
+	setStr = strings.TrimSpace(arg[:i])
+	mode, set, clear, ok = parseStoreFlags(strings.TrimSpace(arg[i+1:]))
+	return setStr, mode, set, clear, ok
+}
+
+func parseStoreFlags(rest string) (mode storeMode, set, clear uint32, ok bool) {
 	upper := strings.ToUpper(rest)
 	switch {
 	case strings.HasPrefix(upper, "+FLAGS"):
@@ -372,18 +493,18 @@ func parseStore(arg string) (seq uint32, mode storeMode, set, clear uint32, ok b
 		mode = storeSilent
 		rest = strings.TrimSpace(rest[len("FLAGS"):])
 	default:
-		return 0, storeSilent, 0, 0, false
+		return storeSilent, 0, 0, false
 	}
 	flagName := strings.TrimSpace(rest)
 	if flagName == "" {
-		return 0, storeSilent, 0, 0, false
+		return storeSilent, 0, 0, false
 	}
 	if flagName[0] == '(' {
 		flagName = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(flagName, "("), ")"))
 	}
 	bit, known := mail.ParseIMAPFlagName(flagName)
 	if !known {
-		return 0, storeSilent, 0, 0, false
+		return storeSilent, 0, 0, false
 	}
 	switch mode {
 	case storeAdd:
@@ -394,5 +515,5 @@ func parseStore(arg string) (seq uint32, mode storeMode, set, clear uint32, ok b
 		set = bit
 		clear = ^uint32(0) &^ bit
 	}
-	return uint32(n), mode, set, clear, true
+	return mode, set, clear, true
 }

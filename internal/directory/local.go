@@ -120,7 +120,11 @@ func (d *Local) CreateAccount(ctx context.Context, domainID uint32, localPart, p
 	}
 	acc := storage.Account{ID: id, DomainID: domainID, LocalPart: localPart, Active: true}
 	cred := Credential{Algorithm: passwordAlgorithm, PasswordHash: hash}
-	mbox := storage.Mailbox{ID: 1, Name: "INBOX", Role: "inbox", UIDNext: 1, UIDValidity: 1}
+	mailboxes := []storage.Mailbox{
+		{ID: 1, Name: "INBOX", Role: "inbox", UIDNext: 1, UIDValidity: 1},
+		{ID: 2, Name: "Sent", Role: "sent", UIDNext: 1, UIDValidity: 1},
+		{ID: 3, Name: "Trash", Role: "trash", UIDNext: 1, UIDValidity: 1},
+	}
 
 	batch := storage.NewBatch().WithAccount(systemAccountID)
 	if err := d.putAccount(batch, acc); err != nil {
@@ -132,8 +136,10 @@ func (d *Local) CreateAccount(ctx context.Context, domainID uint32, localPart, p
 	if err := d.putCred(batch, id, cred); err != nil {
 		return storage.Account{}, err
 	}
-	if err := d.putMailbox(batch, id, mbox); err != nil {
-		return storage.Account{}, err
+	for _, mbox := range mailboxes {
+		if err := d.putMailbox(batch, id, mbox); err != nil {
+			return storage.Account{}, err
+		}
 	}
 	if err := d.store.Commit(ctx, batch); err != nil {
 		return storage.Account{}, err
