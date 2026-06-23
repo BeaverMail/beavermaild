@@ -19,10 +19,16 @@ type Config struct {
 	LogLevel string     `json:"log_level"`
 	Secrets  Secrets    `json:"secrets"`
 	SMTP     SMTPConfig `json:"smtp"`
+	IMAP     IMAPConfig `json:"imap"`
 }
 
 // SMTPConfig holds inbound SMTP listener settings.
 type SMTPConfig struct {
+	Listen string `json:"listen"`
+}
+
+// IMAPConfig holds IMAP listener settings.
+type IMAPConfig struct {
 	Listen string `json:"listen"`
 }
 
@@ -80,6 +86,9 @@ func (c *Config) ApplyEnv() {
 	if v := os.Getenv("BEAVER_SMTP_LISTEN"); v != "" {
 		c.SMTP.Listen = v
 	}
+	if v := os.Getenv("BEAVER_IMAP_LISTEN"); v != "" {
+		c.IMAP.Listen = v
+	}
 }
 
 // Validate checks required fields and paths.
@@ -93,6 +102,9 @@ func (c *Config) Validate() error {
 	if c.SMTP.Listen == "" {
 		c.SMTP.Listen = "127.0.0.1:1025"
 	}
+	if c.IMAP.Listen == "" {
+		c.IMAP.Listen = "127.0.0.1:1143"
+	}
 	return nil
 }
 
@@ -102,6 +114,14 @@ func (c *Config) SMTPListen() string {
 		return c.SMTP.Listen
 	}
 	return "127.0.0.1:1025"
+}
+
+// IMAPListen returns the IMAP bind address.
+func (c *Config) IMAPListen() string {
+	if c.IMAP.Listen != "" {
+		return c.IMAP.Listen
+	}
+	return "127.0.0.1:1143"
 }
 
 // ConfigPath returns data_dir/config.json.

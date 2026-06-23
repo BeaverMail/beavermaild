@@ -29,6 +29,12 @@ printf 'EHLO test\r\nMAIL FROM:<sender@example.com>\r\nRCPT TO:<alice@localhost>
 
 Messages are stored under the data dir (`store.sqlite` metadata, `blobs/` raw RFC 5322 bytes).
 
+IMAP listens on `127.0.0.1:1143` by default (`imap.listen` or `BEAVER_IMAP_LISTEN`). After delivering mail, read INBOX:
+
+```bash
+printf 'a1 LOGIN alice@localhost beaver\r\na2 SELECT INBOX\r\na3 FETCH 1 BODY[]\r\na4 LOGOUT\r\n' | nc 127.0.0.1 1143
+```
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

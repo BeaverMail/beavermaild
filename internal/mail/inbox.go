@@ -11,7 +11,7 @@ import (
 	"github.com/BeaverMail/beaver/internal/storage/blob"
 )
 
-const inboxMailboxID uint32 = 1
+const InboxMailboxID uint32 = 1
 
 // Inbox stores received messages for an account.
 type Inbox struct {
@@ -42,7 +42,7 @@ func (ib *Inbox) Deliver(ctx context.Context, accountID uint32, raw []byte) (uin
 
 	meta := storage.EmailMeta{
 		Version:    1,
-		MailboxID:  inboxMailboxID,
+		MailboxID:  InboxMailboxID,
 		ReceivedAt: time.Now().Unix(),
 		Size:       uint32(len(raw)),
 		BlobHash:   hash,

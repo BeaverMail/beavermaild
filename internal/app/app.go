@@ -8,6 +8,7 @@ import (
 
 	"github.com/BeaverMail/beaver/internal/config"
 	"github.com/BeaverMail/beaver/internal/directory"
+	"github.com/BeaverMail/beaver/internal/imap"
 	"github.com/BeaverMail/beaver/internal/mail"
 	"github.com/BeaverMail/beaver/internal/smtp"
 	"github.com/BeaverMail/beaver/internal/storage"
@@ -24,6 +25,7 @@ type App struct {
 	dir   *directory.Local
 	inbox *mail.Inbox
 	smtp  *smtp.Server
+	imap  *imap.Server
 }
 
 // Open connects storage using cfg and returns an App.
@@ -43,6 +45,7 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 		dir:   dir,
 		inbox: inbox,
 		smtp:  smtp.NewServer(log, cfg.SMTPListen(), dir, inbox),
+		imap:  imap.NewServer(log, cfg.IMAPListen(), dir, inbox),
 	}, nil
 }
 
@@ -54,14 +57,16 @@ func (a *App) Blobs() *blob.FS { return a.blobs }
 
 // Run blocks until ctx is canceled, then closes resources.
 func (a *App) Run(ctx context.Context) error {
-	errCh := make(chan error, 1)
+	errCh := make(chan error, 2)
 	go func() { errCh <- a.smtp.Serve(ctx) }()
+	go func() { errCh <- a.imap.Serve(ctx) }()
 
 	a.log.Info("beaver ready",
 		"data_dir", a.cfg.DataDir,
 		"store", a.cfg.StorePath(),
 		"blobs", a.cfg.BlobDir(),
 		"smtp", a.cfg.SMTPListen(),
+		"imap", a.cfg.IMAPListen(),
 	)
 
 	select {
@@ -70,7 +75,7 @@ func (a *App) Run(ctx context.Context) error {
 		return a.Close()
 	case err := <-errCh:
 		if err != nil {
-			a.log.Error("smtp stopped", slog.Any("err", err))
+			a.log.Error("server stopped", slog.Any("err", err))
 		}
 		return a.Close()
 	}
