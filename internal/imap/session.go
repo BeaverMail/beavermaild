@@ -109,7 +109,7 @@ func (s *session) run(ctx context.Context) error {
 			}
 			s.messages = msgs
 			s.selected = true
-			if err := s.untagged(`FLAGS (\Seen)`); err != nil {
+			if err := s.untagged(mail.IMAPCapabilityFlags); err != nil {
 				return err
 			}
 			if err := s.untagged(fmt.Sprintf("%d EXISTS", len(msgs))); err != nil {
@@ -151,6 +151,43 @@ func (s *session) run(ctx context.Context) error {
 			if err := s.tagged(tag, "OK FETCH completed"); err != nil {
 				return err
 			}
+		case "STORE":
+			if !s.selected {
+				if err := s.tagged(tag, "NO not selected"); err != nil {
+					return err
+				}
+				continue
+			}
+			seq, op, set, clear, ok := parseStore(arg)
+			if !ok {
+				if err := s.tagged(tag, "BAD STORE syntax"); err != nil {
+					return err
+				}
+				continue
+			}
+			if seq < 1 || int(seq) > len(s.messages) {
+				if err := s.tagged(tag, "OK STORE completed"); err != nil {
+					return err
+				}
+				continue
+			}
+			msg := s.messages[seq-1]
+			if err := s.inbox.SetFlags(ctx, s.principal.AccountID, msg.UID, set, clear); err != nil {
+				return err
+			}
+			meta, err := s.inbox.GetMeta(ctx, s.principal.AccountID, msg.UID)
+			if err != nil {
+				return err
+			}
+			s.messages[seq-1].Meta = meta
+			if op != storeSilent {
+				if err := s.untagged(fmt.Sprintf("%d FETCH (FLAGS %s)", seq, mail.FormatIMAPFlags(meta.Flags))); err != nil {
+					return err
+				}
+			}
+			if err := s.tagged(tag, "OK STORE completed"); err != nil {
+				return err
+			}
 		case "LOGOUT":
 			_ = s.untagged("BYE logging out")
 			_ = s.tagged(tag, "OK LOGOUT completed")
@@ -169,7 +206,7 @@ func (s *session) writeFetch(ctx context.Context, seq int, msg mail.Message, ite
 		parts = append(parts, fmt.Sprintf("UID %d", msg.UID))
 	}
 	if items.flags {
-		parts = append(parts, "FLAGS ()")
+		parts = append(parts, "FLAGS "+mail.FormatIMAPFlags(msg.Meta.Flags))
 	}
 	if items.size {
 		parts = append(parts, fmt.Sprintf("RFC822.SIZE %d", msg.Meta.Size))
@@ -302,4 +339,60 @@ func parseFetch(arg string) (seq uint32, items fetchItems, ok bool) {
 	items.size = strings.Contains(rest, "RFC822.SIZE")
 	items.body = strings.Contains(rest, "BODY[]") || strings.Contains(rest, "RFC822")
 	return uint32(n), items, true
+}
+
+type storeMode int
+
+const (
+	storeSilent storeMode = iota
+	storeAdd
+	storeRemove
+)
+
+func parseStore(arg string) (seq uint32, mode storeMode, set, clear uint32, ok bool) {
+	arg = strings.TrimSpace(arg)
+	i := strings.IndexByte(arg, ' ')
+	if i < 0 {
+		return 0, storeSilent, 0, 0, false
+	}
+	n, err := strconv.ParseUint(strings.TrimSpace(arg[:i]), 10, 32)
+	if err != nil {
+		return 0, storeSilent, 0, 0, false
+	}
+	rest := strings.TrimSpace(arg[i+1:])
+	upper := strings.ToUpper(rest)
+	switch {
+	case strings.HasPrefix(upper, "+FLAGS"):
+		mode = storeAdd
+		rest = strings.TrimSpace(rest[len("+FLAGS"):])
+	case strings.HasPrefix(upper, "-FLAGS"):
+		mode = storeRemove
+		rest = strings.TrimSpace(rest[len("-FLAGS"):])
+	case strings.HasPrefix(upper, "FLAGS"):
+		mode = storeSilent
+		rest = strings.TrimSpace(rest[len("FLAGS"):])
+	default:
+		return 0, storeSilent, 0, 0, false
+	}
+	flagName := strings.TrimSpace(rest)
+	if flagName == "" {
+		return 0, storeSilent, 0, 0, false
+	}
+	if flagName[0] == '(' {
+		flagName = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(flagName, "("), ")"))
+	}
+	bit, known := mail.ParseIMAPFlagName(flagName)
+	if !known {
+		return 0, storeSilent, 0, 0, false
+	}
+	switch mode {
+	case storeAdd:
+		set = bit
+	case storeRemove:
+		clear = bit
+	case storeSilent:
+		set = bit
+		clear = ^uint32(0) &^ bit
+	}
+	return uint32(n), mode, set, clear, true
 }

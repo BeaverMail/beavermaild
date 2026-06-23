@@ -92,7 +92,13 @@ func TestIMAPFetchInbox(t *testing.T) {
 	}
 	expectPrefix(t, read, ")")
 	expectPrefix(t, read, "a4 OK")
-	send(t, conn, "a5 LOGOUT")
+	send(t, conn, "a5 STORE 1 +FLAGS (\\Seen)")
+	expectPrefix(t, read, "* 1 FETCH (FLAGS (\\Seen))")
+	expectPrefix(t, read, "a5 OK")
+	send(t, conn, "a6 FETCH 1 (FLAGS)")
+	expectPrefix(t, read, "* 1 FETCH (FLAGS (\\Seen))")
+	expectPrefix(t, read, "a6 OK")
+	send(t, conn, "a7 LOGOUT")
 }
 
 func literalSize(line string) (int, error) {

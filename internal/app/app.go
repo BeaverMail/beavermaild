@@ -73,7 +73,7 @@ func (a *App) Run(ctx context.Context) error {
 	errCh := make(chan error, 2)
 	go func() { errCh <- a.smtp.Serve(ctx) }()
 	go func() { errCh <- a.imap.Serve(ctx) }()
-	go mail.NewWorker(a.log, a.queue, a.inbox, a.dir, a.cfg.SMTPRelay(), relaySender{}, policy).Run(ctx)
+	go mail.NewWorker(a.log, a.queue, a.inbox, a.dir, remoteDeliverer{relay: a.cfg.SMTPRelay()}, policy).Run(ctx)
 
 	a.log.Info("beaver ready",
 		"data_dir", a.cfg.DataDir,

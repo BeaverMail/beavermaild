@@ -35,7 +35,7 @@ func TestWorkerDeliversLocal(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w := mail.NewWorker(log.New("error"), queue, inbox, dir, "", nil, mail.TestQueuePolicy())
+	w := mail.NewWorker(log.New("error"), queue, inbox, dir, nil, mail.TestQueuePolicy())
 	w.ProcessOnce(ctx)
 
 	msgs, err := inbox.List(ctx, acc.ID, mail.InboxMailboxID)

@@ -5,29 +5,29 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/BeaverMail/beaver/internal/directory"
 )
 
-// RelaySender submits one message to an outbound SMTP relay.
-type RelaySender interface {
-	Send(ctx context.Context, addr, mailFrom, rcptTo string, data []byte) error
+// RemoteDeliverer submits mail to remote recipients (relay or MX).
+type RemoteDeliverer interface {
+	DeliverRemote(ctx context.Context, mailFrom, rcptTo string, data []byte) error
 }
 
-// Worker delivers queued messages locally or via SMTP relay.
+// Worker delivers queued messages locally or via RemoteDeliverer.
 type Worker struct {
 	log    *slog.Logger
 	queue  *Queue
 	inbox  *Inbox
 	dir    *directory.Local
-	relay  string
-	sender RelaySender
+	remote RemoteDeliverer
 	policy QueuePolicy
 }
 
-// NewWorker returns a queue worker. relay is host:port for remote mail; sender may be nil.
-func NewWorker(log *slog.Logger, queue *Queue, inbox *Inbox, dir *directory.Local, relay string, sender RelaySender, policy QueuePolicy) *Worker {
+// NewWorker returns a queue worker. remote may be nil when only local delivery is needed.
+func NewWorker(log *slog.Logger, queue *Queue, inbox *Inbox, dir *directory.Local, remote RemoteDeliverer, policy QueuePolicy) *Worker {
 	if policy.RunDelay == 0 {
 		policy = DefaultQueuePolicy()
 	}
@@ -36,8 +36,7 @@ func NewWorker(log *slog.Logger, queue *Queue, inbox *Inbox, dir *directory.Loca
 		queue:  queue,
 		inbox:  inbox,
 		dir:    dir,
-		relay:  relay,
-		sender: sender,
+		remote: remote,
 		policy: policy,
 	}
 }
@@ -83,8 +82,7 @@ func (w *Worker) deliverEntry(ctx context.Context, e QueueEntry) error {
 	created := time.Unix(int64(msg.Created), 0)
 	now := time.Now()
 	if w.policy.Expired(created, now) {
-		w.log.Info("queue message expired", "id", e.ID, "return_path", msg.ReturnPath)
-		return w.queue.Delete(ctx, e.ID)
+		return w.expireEntry(ctx, e)
 	}
 
 	raw, err := w.queue.LoadRaw(ctx, msg)
@@ -125,6 +123,23 @@ func (w *Worker) deliverEntry(ctx context.Context, e QueueEntry) error {
 	return w.queue.Save(ctx, e.ID, msg)
 }
 
+// expireEntry notifies return-path for pending recipients and removes the queue entry.
+func (w *Worker) expireEntry(ctx context.Context, e QueueEntry) error {
+	msg := e.Msg
+	w.log.Info("queue message expired", "id", e.ID, "return_path", msg.ReturnPath)
+	returnPath := strings.TrimSpace(msg.ReturnPath)
+	for _, rcpt := range msg.Recipients {
+		if !recipientPending(rcpt) || returnPath == "" {
+			continue
+		}
+		bounce := BuildExpireBounce(returnPath, rcpt.Address, e.ID)
+		if err := w.deliverTo(ctx, "", returnPath, bounce); err != nil {
+			w.log.Warn("bounce deliver failed", "return_path", returnPath, slog.Any("err", err))
+		}
+	}
+	return w.queue.Delete(ctx, e.ID)
+}
+
 func (w *Worker) deliverTo(ctx context.Context, returnPath, rcpt string, raw []byte) error {
 	acc, _, err := w.dir.ResolveEmail(ctx, rcpt)
 	if err == nil {
@@ -137,10 +152,10 @@ func (w *Worker) deliverTo(ctx context.Context, returnPath, rcpt string, raw []b
 	if !errors.Is(err, directory.ErrNotFound) {
 		return err
 	}
-	if w.relay == "" || w.sender == nil {
-		return errors.New("mail: no relay configured for remote recipient")
+	if w.remote == nil {
+		return errors.New("mail: no remote delivery configured")
 	}
-	return w.sender.Send(ctx, w.relay, returnPath, rcpt, raw)
+	return w.remote.DeliverRemote(ctx, returnPath, rcpt, raw)
 }
 
 func deliveryPermanent(err error) bool {

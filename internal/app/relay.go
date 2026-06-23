@@ -6,9 +6,11 @@ import (
 	"github.com/BeaverMail/beaver/internal/smtp"
 )
 
-// relaySender adapts smtp.Send for the mail queue worker.
-type relaySender struct{}
+// remoteDeliverer adapts smtp.DeliverRemote for the mail queue worker.
+type remoteDeliverer struct {
+	relay string
+}
 
-func (relaySender) Send(ctx context.Context, addr, mailFrom, rcptTo string, data []byte) error {
-	return smtp.Send(ctx, addr, mailFrom, rcptTo, data)
+func (d remoteDeliverer) DeliverRemote(ctx context.Context, mailFrom, rcptTo string, data []byte) error {
+	return smtp.DeliverRemote(ctx, d.relay, mailFrom, rcptTo, data)
 }

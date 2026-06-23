@@ -52,3 +52,41 @@ func (ib *Inbox) LoadRaw(ctx context.Context, meta storage.EmailMeta) ([]byte, e
 	}
 	return ib.blobs.Get(ctx, meta.BlobHash)
 }
+
+// SetFlags updates persisted flag bits for one message (set OR clear).
+func (ib *Inbox) SetFlags(ctx context.Context, accountID, emailID uint32, set, clear uint32) error {
+	key := storage.AppendKey(nil, storage.SubspaceMail, accountID, emailID, byte(storage.CollectionEmail), nil)
+	wire, err := ib.store.Get(ctx, key)
+	if err != nil {
+		return err
+	}
+	var meta storage.EmailMeta
+	if err := storage.UnmarshalPersist(wire, &meta); err != nil {
+		return err
+	}
+	meta.Flags = (meta.Flags & ^clear) | set
+	wire, err = storage.MarshalPersist(nil, 1, meta)
+	if err != nil {
+		return err
+	}
+	batch := storage.NewBatch().WithAccount(accountID)
+	suffix := storage.DocumentSuffix(storage.CollectionEmail, emailID, nil)
+	if err := batch.Set(storage.SubspaceMail, suffix, wire); err != nil {
+		return err
+	}
+	return ib.store.Commit(ctx, batch)
+}
+
+// GetMeta loads EmailMeta for accountID and emailID.
+func (ib *Inbox) GetMeta(ctx context.Context, accountID, emailID uint32) (storage.EmailMeta, error) {
+	key := storage.AppendKey(nil, storage.SubspaceMail, accountID, emailID, byte(storage.CollectionEmail), nil)
+	wire, err := ib.store.Get(ctx, key)
+	if err != nil {
+		return storage.EmailMeta{}, err
+	}
+	var meta storage.EmailMeta
+	if err := storage.UnmarshalPersist(wire, &meta); err != nil {
+		return storage.EmailMeta{}, err
+	}
+	return meta, nil
+}
