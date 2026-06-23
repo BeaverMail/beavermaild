@@ -25,6 +25,7 @@ type session struct {
 
 	principal directory.Principal
 	selected  bool
+	readOnly  bool
 	mbox      mail.Mailbox
 	messages  []mail.Message
 }
@@ -57,7 +58,7 @@ func (s *session) run(ctx context.Context) error {
 		}
 		switch cmd {
 		case "CAPABILITY":
-			if err := s.untagged("CAPABILITY IMAP4rev1"); err != nil {
+			if err := s.untagged("CAPABILITY IMAP4rev1 MOVE"); err != nil {
 				return err
 			}
 			if err := s.tagged(tag, "OK CAPABILITY completed"); err != nil {
@@ -111,7 +112,31 @@ func (s *session) run(ctx context.Context) error {
 				return err
 			}
 		case "SELECT":
-			if err := s.selectMailbox(ctx, tag, parseMailboxName(arg)); err != nil {
+			if err := s.openMailbox(ctx, tag, parseMailboxName(arg), false); err != nil {
+				return err
+			}
+		case "EXAMINE":
+			if err := s.openMailbox(ctx, tag, parseMailboxName(arg), true); err != nil {
+				return err
+			}
+		case "STATUS":
+			if err := s.cmdStatus(ctx, tag, arg); err != nil {
+				return err
+			}
+		case "CREATE":
+			if err := s.cmdCreate(ctx, tag, arg); err != nil {
+				return err
+			}
+		case "DELETE":
+			if err := s.cmdDelete(ctx, tag, arg); err != nil {
+				return err
+			}
+		case "COPY":
+			if err := s.cmdCopy(ctx, tag, arg, false); err != nil {
+				return err
+			}
+		case "MOVE":
+			if err := s.cmdMove(ctx, tag, arg, false); err != nil {
 				return err
 			}
 		case "FETCH":
@@ -141,6 +166,14 @@ func (s *session) run(ctx context.Context) error {
 				if err := s.cmdSearch(ctx, tag, rest, true); err != nil {
 					return err
 				}
+			case "COPY":
+				if err := s.cmdCopy(ctx, tag, rest, true); err != nil {
+					return err
+				}
+			case "MOVE":
+				if err := s.cmdMove(ctx, tag, rest, true); err != nil {
+					return err
+				}
 			default:
 				if err := s.tagged(tag, "BAD command not supported"); err != nil {
 					return err
@@ -158,7 +191,7 @@ func (s *session) run(ctx context.Context) error {
 	}
 }
 
-func (s *session) selectMailbox(ctx context.Context, tag, name string) error {
+func (s *session) openMailbox(ctx context.Context, tag, name string, examine bool) error {
 	if s.principal.AccountID == 0 {
 		return s.tagged(tag, "NO LOGIN required")
 	}
@@ -176,6 +209,7 @@ func (s *session) selectMailbox(ctx context.Context, tag, name string) error {
 	s.messages = msgs
 	s.mbox = mbox
 	s.selected = true
+	s.readOnly = examine
 	if err := s.untagged(mail.IMAPCapabilityFlags); err != nil {
 		return err
 	}
@@ -187,6 +221,9 @@ func (s *session) selectMailbox(ctx context.Context, tag, name string) error {
 	}
 	if err := s.untagged(fmt.Sprintf("OK [UIDVALIDITY %d]", mbox.UIDValidity)); err != nil {
 		return err
+	}
+	if examine {
+		return s.tagged(tag, "OK [READ-ONLY] EXAMINE completed")
 	}
 	return s.tagged(tag, "OK [READ-WRITE] SELECT completed")
 }
@@ -215,6 +252,9 @@ func (s *session) cmdFetch(ctx context.Context, tag, arg string, byUID bool) err
 func (s *session) cmdStore(ctx context.Context, tag, arg string, byUID bool) error {
 	if !s.selected {
 		return s.tagged(tag, "NO not selected")
+	}
+	if s.readOnly {
+		return s.tagged(tag, "NO mailbox is read-only")
 	}
 	setStr, mode, set, clear, ok := parseStoreArg(arg)
 	if !ok {
@@ -263,6 +303,146 @@ func (s *session) cmdSearch(ctx context.Context, tag, arg string, byUID bool) er
 		return err
 	}
 	return s.tagged(tag, "OK SEARCH completed")
+}
+
+func (s *session) cmdStatus(ctx context.Context, tag, arg string) error {
+	if s.principal.AccountID == 0 {
+		return s.tagged(tag, "NO LOGIN required")
+	}
+	name, fields, ok := parseStatusArg(arg)
+	if !ok {
+		return s.tagged(tag, "BAD STATUS syntax")
+	}
+	mbox, err := s.inbox.ResolveMailbox(ctx, s.principal.AccountID, name)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			return s.tagged(tag, "NO mailbox does not exist")
+		}
+		return err
+	}
+	st, err := s.inbox.Status(ctx, s.principal.AccountID, mbox.ID)
+	if err != nil {
+		return err
+	}
+	if err := s.untagged(formatStatus(mbox.Name, fields, st)); err != nil {
+		return err
+	}
+	return s.tagged(tag, "OK STATUS completed")
+}
+
+func (s *session) cmdCreate(ctx context.Context, tag, arg string) error {
+	if s.principal.AccountID == 0 {
+		return s.tagged(tag, "NO LOGIN required")
+	}
+	_, err := s.inbox.CreateMailbox(ctx, s.principal.AccountID, parseMailboxName(arg))
+	if err != nil {
+		if errors.Is(err, mail.ErrMailboxExists) {
+			return s.tagged(tag, "NO mailbox already exists")
+		}
+		return err
+	}
+	return s.tagged(tag, "OK CREATE completed")
+}
+
+func (s *session) cmdDelete(ctx context.Context, tag, arg string) error {
+	if s.principal.AccountID == 0 {
+		return s.tagged(tag, "NO LOGIN required")
+	}
+	mbox, err := s.inbox.ResolveMailbox(ctx, s.principal.AccountID, parseMailboxName(arg))
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			return s.tagged(tag, "NO mailbox does not exist")
+		}
+		return err
+	}
+	if err := s.inbox.DeleteMailbox(ctx, s.principal.AccountID, mbox.ID); err != nil {
+		if errors.Is(err, mail.ErrSystemMailbox) {
+			return s.tagged(tag, "NO cannot delete system mailbox")
+		}
+		if errors.Is(err, mail.ErrMailboxNotEmpty) {
+			return s.tagged(tag, "NO mailbox not empty")
+		}
+		return err
+	}
+	if s.selected && s.mbox.ID == mbox.ID {
+		s.selected = false
+		s.messages = nil
+	}
+	return s.tagged(tag, "OK DELETE completed")
+}
+
+func (s *session) cmdCopy(ctx context.Context, tag, arg string, byUID bool) error {
+	if !s.selected {
+		return s.tagged(tag, "NO not selected")
+	}
+	if s.readOnly {
+		return s.tagged(tag, "NO mailbox is read-only")
+	}
+	setStr, destName, ok := parseSeqSetAndMailbox(arg)
+	if !ok {
+		return s.tagged(tag, "BAD COPY syntax")
+	}
+	dest, err := s.inbox.ResolveMailbox(ctx, s.principal.AccountID, destName)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			return s.tagged(tag, "NO [TRYCREATE] mailbox does not exist")
+		}
+		return err
+	}
+	set, err := parseSeqSet(setStr)
+	if err != nil {
+		return s.tagged(tag, "BAD COPY syntax")
+	}
+	ids := s.emailIDsFromIndices(s.resolveIndices(set, byUID))
+	if _, err := s.inbox.CopyMessages(ctx, s.principal.AccountID, ids, dest.ID); err != nil {
+		return err
+	}
+	return s.tagged(tag, "OK COPY completed")
+}
+
+func (s *session) cmdMove(ctx context.Context, tag, arg string, byUID bool) error {
+	if !s.selected {
+		return s.tagged(tag, "NO not selected")
+	}
+	if s.readOnly {
+		return s.tagged(tag, "NO mailbox is read-only")
+	}
+	setStr, destName, ok := parseSeqSetAndMailbox(arg)
+	if !ok {
+		return s.tagged(tag, "BAD MOVE syntax")
+	}
+	dest, err := s.inbox.ResolveMailbox(ctx, s.principal.AccountID, destName)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			return s.tagged(tag, "NO [TRYCREATE] mailbox does not exist")
+		}
+		return err
+	}
+	set, err := parseSeqSet(setStr)
+	if err != nil {
+		return s.tagged(tag, "BAD MOVE syntax")
+	}
+	ids := s.emailIDsFromIndices(s.resolveIndices(set, byUID))
+	if err := s.inbox.MoveMessages(ctx, s.principal.AccountID, ids, dest.ID); err != nil {
+		return err
+	}
+	msgs, err := s.inbox.List(ctx, s.principal.AccountID, s.mbox.ID)
+	if err != nil {
+		return err
+	}
+	s.messages = msgs
+	return s.tagged(tag, "OK MOVE completed")
+}
+
+func (s *session) emailIDsFromIndices(indices []int) []uint32 {
+	ids := make([]uint32, 0, len(indices))
+	for _, idx := range indices {
+		if idx < 0 || idx >= len(s.messages) {
+			continue
+		}
+		ids = append(ids, s.messages[idx].UID)
+	}
+	return ids
 }
 
 func (s *session) resolveIndices(set seqSet, byUID bool) []int {
@@ -516,4 +696,59 @@ func parseStoreFlags(rest string) (mode storeMode, set, clear uint32, ok bool) {
 		clear = ^uint32(0) &^ bit
 	}
 	return mode, set, clear, true
+}
+
+func parseStatusArg(arg string) (name string, fields []string, ok bool) {
+	arg = strings.TrimSpace(arg)
+	i := strings.IndexByte(arg, ' ')
+	if i < 0 {
+		return "", nil, false
+	}
+	name = parseMailboxName(strings.TrimSpace(arg[:i]))
+	rest := strings.TrimSpace(arg[i+1:])
+	if len(rest) < 2 || rest[0] != '(' || rest[len(rest)-1] != ')' {
+		return "", nil, false
+	}
+	inner := strings.TrimSpace(rest[1 : len(rest)-1])
+	if inner == "" {
+		return "", nil, false
+	}
+	for _, f := range strings.Fields(strings.ToUpper(inner)) {
+		switch f {
+		case "MESSAGES", "UNSEEN", "UIDNEXT", "UIDVALIDITY":
+			fields = append(fields, f)
+		default:
+			return "", nil, false
+		}
+	}
+	if len(fields) == 0 {
+		return "", nil, false
+	}
+	return name, fields, true
+}
+
+func formatStatus(name string, fields []string, st mail.MailboxStatus) string {
+	parts := make([]string, 0, len(fields))
+	for _, f := range fields {
+		switch f {
+		case "MESSAGES":
+			parts = append(parts, fmt.Sprintf("MESSAGES %d", st.Messages))
+		case "UNSEEN":
+			parts = append(parts, fmt.Sprintf("UNSEEN %d", st.Unseen))
+		case "UIDNEXT":
+			parts = append(parts, fmt.Sprintf("UIDNEXT %d", st.UIDNext))
+		case "UIDVALIDITY":
+			parts = append(parts, fmt.Sprintf("UIDVALIDITY %d", st.UIDValidity))
+		}
+	}
+	return fmt.Sprintf("STATUS %s (%s)", formatListMailbox(name), strings.Join(parts, " "))
+}
+
+func parseSeqSetAndMailbox(arg string) (setStr, mboxName string, ok bool) {
+	arg = strings.TrimSpace(arg)
+	i := strings.LastIndexByte(arg, ' ')
+	if i < 0 {
+		return "", "", false
+	}
+	return strings.TrimSpace(arg[:i]), parseMailboxName(arg[i+1:]), true
 }
