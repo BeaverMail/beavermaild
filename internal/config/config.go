@@ -15,9 +15,15 @@ const DefaultDataDir = "data"
 
 // Config is the on-disk bootstrap configuration (JSON).
 type Config struct {
-	DataDir  string  `json:"data_dir"`
-	LogLevel string  `json:"log_level"`
-	Secrets  Secrets `json:"secrets"`
+	DataDir  string     `json:"data_dir"`
+	LogLevel string     `json:"log_level"`
+	Secrets  Secrets    `json:"secrets"`
+	SMTP     SMTPConfig `json:"smtp"`
+}
+
+// SMTPConfig holds inbound SMTP listener settings.
+type SMTPConfig struct {
+	Listen string `json:"listen"`
 }
 
 // Secrets holds generated credentials written by beaver init.
@@ -71,6 +77,9 @@ func (c *Config) ApplyEnv() {
 	if v := os.Getenv("BEAVER_LOG_LEVEL"); v != "" {
 		c.LogLevel = v
 	}
+	if v := os.Getenv("BEAVER_SMTP_LISTEN"); v != "" {
+		c.SMTP.Listen = v
+	}
 }
 
 // Validate checks required fields and paths.
@@ -81,7 +90,18 @@ func (c *Config) Validate() error {
 	if c.LogLevel == "" {
 		c.LogLevel = "info"
 	}
+	if c.SMTP.Listen == "" {
+		c.SMTP.Listen = "127.0.0.1:1025"
+	}
 	return nil
+}
+
+// SMTPListen returns the inbound SMTP bind address.
+func (c *Config) SMTPListen() string {
+	if c.SMTP.Listen != "" {
+		return c.SMTP.Listen
+	}
+	return "127.0.0.1:1025"
 }
 
 // ConfigPath returns data_dir/config.json.

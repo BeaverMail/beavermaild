@@ -7,6 +7,9 @@ import (
 	"log/slog"
 
 	"github.com/BeaverMail/beaver/internal/config"
+	"github.com/BeaverMail/beaver/internal/directory"
+	"github.com/BeaverMail/beaver/internal/mail"
+	"github.com/BeaverMail/beaver/internal/smtp"
 	"github.com/BeaverMail/beaver/internal/storage"
 	"github.com/BeaverMail/beaver/internal/storage/blob"
 	"github.com/BeaverMail/beaver/internal/storage/sqlite"
@@ -18,6 +21,9 @@ type App struct {
 	cfg   *config.Config
 	store storage.Store
 	blobs *blob.FS
+	dir   *directory.Local
+	inbox *mail.Inbox
+	smtp  *smtp.Server
 }
 
 // Open connects storage using cfg and returns an App.
@@ -26,11 +32,17 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 	if err != nil {
 		return nil, fmt.Errorf("open store: %w", err)
 	}
+	blobs := blob.NewFS(cfg.BlobDir())
+	dir := directory.NewLocal(store)
+	inbox := mail.NewInbox(store, blobs)
 	return &App{
 		log:   log,
 		cfg:   cfg,
 		store: store,
-		blobs: blob.NewFS(cfg.BlobDir()),
+		blobs: blobs,
+		dir:   dir,
+		inbox: inbox,
+		smtp:  smtp.NewServer(log, cfg.SMTPListen(), dir, inbox),
 	}, nil
 }
 
@@ -42,14 +54,26 @@ func (a *App) Blobs() *blob.FS { return a.blobs }
 
 // Run blocks until ctx is canceled, then closes resources.
 func (a *App) Run(ctx context.Context) error {
+	errCh := make(chan error, 1)
+	go func() { errCh <- a.smtp.Serve(ctx) }()
+
 	a.log.Info("beaver ready",
 		"data_dir", a.cfg.DataDir,
 		"store", a.cfg.StorePath(),
 		"blobs", a.cfg.BlobDir(),
+		"smtp", a.cfg.SMTPListen(),
 	)
-	<-ctx.Done()
-	a.log.Info("shutting down")
-	return a.Close()
+
+	select {
+	case <-ctx.Done():
+		a.log.Info("shutting down")
+		return a.Close()
+	case err := <-errCh:
+		if err != nil {
+			a.log.Error("smtp stopped", slog.Any("err", err))
+		}
+		return a.Close()
+	}
 }
 
 // Close releases storage handles.
