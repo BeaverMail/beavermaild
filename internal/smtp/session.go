@@ -34,6 +34,9 @@ type session struct {
 
 	mailFrom string
 	rcpt     []rcptTarget
+
+	bdatBuf  []byte
+	bdatUsed bool
 }
 
 type rcptTarget struct {
@@ -123,7 +126,7 @@ func (s *session) run(ctx context.Context) error {
 				return err
 			}
 		case "RCPT":
-			addr, ok := parsePath(arg)
+			addr, ok := parseRcptArg(arg)
 			if !ok {
 				if err := s.writef("501 syntax: RCPT TO:<address>"); err != nil {
 					return err
@@ -186,6 +189,12 @@ func (s *session) run(ctx context.Context) error {
 				return err
 			}
 		case "DATA":
+			if s.bdatUsed {
+				if err := s.writef("503 5.5.1 BDAT transfer in progress"); err != nil {
+					return err
+				}
+				continue
+			}
 			if len(s.rcpt) == 0 {
 				if err := s.writef("503 need RCPT first"); err != nil {
 					return err
@@ -204,40 +213,29 @@ func (s *session) run(ctx context.Context) error {
 				s.reset()
 				continue
 			}
-			var remotes []string
-			for _, t := range s.rcpt {
-				if t.accountID == 0 {
-					remotes = append(remotes, t.address)
-					continue
-				}
-				if _, err := s.inbox.Deliver(ctx, t.accountID, raw); err != nil {
-					s.log.Warn("deliver failed", "rcpt", t.address, slog.Any("err", err))
-					if err := s.writef("451 delivery failed"); err != nil {
-						return err
-					}
-					goto afterData
-				}
-			}
-			if len(remotes) > 0 {
-				if s.queue == nil {
-					if err := s.writef("451 outbound delivery unavailable"); err != nil {
-						return err
-					}
-					goto afterData
-				}
-				if _, err := s.queue.Enqueue(ctx, s.mailFrom, remotes, raw); err != nil {
-					s.log.Warn("enqueue failed", slog.Any("err", err))
-					if err := s.writef("451 delivery failed"); err != nil {
-						return err
-					}
-					goto afterData
-				}
-			}
-			if err := s.writef(smtpOK); err != nil {
+			if err := s.finishDelivery(ctx, raw); err != nil {
 				return err
 			}
-		afterData:
-			s.reset()
+		case "BDAT":
+			if err := s.cmdBDAT(ctx, arg); err != nil {
+				return err
+			}
+		case "HELP":
+			if err := s.cmdHelp(arg); err != nil {
+				return err
+			}
+		case "VRFY":
+			if err := s.cmdVrfy(arg); err != nil {
+				return err
+			}
+		case "EXPN":
+			if err := s.cmdExpn(arg); err != nil {
+				return err
+			}
+		case "ETRN", "ATRN", "BURL":
+			if err := s.writef("502 5.5.1 Command not implemented"); err != nil {
+				return err
+			}
 		case "RSET":
 			s.reset()
 			if err := s.writef(smtpOK); err != nil {
@@ -266,6 +264,11 @@ func (s *session) writeEHLO(extended bool) error {
 		"250-localhost",
 		"250-ENHANCEDSTATUSCODES",
 		"250-8BITMIME",
+		"250-BINARYMIME",
+		"250-SMTPUTF8",
+		"250-CHUNKING",
+		"250-DSN",
+		"250-REQUIRETLS",
 		"250-PIPELINING",
 		fmt.Sprintf("250-SIZE %d", s.dataLimits.MaxMessageBytes),
 	}
@@ -422,6 +425,83 @@ func (s *session) cmdStartTLS() error {
 func (s *session) reset() {
 	s.mailFrom = ""
 	s.rcpt = s.rcpt[:0]
+	s.bdatBuf = s.bdatBuf[:0]
+	s.bdatUsed = false
+}
+
+// finishDelivery stores the message for local recipients and enqueues remote ones.
+func (s *session) finishDelivery(ctx context.Context, raw []byte) error {
+	var remotes []string
+	for _, t := range s.rcpt {
+		if t.accountID == 0 {
+			remotes = append(remotes, t.address)
+			continue
+		}
+		if _, err := s.inbox.Deliver(ctx, t.accountID, raw); err != nil {
+			s.log.Warn("deliver failed", "rcpt", t.address, slog.Any("err", err))
+			if err := s.writef("451 delivery failed"); err != nil {
+				return err
+			}
+			s.reset()
+			return nil
+		}
+	}
+	if len(remotes) > 0 {
+		if s.queue == nil {
+			if err := s.writef("451 outbound delivery unavailable"); err != nil {
+				return err
+			}
+			s.reset()
+			return nil
+		}
+		if _, err := s.queue.Enqueue(ctx, s.mailFrom, remotes, raw); err != nil {
+			s.log.Warn("enqueue failed", slog.Any("err", err))
+			if err := s.writef("451 delivery failed"); err != nil {
+				return err
+			}
+			s.reset()
+			return nil
+		}
+	}
+	if err := s.writef(smtpOK); err != nil {
+		return err
+	}
+	s.reset()
+	return nil
+}
+
+// cmdBDAT receives one binary chunk and delivers the message on the final LAST chunk.
+func (s *session) cmdBDAT(ctx context.Context, arg string) error {
+	if s.mailFrom == "" || len(s.rcpt) == 0 {
+		return s.writef("503 5.5.1 Bad sequence of commands")
+	}
+	size, last, ok := parseBDAT(arg)
+	if !ok {
+		return s.writef("501 5.5.4 Syntax: BDAT <size> [LAST]")
+	}
+	if size > s.dataLimits.MaxMessageBytes {
+		return s.writef("552 5.3.4 Message size exceeds fixed maximum message size")
+	}
+	if len(s.bdatBuf)+size > s.dataLimits.MaxMessageBytes {
+		return s.writef("552 5.3.4 Message size exceeds fixed maximum message size")
+	}
+	if err := s.writef("250 2.0.0 Ok"); err != nil {
+		return err
+	}
+	chunk, err := readBDATChunk(s.r, size)
+	if err != nil {
+		s.reset()
+		return err
+	}
+	s.bdatUsed = true
+	s.bdatBuf = append(s.bdatBuf, chunk...)
+	if !last {
+		return nil
+	}
+	if err := s.finishDelivery(ctx, s.bdatBuf); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *session) writef(format string, args ...any) error {

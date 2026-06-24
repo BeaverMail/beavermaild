@@ -9,7 +9,7 @@ import (
 // DeliverRemote submits mail using relay when set, otherwise MX lookup on rcptTo domain.
 func DeliverRemote(ctx context.Context, relay, mailFrom, rcptTo string, data []byte) error {
 	if relay != "" {
-		return Send(ctx, relay, mailFrom, rcptTo, data)
+		return Send(ctx, relay, mailFrom, rcptTo, data, ClientOptions{})
 	}
 	domain, err := DomainFromAddress(rcptTo)
 	if err != nil {
@@ -21,7 +21,7 @@ func DeliverRemote(ctx context.Context, relay, mailFrom, rcptTo string, data []b
 	}
 	var last error
 	for _, host := range hosts {
-		err := Send(ctx, host, mailFrom, rcptTo, data)
+		err := Send(ctx, host, mailFrom, rcptTo, data, ClientOptions{})
 		if err == nil {
 			return nil
 		}

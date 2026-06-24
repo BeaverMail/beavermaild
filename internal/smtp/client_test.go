@@ -66,7 +66,7 @@ func TestClientSend(t *testing.T) {
 	}()
 
 	ctx := context.Background()
-	err = smtp.Send(ctx, ln.Addr().String(), "sender@example.com", "rcpt@example.com", []byte("hello\r\n"))
+	err = smtp.Send(ctx, ln.Addr().String(), "sender@example.com", "rcpt@example.com", []byte("hello\r\n"), smtp.ClientOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func TestClientSendDotStuff(t *testing.T) {
 
 	ctx := context.Background()
 	body := ".starts with dot\r\nnext\r\n"
-	err = smtp.Send(ctx, ln.Addr().String(), "sender@example.com", "rcpt@example.com", []byte(body))
+	err = smtp.Send(ctx, ln.Addr().String(), "sender@example.com", "rcpt@example.com", []byte(body), smtp.ClientOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
