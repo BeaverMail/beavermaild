@@ -20,76 +20,88 @@ type Options struct {
 
 // Server accepts inbound SMTP connections.
 type Server struct {
-	log         *slog.Logger
-	plainAddrs  []string
-	tlsAddr     string
-	dir         *directory.Local
-	inbox       *mail.Inbox
-	queue       *mail.Queue
-	certs       *tlsload.Certs
-	tlsRequired bool
+	log                 *slog.Logger
+	inboundAddr         string
+	submissionPlainAddr string
+	submissionTLSAddr   string
+	dir                 *directory.Local
+	inbox               *mail.Inbox
+	queue               *mail.Queue
+	certs               *tlsload.Certs
+	tlsRequired         bool
 }
 
 // NewServer returns an SMTP server. submissionAddr is optional plain listener (e.g. :587).
 // submissionTLSAddr enables implicit TLS on :465 when certs are configured.
 func NewServer(log *slog.Logger, addr string, dir *directory.Local, inbox *mail.Inbox, queue *mail.Queue, submissionAddr, submissionTLSAddr string, opts Options) *Server {
-	addrs := []string{addr}
-	if submissionAddr != "" {
-		addrs = append(addrs, submissionAddr)
-	}
 	return &Server{
-		log:         log,
-		plainAddrs:  addrs,
-		tlsAddr:     submissionTLSAddr,
-		dir:         dir,
-		inbox:       inbox,
-		queue:       queue,
-		certs:       opts.Certs,
-		tlsRequired: opts.TLSRequired,
+		log:                 log,
+		inboundAddr:         addr,
+		submissionPlainAddr: submissionAddr,
+		submissionTLSAddr:   submissionTLSAddr,
+		dir:                 dir,
+		inbox:               inbox,
+		queue:               queue,
+		certs:               opts.Certs,
+		tlsRequired:         opts.TLSRequired,
 	}
 }
 
 type listenerSlot struct {
-	ln     net.Listener
-	secure bool
+	ln         net.Listener
+	secure     bool
+	submission bool
 }
 
 // Serve listens on configured addresses until ctx is canceled.
 func (s *Server) Serve(ctx context.Context) error {
 	var slots []listenerSlot
-	for _, addr := range s.plainAddrs {
-		ln, err := net.Listen("tcp", addr)
+	if s.inboundAddr != "" {
+		ln, err := net.Listen("tcp", s.inboundAddr)
 		if err != nil {
-			for _, slot := range slots {
-				_ = slot.ln.Close()
-			}
 			return err
 		}
-		slots = append(slots, listenerSlot{ln: ln, secure: false})
+		slots = append(slots, listenerSlot{ln: ln, secure: false, submission: false})
 		s.log.Info("smtp listening", "addr", ln.Addr().String())
 	}
-	if s.tlsAddr != "" && s.certs != nil {
-		tlsLn, err := s.certs.Listen("tcp", s.tlsAddr)
+	if s.submissionPlainAddr != "" {
+		ln, err := net.Listen("tcp", s.submissionPlainAddr)
 		if err != nil {
 			for _, slot := range slots {
 				_ = slot.ln.Close()
 			}
 			return err
 		}
-		slots = append(slots, listenerSlot{ln: tlsLn, secure: true})
-		s.log.Info("smtp tls listening", "addr", tlsLn.Addr().String())
+		slots = append(slots, listenerSlot{ln: ln, secure: false, submission: true})
+		s.log.Info("smtp listening", "addr", ln.Addr().String(), "submission", true)
+	}
+	if s.submissionTLSAddr != "" && s.certs != nil {
+		tlsLn, err := s.certs.Listen("tcp", s.submissionTLSAddr)
+		if err != nil {
+			for _, slot := range slots {
+				_ = slot.ln.Close()
+			}
+			return err
+		}
+		slots = append(slots, listenerSlot{ln: tlsLn, secure: true, submission: true})
+		s.log.Info("smtp tls listening", "addr", tlsLn.Addr().String(), "submission", true)
 	}
 	return s.serve(ctx, slots)
 }
 
-// ServeListener serves on an existing listener (for tests).
+// ServeListener serves inbound SMTP on an existing listener (for tests).
 func (s *Server) ServeListener(ctx context.Context, ln net.Listener) error {
-	return s.serve(ctx, []listenerSlot{{ln: ln, secure: false}})
+	return s.serve(ctx, []listenerSlot{{ln: ln, secure: false, submission: false}})
 }
 
-// ServeTLSListener serves implicit TLS on an existing listener (for tests).
+// ServeTLSListener serves implicit TLS without submission semantics (for tests).
 func (s *Server) ServeTLSListener(ctx context.Context, ln net.Listener) error {
-	return s.serve(ctx, []listenerSlot{{ln: ln, secure: true}})
+	return s.serve(ctx, []listenerSlot{{ln: ln, secure: true, submission: false}})
+}
+
+// ServeSubmissionListener serves submission SMTP on an existing listener (for tests).
+func (s *Server) ServeSubmissionListener(ctx context.Context, ln net.Listener, secure bool) error {
+	return s.serve(ctx, []listenerSlot{{ln: ln, secure: secure, submission: true}})
 }
 
 func (s *Server) serve(ctx context.Context, slots []listenerSlot) error {
@@ -105,7 +117,7 @@ func (s *Server) serve(ctx context.Context, slots []listenerSlot) error {
 					s.log.Warn("smtp accept", slog.Any("err", err))
 					continue
 				}
-				go s.serveConn(ctx, conn, slot.secure)
+				go s.serveConn(ctx, conn, slot.secure, slot.submission)
 			}
 		}()
 	}
@@ -117,9 +129,9 @@ func (s *Server) serve(ctx context.Context, slots []listenerSlot) error {
 	return nil
 }
 
-func (s *Server) serveConn(ctx context.Context, conn net.Conn, secure bool) {
+func (s *Server) serveConn(ctx context.Context, conn net.Conn, secure, submission bool) {
 	defer conn.Close()
-	sess := newSession(s.log, conn, s.dir, s.inbox, s.queue, s.certs, secure, s.tlsRequired)
+	sess := newSession(s.log, conn, s.dir, s.inbox, s.queue, s.certs, secure, s.tlsRequired, submission)
 	if err := sess.run(ctx); err != nil && ctx.Err() == nil {
 		s.log.Debug("smtp session", slog.Any("err", err))
 	}

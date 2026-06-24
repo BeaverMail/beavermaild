@@ -40,10 +40,10 @@ func TestSMTPRCPTUnknownDomainRejectedWithoutQueue(t *testing.T) {
 	send(t, conn, "MAIL FROM:<sender@example.com>")
 	expect(t, read, "250")
 	send(t, conn, "RCPT TO:<nobody@unknown.test>")
-	expect(t, read, "550 unknown domain")
+	expect(t, read, "554")
 }
 
-func TestSMTPRCPTRemoteDomainQueued(t *testing.T) {
+func TestSMTPInboundRelayDenied(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -70,21 +70,14 @@ func TestSMTPRCPTRemoteDomainQueued(t *testing.T) {
 	send(t, conn, "MAIL FROM:<sender@example.com>")
 	expect(t, read, "250")
 	send(t, conn, "RCPT TO:<info@blueboxsoft.com>")
-	expect(t, read, "250")
-	send(t, conn, "DATA")
-	expect(t, read, "354")
-	send(t, conn, "Subject: outbound")
-	send(t, conn, "")
-	send(t, conn, "hello remote")
-	send(t, conn, ".")
-	expect(t, read, "250")
+	expect(t, read, "554")
 
 	pending, err := queue.ListPending(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(pending) != 1 || pending[0].Msg.Recipients[0].Address != "info@blueboxsoft.com" {
-		t.Fatalf("pending %+v", pending)
+	if len(pending) != 0 {
+		t.Fatalf("inbound relay should not enqueue, got %+v", pending)
 	}
 }
 

@@ -27,6 +27,9 @@ type session struct {
 
 	secure      bool
 	tlsRequired bool
+	submission  bool
+
+	principal directory.Principal
 
 	mailFrom string
 	rcpt     []rcptTarget
@@ -37,7 +40,7 @@ type rcptTarget struct {
 	accountID uint32 // 0 = outbound queue recipient
 }
 
-func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *mail.Inbox, queue *mail.Queue, certs *tlsload.Certs, secure, tlsRequired bool) *session {
+func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *mail.Inbox, queue *mail.Queue, certs *tlsload.Certs, secure, tlsRequired, submission bool) *session {
 	return &session{
 		log:         log,
 		conn:        conn,
@@ -48,6 +51,7 @@ func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *ma
 		tls:         certs,
 		secure:      secure,
 		tlsRequired: tlsRequired,
+		submission:  submission,
 	}
 }
 
@@ -77,6 +81,10 @@ func (s *session) run(ctx context.Context) error {
 			if err := s.cmdStartTLS(); err != nil {
 				return err
 			}
+		case "AUTH":
+			if err := s.cmdAuth(ctx, arg); err != nil {
+				return err
+			}
 		case "MAIL":
 			addr, ok := parsePath(arg)
 			if !ok {
@@ -84,6 +92,22 @@ func (s *session) run(ctx context.Context) error {
 					return err
 				}
 				continue
+			}
+			if s.submission && s.principal.AccountID == 0 {
+				if err := s.writef("530 5.7.0 Authentication required"); err != nil {
+					return err
+				}
+				continue
+			}
+			if s.submission {
+				resolved, ok := resolveSubmissionMailFrom(s.principal, addr)
+				if !ok {
+					if err := s.writef("553 5.7.1 Sender address rejected"); err != nil {
+						return err
+					}
+					continue
+				}
+				addr = resolved
 			}
 			s.reset()
 			s.mailFrom = addr
@@ -113,6 +137,12 @@ func (s *session) run(ctx context.Context) error {
 			}
 			if _, err := s.dir.LookupDomain(ctx, domName); err != nil {
 				if errors.Is(err, directory.ErrNotFound) {
+					if !s.submission {
+						if err := s.writef("554 5.7.1 Relay access denied"); err != nil {
+							return err
+						}
+						continue
+					}
 					if s.queue == nil {
 						if err := s.writef("550 unknown domain"); err != nil {
 							return err
@@ -227,7 +257,86 @@ func (s *session) writeEHLO(extended bool) error {
 			return err
 		}
 	}
+	if s.submission && s.secure {
+		if err := s.writef("250-AUTH PLAIN"); err != nil {
+			return err
+		}
+	}
 	return s.writef("250 OK")
+}
+
+// cmdAuth handles AUTH PLAIN on submission listeners after TLS is active.
+func (s *session) cmdAuth(ctx context.Context, arg string) error {
+	if !s.submission {
+		return s.writef("502 command not implemented")
+	}
+	if !s.secure {
+		return s.writef("538 5.7.11 Encryption required for authentication")
+	}
+	mech, rest := splitAuthArg(arg)
+	if !strings.EqualFold(mech, "PLAIN") {
+		return s.writef("504 5.5.4 Unrecognized authentication type")
+	}
+	credLine := strings.TrimSpace(rest)
+	if credLine == "" {
+		if err := s.writef("334 "); err != nil {
+			return err
+		}
+		line, err := s.readLine()
+		if err != nil {
+			return err
+		}
+		credLine = line
+	}
+	user, pass, ok := decodeAuthPlain(credLine)
+	if !ok {
+		return s.writef("535 5.7.8 Authentication credentials invalid")
+	}
+	p, err := s.dir.Authenticate(ctx, user, pass)
+	if err != nil {
+		if errors.Is(err, directory.ErrInvalidCredentials) || errors.Is(err, directory.ErrInactive) {
+			return s.writef("535 5.7.8 Authentication credentials invalid")
+		}
+		return err
+	}
+	s.principal = p
+	s.reset()
+	return s.writef("235 2.7.0 Authentication successful")
+}
+
+// senderAllowed reports whether mailFrom matches the authenticated account (aliases later).
+func senderAllowed(p directory.Principal, mailFrom string) bool {
+	return strings.EqualFold(mailFrom, p.Email())
+}
+
+// resolveSubmissionMailFrom accepts the client envelope sender or substitutes placeholders (e.g. Claws unknown@localhost).
+func resolveSubmissionMailFrom(p directory.Principal, mailFrom string) (string, bool) {
+	if senderAllowed(p, mailFrom) {
+		return strings.ToLower(mailFrom), true
+	}
+	if placeholderSender(mailFrom) {
+		return strings.ToLower(p.Email()), true
+	}
+	return "", false
+}
+
+// placeholderSender reports MUAs that send a dummy envelope from instead of the account address.
+func placeholderSender(mailFrom string) bool {
+	mailFrom = strings.ToLower(strings.TrimSpace(mailFrom))
+	if mailFrom == "" {
+		return true
+	}
+	local, _, ok := strings.Cut(mailFrom, "@")
+	return ok && local == "unknown"
+}
+
+func splitAuthArg(arg string) (mech, rest string) {
+	arg = strings.TrimSpace(arg)
+	i := strings.IndexByte(arg, ' ')
+	if i < 0 {
+		return strings.ToUpper(arg), ""
+	}
+	return strings.ToUpper(strings.TrimSpace(arg[:i])), strings.TrimSpace(arg[i+1:])
 }
 
 func (s *session) cmdStartTLS() error {
