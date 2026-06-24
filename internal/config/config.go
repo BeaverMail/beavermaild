@@ -25,19 +25,22 @@ type Config struct {
 	Queue    QueueConfig `json:"queue"`
 }
 
-// TLSConfig holds PEM paths for server TLS (M5a manual certs).
+// TLSConfig holds PEM paths or ACME hostnames for server TLS.
 type TLSConfig struct {
-	CertFile   string `json:"cert_file"`
-	KeyFile    string `json:"key_file"`
-	MinVersion string `json:"min_version"`
-	Required   bool   `json:"required"`
+	CertFile     string   `json:"cert_file"`
+	KeyFile      string   `json:"key_file"`
+	MinVersion   string   `json:"min_version"`
+	Required     bool     `json:"required"`
+	ACMEHosts    []string `json:"acme_hosts"`
+	ACMECacheDir string   `json:"acme_cache_dir"`
 }
 
 // SMTPConfig holds inbound SMTP listener settings.
 type SMTPConfig struct {
-	Listen           string `json:"listen"`
-	SubmissionListen string `json:"submission_listen"`
-	Relay            string `json:"relay"`
+	Listen              string `json:"listen"`
+	SubmissionListen    string `json:"submission_listen"`
+	SubmissionTLSListen string `json:"submission_tls_listen"`
+	Relay               string `json:"relay"`
 }
 
 // IMAPConfig holds IMAP listener settings.
@@ -165,6 +168,35 @@ func (c *Config) IMAPListen() string {
 // IMAPTLSListen returns the implicit-TLS IMAP bind address (empty if disabled).
 func (c *Config) IMAPTLSListen() string {
 	return strings.TrimSpace(c.IMAP.TLSListen)
+}
+
+// SMTPSubmissionTLSListen returns the implicit-TLS submission bind address (may be empty).
+func (c *Config) SMTPSubmissionTLSListen() string {
+	return strings.TrimSpace(c.SMTP.SubmissionTLSListen)
+}
+
+// ACMEHosts returns trimmed ACME hostnames (empty if ACME disabled).
+func (c *Config) ACMEHosts() []string {
+	var out []string
+	for _, h := range c.TLS.ACMEHosts {
+		h = strings.TrimSpace(h)
+		if h != "" {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
+// ACMECacheDir returns the directory for autocert certificate cache.
+func (c *Config) ACMECacheDir() string {
+	dir := strings.TrimSpace(c.TLS.ACMECacheDir)
+	if dir == "" {
+		return filepath.Join(c.DataDir, "tls", "acme")
+	}
+	if !filepath.IsAbs(dir) {
+		dir = filepath.Join(c.DataDir, dir)
+	}
+	return dir
 }
 
 // SMTPSubmissionListen returns the submission SMTP bind address (may be empty).

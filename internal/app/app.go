@@ -56,7 +56,7 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 		dir:   dir,
 		inbox: inbox,
 		queue: queue,
-		smtp: smtp.NewServer(log, cfg.SMTPListen(), dir, inbox, queue, cfg.SMTPSubmissionListen(), smtp.Options{
+		smtp: smtp.NewServer(log, cfg.SMTPListen(), dir, inbox, queue, cfg.SMTPSubmissionListen(), cfg.SMTPSubmissionTLSListen(), smtp.Options{
 			Certs:       certs,
 			TLSRequired: tlsOpts.required,
 		}),
@@ -82,15 +82,21 @@ func tlsOptions(cfg *config.Config, certs *tlsload.Certs) tlsRuntime {
 }
 
 func openTLSCerts(cfg *config.Config) (*tlsload.Certs, error) {
-	certFile, keyFile, ok := cfg.TLSPair()
-	if !ok {
-		return nil, nil
+	if certFile, keyFile, ok := cfg.TLSPair(); ok {
+		certs, err := tlsload.Load(certFile, keyFile, cfg.TLS.MinVersion)
+		if err != nil {
+			return nil, fmt.Errorf("load tls: %w", err)
+		}
+		return certs, nil
 	}
-	certs, err := tlsload.Load(certFile, keyFile, cfg.TLS.MinVersion)
-	if err != nil {
-		return nil, fmt.Errorf("load tls: %w", err)
+	if hosts := cfg.ACMEHosts(); len(hosts) > 0 {
+		certs, err := tlsload.LoadACME(cfg.ACMECacheDir(), hosts, cfg.TLS.MinVersion)
+		if err != nil {
+			return nil, fmt.Errorf("load acme: %w", err)
+		}
+		return certs, nil
 	}
-	return certs, nil
+	return nil, nil
 }
 
 // Store returns the KV store.
@@ -123,6 +129,8 @@ func (a *App) Run(ctx context.Context) error {
 		"blobs", a.cfg.BlobDir(),
 		"smtp", a.cfg.SMTPListen(),
 		"smtp_submission", a.cfg.SMTPSubmissionListen(),
+		"smtp_submission_tls", a.cfg.SMTPSubmissionTLSListen(),
+		"tls_acme_hosts", a.cfg.ACMEHosts(),
 		"imap", a.cfg.IMAPListen(),
 		"imap_tls", a.cfg.IMAPTLSListen(),
 		"smtp_relay", a.cfg.SMTPRelay(),

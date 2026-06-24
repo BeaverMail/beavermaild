@@ -50,3 +50,13 @@ func TestLoadApplyEnv(t *testing.T) {
 		t.Fatalf("store path %q", loaded.StorePath())
 	}
 }
+
+func TestACMECacheDirDefault(t *testing.T) {
+	t.Parallel()
+	cfg := config.Default(t.TempDir())
+	cfg.TLS.ACMEHosts = []string{"mail.example.com"}
+	want := filepath.Join(cfg.DataDir, "tls", "acme")
+	if got := cfg.ACMECacheDir(); got != want {
+		t.Fatalf("cache %q want %q", got, want)
+	}
+}

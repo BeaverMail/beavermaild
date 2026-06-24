@@ -129,7 +129,7 @@ func dialSMTP(t *testing.T, dir *directory.Local, store *sqlite.Store, queue *ma
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := smtp.NewServer(log.New("error"), ln.Addr().String(), dir, inbox, queue, "", smtp.Options{})
+	srv := smtp.NewServer(log.New("error"), ln.Addr().String(), dir, inbox, queue, "", "", smtp.Options{})
 	sctx, cancel := context.WithCancel(ctx)
 	t.Cleanup(cancel)
 	go func() { _ = srv.ServeListener(sctx, ln) }()
