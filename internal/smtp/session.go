@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -101,12 +102,31 @@ func (s *session) run(ctx context.Context) error {
 				}
 				continue
 			}
-			acc, _, err := s.dir.ResolveEmail(ctx, addr)
+			domName, err := DomainFromAddress(addr)
 			if err != nil {
-				if err := s.writef("550 no such user"); err != nil {
+				if err := s.writef("501 syntax: RCPT TO:<address>"); err != nil {
 					return err
 				}
 				continue
+			}
+			if _, err := s.dir.LookupDomain(ctx, domName); err != nil {
+				if errors.Is(err, directory.ErrNotFound) {
+					if err := s.writef("550 unknown domain"); err != nil {
+						return err
+					}
+					continue
+				}
+				return err
+			}
+			acc, _, err := s.dir.ResolveEmail(ctx, addr)
+			if err != nil {
+				if errors.Is(err, directory.ErrNotFound) {
+					if err := s.writef("550 no such user"); err != nil {
+						return err
+					}
+					continue
+				}
+				return err
 			}
 			if !acc.Active {
 				if err := s.writef("550 inactive"); err != nil {

@@ -13,7 +13,7 @@ const (
 	seedDomainName = "localhost"
 	seedLocalPart  = "alice"
 	seedPassword   = "beaver"
-	seedTenantID   = uint32(1)
+	seedTenantID   = DefaultTenantID
 )
 
 // SeedPassword is the default dev password for SeedDev.

@@ -64,9 +64,9 @@ func (d *Local) ResolveEmail(ctx context.Context, email string) (storage.Account
 
 // CreateDomain registers a domain name and returns its record.
 func (d *Local) CreateDomain(ctx context.Context, tenantID uint32, name string) (storage.Domain, error) {
-	name = normalizeDomain(name)
-	if name == "" {
-		return storage.Domain{}, fmt.Errorf("directory: empty domain")
+	name, err := validateDomainName(name)
+	if err != nil {
+		return storage.Domain{}, err
 	}
 	if _, err := d.lookupDomainID(ctx, name); err == nil {
 		return storage.Domain{}, ErrExists
