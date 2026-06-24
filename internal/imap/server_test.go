@@ -68,7 +68,7 @@ func TestIMAPFetchInbox(t *testing.T) {
 	send(t, conn, "a3 SELECT INBOX")
 	expectPrefix(t, read, "* FLAGS")
 	expectPrefix(t, read, "* 1 EXISTS")
-	expectPrefix(t, read, "* 0 RECENT")
+	expectPrefix(t, read, "* 1 RECENT")
 	expectPrefix(t, read, "* OK [UIDVALIDITY")
 	expectPrefix(t, read, "a3 OK")
 	send(t, conn, "a4 FETCH 1 (UID RFC822.SIZE BODY[])")
@@ -111,6 +111,7 @@ func TestIMAPFetchInbox(t *testing.T) {
 	expectPrefix(t, read, "* LIST")
 	expectPrefix(t, read, "* LIST")
 	expectPrefix(t, read, "* LIST")
+	expectPrefix(t, read, "* LIST")
 	expectPrefix(t, read, "aa OK")
 	send(t, conn, "ab SELECT Sent")
 	expectPrefix(t, read, "* FLAGS")
@@ -121,7 +122,7 @@ func TestIMAPFetchInbox(t *testing.T) {
 	send(t, conn, "ac STATUS INBOX (MESSAGES UNSEEN UIDNEXT UIDVALIDITY)")
 	expectPrefix(t, read, "* STATUS INBOX (MESSAGES 1 UNSEEN 0 UIDNEXT 2 UIDVALIDITY 1)")
 	expectPrefix(t, read, "ac OK")
-	send(t, conn, "ad CREATE Drafts")
+	send(t, conn, "ad CREATE Archive")
 	expectPrefix(t, read, "ad OK")
 	send(t, conn, "ae SELECT INBOX")
 	expectPrefix(t, read, "* FLAGS")
@@ -150,6 +151,134 @@ func TestIMAPFetchInbox(t *testing.T) {
 	expectPrefix(t, read, "* OK [UIDVALIDITY")
 	expectPrefix(t, read, "ai OK [READ-ONLY]")
 	send(t, conn, "aj LOGOUT")
+}
+
+func TestIMAPAppendCreatesMailbox(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, "file:"+t.TempDir()+"/store.sqlite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	dir := directory.NewLocal(store)
+	if _, err := directory.SeedDev(ctx, dir); err != nil {
+		t.Fatal(err)
+	}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	inbox := mail.NewInbox(store, blob.NewFS(t.TempDir()+"/blobs"))
+	srv := imap.NewServer(log.New("error"), ln.Addr().String(), dir, inbox, imap.Options{})
+	sctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() { _ = srv.ServeListener(sctx, ln) }()
+	time.Sleep(20 * time.Millisecond)
+
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	read := bufio.NewReader(conn)
+	expectPrefix(t, read, "* OK")
+	send(t, conn, "a1 LOGIN alice@localhost beaver")
+	expectPrefix(t, read, "a1 OK")
+
+	send(t, conn, "a2 SELECT Queue")
+	expectPrefix(t, read, "* FLAGS")
+	expectPrefix(t, read, "* 0 EXISTS")
+	expectPrefix(t, read, "* 0 RECENT")
+	expectPrefix(t, read, "* OK [UIDVALIDITY")
+	expectPrefix(t, read, "a2 OK")
+
+	raw := []byte("From: a@b\r\nSubject: queued\r\n\r\noutbox\r\n")
+	if _, err := fmt.Fprintf(conn, "a3 APPEND Queue (\\Seen) {%d}\r\n", len(raw)); err != nil {
+		t.Fatal(err)
+	}
+	expectPrefix(t, read, "+")
+	if _, err := conn.Write(raw); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Write([]byte("\r\n")); err != nil {
+		t.Fatal(err)
+	}
+	expectPrefix(t, read, "* 1 EXISTS")
+	expectPrefix(t, read, "a3 OK")
+
+	send(t, conn, "a4 SELECT Queue")
+	expectPrefix(t, read, "* FLAGS")
+	expectPrefix(t, read, "* 1 EXISTS")
+	expectPrefix(t, read, "* 1 RECENT")
+	expectPrefix(t, read, "* OK [UIDVALIDITY")
+	expectPrefix(t, read, "a4 OK")
+}
+
+func TestIMAPExpungeDeleted(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, "file:"+t.TempDir()+"/store.sqlite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	dir := directory.NewLocal(store)
+	acc, err := directory.SeedDev(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	blobs := blob.NewFS(t.TempDir() + "/blobs")
+	inbox := mail.NewInbox(store, blobs)
+	if _, err := inbox.Deliver(ctx, acc.ID, []byte("From: a@b\r\n\r\none\r\n")); err != nil {
+		t.Fatal(err)
+	}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := imap.NewServer(log.New("error"), ln.Addr().String(), dir, inbox, imap.Options{})
+	sctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() { _ = srv.ServeListener(sctx, ln) }()
+	time.Sleep(20 * time.Millisecond)
+
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	read := bufio.NewReader(conn)
+	expectPrefix(t, read, "* OK")
+	send(t, conn, "b1 LOGIN alice@localhost beaver")
+	expectPrefix(t, read, "b1 OK")
+	send(t, conn, "b2 SELECT INBOX")
+	expectPrefix(t, read, "* FLAGS")
+	expectPrefix(t, read, "* 1 EXISTS")
+	expectPrefix(t, read, "* 1 RECENT")
+	expectPrefix(t, read, "* OK [UIDVALIDITY")
+	expectPrefix(t, read, "b2 OK")
+	send(t, conn, "b3 STORE 1 +FLAGS (\\Deleted)")
+	expectPrefix(t, read, "* 1 FETCH (FLAGS (\\Deleted))")
+	expectPrefix(t, read, "b3 OK")
+	send(t, conn, "b4 EXPUNGE")
+	expectPrefix(t, read, "* 1 EXPUNGE")
+	expectPrefix(t, read, "b4 OK")
+	send(t, conn, "b5 SELECT INBOX")
+	expectPrefix(t, read, "* FLAGS")
+	expectPrefix(t, read, "* 0 EXISTS")
+	expectPrefix(t, read, "* 0 RECENT")
+	expectPrefix(t, read, "* OK [UIDVALIDITY")
+	expectPrefix(t, read, "b5 OK")
 }
 
 func literalSize(line string) (int, error) {

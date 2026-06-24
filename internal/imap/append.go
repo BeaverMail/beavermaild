@@ -1,0 +1,140 @@
+// IMAP APPEND command parsing and handling.
+package imap
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"strconv"
+	"strings"
+
+	"github.com/BeaverMail/beaver/internal/mail"
+	"github.com/BeaverMail/beaver/internal/storage"
+)
+
+func (s *session) cmdAppend(ctx context.Context, tag, arg string) error {
+	if s.principal.AccountID == 0 {
+		return s.tagged(tag, "NO LOGIN required")
+	}
+	mboxName, flags, size, ok := parseAppendArg(arg)
+	if !ok || size <= 0 || size > mail.MaxAppendBytes {
+		return s.tagged(tag, "BAD APPEND syntax")
+	}
+	if err := s.continuation(); err != nil {
+		return err
+	}
+	raw, err := s.readLiteral(size)
+	if err != nil {
+		return err
+	}
+
+	mbox, err := s.resolveOrCreateMailbox(ctx, mboxName)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			return s.tagged(tag, "NO mailbox does not exist")
+		}
+		return err
+	}
+
+	uid, err := s.inbox.Append(ctx, s.principal.AccountID, mbox.ID, raw, flags)
+	if err != nil {
+		return err
+	}
+
+	if s.selected && s.mbox.ID == mbox.ID {
+		meta, err := s.inbox.GetMeta(ctx, s.principal.AccountID, uid)
+		if err != nil {
+			return err
+		}
+		s.messages = append(s.messages, mail.Message{UID: uid, Meta: meta})
+		if err := s.untagged(fmt.Sprintf("%d EXISTS", len(s.messages))); err != nil {
+			return err
+		}
+	}
+
+	return s.tagged(tag, "OK APPEND completed")
+}
+
+func (s *session) readLiteral(n int) ([]byte, error) {
+	buf := make([]byte, n)
+	if _, err := io.ReadFull(s.r, buf); err != nil {
+		return nil, err
+	}
+	return buf, nil
+}
+
+func parseAppendArg(arg string) (mailbox string, flags uint32, size int, ok bool) {
+	arg = strings.TrimSpace(arg)
+	litStart := strings.LastIndexByte(arg, '{')
+	if litStart < 0 || len(arg) == 0 || arg[len(arg)-1] != '}' {
+		return "", 0, 0, false
+	}
+	size, err := strconv.Atoi(strings.TrimSpace(arg[litStart+1 : len(arg)-1]))
+	if err != nil {
+		return "", 0, 0, false
+	}
+
+	rest := strings.TrimSpace(arg[:litStart])
+	if rest == "" {
+		return "", 0, 0, false
+	}
+	mboxName, rest, ok := parseAppendMailboxToken(rest)
+	if !ok {
+		return "", 0, 0, false
+	}
+	rest = strings.TrimSpace(rest)
+	if strings.HasPrefix(rest, "(") {
+		close := strings.IndexByte(rest, ')')
+		if close < 0 {
+			return "", 0, 0, false
+		}
+		flags = parseAppendFlags(rest[:close+1])
+		rest = strings.TrimSpace(rest[close+1:])
+	}
+	if strings.HasPrefix(rest, "\"") {
+		_, rest, ok = parseQuoted(rest)
+		if !ok {
+			return "", 0, 0, false
+		}
+		rest = strings.TrimSpace(rest)
+	}
+	if rest != "" {
+		return "", 0, 0, false
+	}
+	return mboxName, flags, size, true
+}
+
+func parseAppendMailboxToken(rest string) (name string, tail string, ok bool) {
+	rest = strings.TrimSpace(rest)
+	if rest == "" {
+		return "", "", false
+	}
+	if rest[0] == '"' {
+		name, tail, ok = parseQuoted(rest)
+		return name, tail, ok
+	}
+	i := strings.IndexByte(rest, ' ')
+	if i < 0 {
+		return rest, "", true
+	}
+	return rest[:i], rest[i+1:], true
+}
+
+func parseAppendFlags(s string) uint32 {
+	s = strings.TrimSpace(s)
+	if len(s) < 2 || s[0] != '(' || s[len(s)-1] != ')' {
+		return 0
+	}
+	inner := strings.TrimSpace(s[1 : len(s)-1])
+	if inner == "" {
+		return 0
+	}
+	var bits uint32
+	for _, f := range strings.Fields(inner) {
+		if b, ok := mail.ParseIMAPFlagName(f); ok {
+			bits |= b
+		}
+	}
+	return bits
+}

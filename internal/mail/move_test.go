@@ -75,11 +75,11 @@ func TestCreateDeleteMailbox(t *testing.T) {
 	}
 
 	inbox := mail.NewInbox(store, blob.NewFS(t.TempDir()+"/blobs"))
-	mb, err := inbox.CreateMailbox(ctx, acc.ID, "Drafts")
+	mb, err := inbox.CreateMailbox(ctx, acc.ID, "Archive")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mb.Name != "Drafts" {
+	if mb.Name != "Archive" {
 		t.Fatalf("name %q", mb.Name)
 	}
 	if err := inbox.DeleteMailbox(ctx, acc.ID, mb.ID); err != nil {

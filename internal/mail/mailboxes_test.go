@@ -31,7 +31,7 @@ func TestEnsureMailboxesAddsSentTrash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(mboxes) != 3 {
+	if len(mboxes) != 4 {
 		t.Fatalf("mailboxes %d", len(mboxes))
 	}
 	sent, err := inbox.ResolveMailbox(ctx, acc.ID, "Sent")

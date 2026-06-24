@@ -161,6 +161,10 @@ func (s *session) run(ctx context.Context) error {
 			if err := s.cmdStore(ctx, tag, arg, false); err != nil {
 				return err
 			}
+		case "EXPUNGE":
+			if err := s.cmdExpunge(ctx, tag); err != nil {
+				return err
+			}
 		case "SEARCH":
 			if err := s.cmdSearch(ctx, tag, arg, false); err != nil {
 				return err
@@ -192,6 +196,10 @@ func (s *session) run(ctx context.Context) error {
 				if err := s.tagged(tag, "BAD command not supported"); err != nil {
 					return err
 				}
+			}
+		case "APPEND":
+			if err := s.cmdAppend(ctx, tag, arg); err != nil {
+				return err
 			}
 		case "STARTTLS":
 			if err := s.cmdStartTLS(tag); err != nil {
@@ -241,11 +249,15 @@ func (s *session) openMailbox(ctx context.Context, tag, name string, examine boo
 	if s.principal.AccountID == 0 {
 		return s.tagged(tag, "NO LOGIN required")
 	}
-	mbox, err := s.inbox.ResolveMailbox(ctx, s.principal.AccountID, name)
+	mbox, err := s.resolveOrCreateMailbox(ctx, name)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			return s.tagged(tag, "NO mailbox does not exist")
 		}
+		return err
+	}
+	recent, err := s.inbox.ClearRecentFlags(ctx, s.principal.AccountID, mbox.ID)
+	if err != nil {
 		return err
 	}
 	msgs, err := s.inbox.List(ctx, s.principal.AccountID, mbox.ID)
@@ -262,10 +274,10 @@ func (s *session) openMailbox(ctx context.Context, tag, name string, examine boo
 	if err := s.untagged(fmt.Sprintf("%d EXISTS", len(msgs))); err != nil {
 		return err
 	}
-	if err := s.untagged("0 RECENT"); err != nil {
+	if err := s.untagged(fmt.Sprintf("%d RECENT", recent)); err != nil {
 		return err
 	}
-	if err := s.untagged(fmt.Sprintf("OK [UIDVALIDITY %d]", mbox.UIDValidity)); err != nil {
+	if err := s.untagged(fmt.Sprintf("OK [UIDVALIDITY %d] [PERMANENTFLAGS %s]", mbox.UIDValidity, mail.IMAPPermanentFlags)); err != nil {
 		return err
 	}
 	if examine {
@@ -328,6 +340,37 @@ func (s *session) cmdStore(ctx context.Context, tag, arg string, byUID bool) err
 		}
 	}
 	return s.tagged(tag, "OK STORE completed")
+}
+
+// cmdExpunge permanently removes messages marked \Deleted in the selected mailbox.
+func (s *session) cmdExpunge(ctx context.Context, tag string) error {
+	if !s.selected {
+		return s.tagged(tag, "NO not selected")
+	}
+	if s.readOnly {
+		return s.tagged(tag, "NO mailbox is read-only")
+	}
+	for {
+		var found bool
+		for i, m := range s.messages {
+			if m.Meta.Flags&mail.FlagDeleted == 0 {
+				continue
+			}
+			if err := s.inbox.DeleteMessage(ctx, s.principal.AccountID, m.UID); err != nil {
+				return err
+			}
+			if err := s.untagged(fmt.Sprintf("%d EXPUNGE", i+1)); err != nil {
+				return err
+			}
+			s.messages = append(s.messages[:i], s.messages[i+1:]...)
+			found = true
+			break
+		}
+		if !found {
+			break
+		}
+	}
+	return s.tagged(tag, "OK EXPUNGE completed")
 }
 
 func (s *session) cmdSearch(ctx context.Context, tag, arg string, byUID bool) error {
@@ -571,6 +614,23 @@ func splitCommand(arg string) (cmd, rest string) {
 	return strings.ToUpper(strings.TrimSpace(arg[:i])), strings.TrimSpace(arg[i+1:])
 }
 
+func (s *session) continuation() error {
+	_, err := fmt.Fprintf(s.conn, "+ Ready for additional command text\r\n")
+	return err
+}
+
+// resolveOrCreateMailbox opens a folder, creating it when missing (IMAP clients often skip CREATE).
+func (s *session) resolveOrCreateMailbox(ctx context.Context, name string) (mail.Mailbox, error) {
+	mbox, err := s.inbox.ResolveMailbox(ctx, s.principal.AccountID, name)
+	if errors.Is(err, storage.ErrNotFound) {
+		mbox, err = s.inbox.CreateMailbox(ctx, s.principal.AccountID, name)
+		if errors.Is(err, mail.ErrMailboxExists) {
+			mbox, err = s.inbox.ResolveMailbox(ctx, s.principal.AccountID, name)
+		}
+	}
+	return mbox, err
+}
+
 func (s *session) untagged(line string) error {
 	_, err := fmt.Fprintf(s.conn, "* %s\r\n", line)
 	return err
@@ -716,39 +776,64 @@ func parseStoreArg(arg string) (setStr string, mode storeMode, set, clear uint32
 func parseStoreFlags(rest string) (mode storeMode, set, clear uint32, ok bool) {
 	upper := strings.ToUpper(rest)
 	switch {
+	case strings.HasPrefix(upper, "+FLAGS.SILENT"):
+		mode = storeAdd
+		rest = strings.TrimSpace(rest[len("+FLAGS.SILENT"):])
 	case strings.HasPrefix(upper, "+FLAGS"):
 		mode = storeAdd
 		rest = strings.TrimSpace(rest[len("+FLAGS"):])
+	case strings.HasPrefix(upper, "-FLAGS.SILENT"):
+		mode = storeRemove
+		rest = strings.TrimSpace(rest[len("-FLAGS.SILENT"):])
 	case strings.HasPrefix(upper, "-FLAGS"):
 		mode = storeRemove
 		rest = strings.TrimSpace(rest[len("-FLAGS"):])
+	case strings.HasPrefix(upper, "FLAGS.SILENT"):
+		mode = storeSilent
+		rest = strings.TrimSpace(rest[len("FLAGS.SILENT"):])
 	case strings.HasPrefix(upper, "FLAGS"):
 		mode = storeSilent
 		rest = strings.TrimSpace(rest[len("FLAGS"):])
 	default:
 		return storeSilent, 0, 0, false
 	}
-	flagName := strings.TrimSpace(rest)
-	if flagName == "" {
-		return storeSilent, 0, 0, false
-	}
-	if flagName[0] == '(' {
-		flagName = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(flagName, "("), ")"))
-	}
-	bit, known := mail.ParseIMAPFlagName(flagName)
-	if !known {
+	bits, ok := parseIMAPFlagList(rest)
+	if !ok {
 		return storeSilent, 0, 0, false
 	}
 	switch mode {
 	case storeAdd:
-		set = bit
+		set = bits
 	case storeRemove:
-		clear = bit
+		clear = bits
 	case storeSilent:
-		set = bit
-		clear = ^uint32(0) &^ bit
+		set = bits
+		clear = ^uint32(0) &^ bits
 	}
 	return mode, set, clear, true
+}
+
+// parseIMAPFlagList parses a parenthesized or bare IMAP flag list into a bitset.
+func parseIMAPFlagList(s string) (uint32, bool) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, true
+	}
+	if s[0] == '(' {
+		close := strings.IndexByte(s, ')')
+		if close < 0 {
+			return 0, false
+		}
+		s = strings.TrimSpace(s[1:close])
+	}
+	var bits uint32
+	for _, f := range strings.Fields(s) {
+		b, known := mail.ParseIMAPFlagName(f)
+		if known && mail.IsStoreableFlag(b) {
+			bits |= b
+		}
+	}
+	return bits, true
 }
 
 func parseStatusArg(arg string) (name string, fields []string, ok bool) {

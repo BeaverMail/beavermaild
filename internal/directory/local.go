@@ -124,6 +124,7 @@ func (d *Local) CreateAccount(ctx context.Context, domainID uint32, localPart, p
 		{ID: 1, Name: "INBOX", Role: "inbox", UIDNext: 1, UIDValidity: 1},
 		{ID: 2, Name: "Sent", Role: "sent", UIDNext: 1, UIDValidity: 1},
 		{ID: 3, Name: "Trash", Role: "trash", UIDNext: 1, UIDValidity: 1},
+		{ID: 4, Name: "Drafts", Role: "drafts", UIDNext: 1, UIDValidity: 1},
 	}
 
 	batch := storage.NewBatch().WithAccount(systemAccountID)

@@ -43,6 +43,7 @@ func (ib *Inbox) Deliver(ctx context.Context, accountID uint32, raw []byte) (uin
 		MailboxID:  InboxMailboxID,
 		ReceivedAt: time.Now().Unix(),
 		Size:       uint32(len(raw)),
+		Flags:      FlagRecent,
 		BlobHash:   hash,
 	}
 	wire, err := storage.MarshalPersist(nil, 1, meta)

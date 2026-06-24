@@ -24,12 +24,13 @@ type Server struct {
 	plainAddrs  []string
 	dir         *directory.Local
 	inbox       *mail.Inbox
+	queue       *mail.Queue
 	certs       *tlsload.Certs
 	tlsRequired bool
 }
 
 // NewServer returns an SMTP server. submissionAddr is optional second plain listener (e.g. :587).
-func NewServer(log *slog.Logger, addr string, dir *directory.Local, inbox *mail.Inbox, submissionAddr string, opts Options) *Server {
+func NewServer(log *slog.Logger, addr string, dir *directory.Local, inbox *mail.Inbox, queue *mail.Queue, submissionAddr string, opts Options) *Server {
 	addrs := []string{addr}
 	if submissionAddr != "" {
 		addrs = append(addrs, submissionAddr)
@@ -39,6 +40,7 @@ func NewServer(log *slog.Logger, addr string, dir *directory.Local, inbox *mail.
 		plainAddrs:  addrs,
 		dir:         dir,
 		inbox:       inbox,
+		queue:       queue,
 		certs:       opts.Certs,
 		tlsRequired: opts.TLSRequired,
 	}
@@ -93,7 +95,7 @@ func (s *Server) serve(ctx context.Context, listeners []net.Listener) error {
 
 func (s *Server) serveConn(ctx context.Context, conn net.Conn, secure bool) {
 	defer conn.Close()
-	sess := newSession(s.log, conn, s.dir, s.inbox, s.certs, secure, s.tlsRequired)
+	sess := newSession(s.log, conn, s.dir, s.inbox, s.queue, s.certs, secure, s.tlsRequired)
 	if err := sess.run(ctx); err != nil && ctx.Err() == nil {
 		s.log.Debug("smtp session", slog.Any("err", err))
 	}

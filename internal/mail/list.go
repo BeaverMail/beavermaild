@@ -77,6 +77,39 @@ func (ib *Inbox) SetFlags(ctx context.Context, accountID, emailID uint32, set, c
 	return ib.store.Commit(ctx, batch)
 }
 
+// ClearRecentFlags clears \Recent on all messages in mailboxID and returns how many were recent.
+func (ib *Inbox) ClearRecentFlags(ctx context.Context, accountID, mailboxID uint32) (int, error) {
+	msgs, err := ib.List(ctx, accountID, mailboxID)
+	if err != nil {
+		return 0, err
+	}
+	var recent int
+	batch := storage.NewBatch().WithAccount(accountID)
+	for _, m := range msgs {
+		if m.Meta.Flags&FlagRecent == 0 {
+			continue
+		}
+		recent++
+		meta := m.Meta
+		meta.Flags &^= FlagRecent
+		wire, err := storage.MarshalPersist(nil, 1, meta)
+		if err != nil {
+			return 0, err
+		}
+		suffix := storage.DocumentSuffix(storage.CollectionEmail, m.UID, nil)
+		if err := batch.Set(storage.SubspaceMail, suffix, wire); err != nil {
+			return 0, err
+		}
+	}
+	if recent == 0 {
+		return 0, nil
+	}
+	if err := ib.store.Commit(ctx, batch); err != nil {
+		return 0, err
+	}
+	return recent, nil
+}
+
 // GetMeta loads EmailMeta for accountID and emailID.
 func (ib *Inbox) GetMeta(ctx context.Context, accountID, emailID uint32) (storage.EmailMeta, error) {
 	key := storage.AppendKey(nil, storage.SubspaceMail, accountID, emailID, byte(storage.CollectionEmail), nil)

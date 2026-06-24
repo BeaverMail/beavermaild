@@ -8,7 +8,7 @@ import (
 	"github.com/BeaverMail/beaver/internal/mail"
 )
 
-// parseSearchCriteria parses a minimal SEARCH filter (ALL, SEEN, UNSEEN, UID n[:m]).
+// parseSearchCriteria parses SEARCH filters (ALL, flag criteria, UID ranges).
 func parseSearchCriteria(arg string) (mail.SearchCriteria, bool) {
 	arg = strings.TrimSpace(arg)
 	if arg == "" {
@@ -20,12 +20,47 @@ func parseSearchCriteria(arg string) (mail.SearchCriteria, bool) {
 		switch tokens[i] {
 		case "ALL":
 			c.All = true
+		case "NEW":
+			v := true
+			c.Recent = &v
+			seen := false
+			c.Seen = &seen
+		case "OLD":
+			v := false
+			c.Recent = &v
+		case "RECENT":
+			v := true
+			c.Recent = &v
 		case "SEEN":
 			v := true
 			c.Seen = &v
 		case "UNSEEN":
 			v := false
 			c.Seen = &v
+		case "FLAGGED":
+			v := true
+			c.Flagged = &v
+		case "UNFLAGGED":
+			v := false
+			c.Flagged = &v
+		case "ANSWERED":
+			v := true
+			c.Answered = &v
+		case "UNANSWERED":
+			v := false
+			c.Answered = &v
+		case "DELETED":
+			v := true
+			c.Deleted = &v
+		case "UNDELETED":
+			v := false
+			c.Deleted = &v
+		case "DRAFT":
+			v := true
+			c.Draft = &v
+		case "UNDRAFT":
+			v := false
+			c.Draft = &v
 		case "UID":
 			if i+1 >= len(tokens) {
 				return mail.SearchCriteria{}, false
@@ -42,7 +77,8 @@ func parseSearchCriteria(arg string) (mail.SearchCriteria, bool) {
 			return mail.SearchCriteria{}, false
 		}
 	}
-	if !c.All && c.Seen == nil && !c.UIDSet {
+	if !c.All && c.Seen == nil && !c.UIDSet && c.Flagged == nil && c.Answered == nil &&
+		c.Deleted == nil && c.Draft == nil && c.Recent == nil {
 		return mail.SearchCriteria{}, false
 	}
 	return c, true

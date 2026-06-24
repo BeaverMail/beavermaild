@@ -46,7 +46,7 @@ func TestSMTPSTARTTLS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := smtp.NewServer(log.New("error"), ln.Addr().String(), dir, inbox, "", smtp.Options{Certs: certs})
+	srv := smtp.NewServer(log.New("error"), ln.Addr().String(), dir, inbox, nil, "", smtp.Options{Certs: certs})
 	sctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go func() { _ = srv.ServeListener(sctx, ln) }()

@@ -34,6 +34,7 @@ func (ib *Inbox) MoveMessages(ctx context.Context, accountID uint32, emailIDs []
 			return err
 		}
 		meta.MailboxID = destMailboxID
+		meta.Flags &^= FlagRecent
 		wire, err := storage.MarshalPersist(nil, 1, meta)
 		if err != nil {
 			return err
@@ -66,6 +67,7 @@ func (ib *Inbox) CopyMessages(ctx context.Context, accountID uint32, emailIDs []
 			return nil, err
 		}
 		meta.MailboxID = destMailboxID
+		meta.Flags &^= FlagRecent
 		wire, err := storage.MarshalPersist(nil, 1, meta)
 		if err != nil {
 			return nil, err
@@ -164,7 +166,7 @@ func (ib *Inbox) CreateMailbox(ctx context.Context, accountID uint32, name strin
 
 // DeleteMailbox removes an empty non-system folder.
 func (ib *Inbox) DeleteMailbox(ctx context.Context, accountID, mailboxID uint32) error {
-	if mailboxID <= TrashMailboxID {
+	if mailboxID <= DraftsMailboxID {
 		return ErrSystemMailbox
 	}
 	msgs, err := ib.List(ctx, accountID, mailboxID)
@@ -187,7 +189,7 @@ func (ib *Inbox) nextCustomMailboxID(ctx context.Context, accountID uint32) (uin
 	if err != nil {
 		return 0, err
 	}
-	var max uint32 = TrashMailboxID
+	var max uint32 = DraftsMailboxID
 	for _, m := range records {
 		if m.ID > max {
 			max = m.ID

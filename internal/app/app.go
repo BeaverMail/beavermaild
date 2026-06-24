@@ -56,7 +56,7 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 		dir:   dir,
 		inbox: inbox,
 		queue: queue,
-		smtp: smtp.NewServer(log, cfg.SMTPListen(), dir, inbox, cfg.SMTPSubmissionListen(), smtp.Options{
+		smtp: smtp.NewServer(log, cfg.SMTPListen(), dir, inbox, queue, cfg.SMTPSubmissionListen(), smtp.Options{
 			Certs:       certs,
 			TLSRequired: tlsOpts.required,
 		}),

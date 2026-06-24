@@ -12,9 +12,10 @@ import (
 )
 
 const (
-	InboxMailboxID uint32 = 1
-	SentMailboxID  uint32 = 2
-	TrashMailboxID uint32 = 3
+	InboxMailboxID  uint32 = 1
+	SentMailboxID   uint32 = 2
+	TrashMailboxID  uint32 = 3
+	DraftsMailboxID uint32 = 4
 )
 
 // Mailbox is one IMAP-selectable folder for an account.
@@ -32,6 +33,7 @@ var defaultMailboxDefs = []struct {
 	{InboxMailboxID, "INBOX", "inbox"},
 	{SentMailboxID, "Sent", "sent"},
 	{TrashMailboxID, "Trash", "trash"},
+	{DraftsMailboxID, "Drafts", "drafts"},
 }
 
 // ListMailboxes returns account folders, ensuring defaults exist.
@@ -73,7 +75,7 @@ func (ib *Inbox) ResolveMailbox(ctx context.Context, accountID uint32, imapName 
 	return Mailbox{}, storage.ErrNotFound
 }
 
-// EnsureMailboxes creates INBOX, Sent, and Trash when missing (e.g. after seed upgrade).
+// EnsureMailboxes creates INBOX, Sent, Trash, and Drafts when missing (e.g. after seed upgrade).
 func (ib *Inbox) EnsureMailboxes(ctx context.Context, accountID uint32) error {
 	records, err := ib.listMailboxRecords(ctx, accountID)
 	if err != nil {

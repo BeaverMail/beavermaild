@@ -22,6 +22,7 @@ type session struct {
 	r     *bufio.Reader
 	dir   *directory.Local
 	inbox *mail.Inbox
+	queue *mail.Queue
 	tls   *tlsload.Certs
 
 	secure      bool
@@ -33,16 +34,17 @@ type session struct {
 
 type rcptTarget struct {
 	address   string
-	accountID uint32
+	accountID uint32 // 0 = outbound queue recipient
 }
 
-func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *mail.Inbox, certs *tlsload.Certs, secure, tlsRequired bool) *session {
+func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *mail.Inbox, queue *mail.Queue, certs *tlsload.Certs, secure, tlsRequired bool) *session {
 	return &session{
 		log:         log,
 		conn:        conn,
 		r:           bufio.NewReader(conn),
 		dir:         dir,
 		inbox:       inbox,
+		queue:       queue,
 		tls:         certs,
 		secure:      secure,
 		tlsRequired: tlsRequired,
@@ -111,7 +113,14 @@ func (s *session) run(ctx context.Context) error {
 			}
 			if _, err := s.dir.LookupDomain(ctx, domName); err != nil {
 				if errors.Is(err, directory.ErrNotFound) {
-					if err := s.writef("550 unknown domain"); err != nil {
+					if s.queue == nil {
+						if err := s.writef("550 unknown domain"); err != nil {
+							return err
+						}
+						continue
+					}
+					s.rcpt = append(s.rcpt, rcptTarget{address: strings.ToLower(addr)})
+					if err := s.writef("250 OK"); err != nil {
 						return err
 					}
 					continue
@@ -152,9 +161,29 @@ func (s *session) run(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
+			var remotes []string
 			for _, t := range s.rcpt {
+				if t.accountID == 0 {
+					remotes = append(remotes, t.address)
+					continue
+				}
 				if _, err := s.inbox.Deliver(ctx, t.accountID, raw); err != nil {
 					s.log.Warn("deliver failed", "rcpt", t.address, slog.Any("err", err))
+					if err := s.writef("451 delivery failed"); err != nil {
+						return err
+					}
+					goto afterData
+				}
+			}
+			if len(remotes) > 0 {
+				if s.queue == nil {
+					if err := s.writef("451 outbound delivery unavailable"); err != nil {
+						return err
+					}
+					goto afterData
+				}
+				if _, err := s.queue.Enqueue(ctx, s.mailFrom, remotes, raw); err != nil {
+					s.log.Warn("enqueue failed", slog.Any("err", err))
 					if err := s.writef("451 delivery failed"); err != nil {
 						return err
 					}
