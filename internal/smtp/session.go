@@ -4,6 +4,7 @@ package smtp
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -87,9 +88,15 @@ func (s *session) run(ctx context.Context) error {
 				return err
 			}
 		case "MAIL":
-			addr, ok := parsePath(arg)
+			addr, declaredSize, ok := parseMailArg(arg)
 			if !ok {
-				if err := s.writef("501 syntax: MAIL FROM:<address>"); err != nil {
+				if err := s.writef("501 5.5.4 Syntax: MAIL FROM:<address>"); err != nil {
+					return err
+				}
+				continue
+			}
+			if declaredSize > s.dataLimits.MaxMessageBytes {
+				if err := s.writef("552 5.3.4 Message size exceeds fixed maximum message size"); err != nil {
 					return err
 				}
 				continue
@@ -112,7 +119,7 @@ func (s *session) run(ctx context.Context) error {
 			}
 			s.reset()
 			s.mailFrom = addr
-			if err := s.writef("250 OK"); err != nil {
+			if err := s.writef(smtpOK); err != nil {
 				return err
 			}
 		case "RCPT":
@@ -151,7 +158,7 @@ func (s *session) run(ctx context.Context) error {
 						continue
 					}
 					s.rcpt = append(s.rcpt, rcptTarget{address: strings.ToLower(addr)})
-					if err := s.writef("250 OK"); err != nil {
+					if err := s.writef(smtpOK); err != nil {
 						return err
 					}
 					continue
@@ -175,7 +182,7 @@ func (s *session) run(ctx context.Context) error {
 				continue
 			}
 			s.rcpt = append(s.rcpt, rcptTarget{address: strings.ToLower(addr), accountID: acc.ID})
-			if err := s.writef("250 OK"); err != nil {
+			if err := s.writef(smtpOK); err != nil {
 				return err
 			}
 		case "DATA":
@@ -185,7 +192,7 @@ func (s *session) run(ctx context.Context) error {
 				}
 				continue
 			}
-			if err := s.writef("354 start mail input; end with <CRLF>.<CRLF>"); err != nil {
+			if err := s.writef(smtpDataStart); err != nil {
 				return err
 			}
 			raw, err := readDATA(s.r, s.dataLimits)
@@ -226,22 +233,22 @@ func (s *session) run(ctx context.Context) error {
 					goto afterData
 				}
 			}
-			if err := s.writef("250 OK"); err != nil {
+			if err := s.writef(smtpOK); err != nil {
 				return err
 			}
 		afterData:
 			s.reset()
 		case "RSET":
 			s.reset()
-			if err := s.writef("250 OK"); err != nil {
+			if err := s.writef(smtpOK); err != nil {
 				return err
 			}
 		case "NOOP":
-			if err := s.writef("250 OK"); err != nil {
+			if err := s.writef(smtpOK); err != nil {
 				return err
 			}
 		case "QUIT":
-			_ = s.writef("221 bye")
+			_ = s.writef("221 2.0.0 Bye")
 			return nil
 		default:
 			if err := s.writef("502 command not implemented"); err != nil {
@@ -255,35 +262,53 @@ func (s *session) writeEHLO(extended bool) error {
 	if !extended {
 		return s.writef("250 localhost")
 	}
-	if err := s.writef("250-localhost"); err != nil {
-		return err
+	lines := []string{
+		"250-localhost",
+		"250-ENHANCEDSTATUSCODES",
+		"250-8BITMIME",
+		"250-PIPELINING",
+		fmt.Sprintf("250-SIZE %d", s.dataLimits.MaxMessageBytes),
 	}
 	if s.tls != nil && !s.secure {
-		if err := s.writef("250-STARTTLS"); err != nil {
-			return err
-		}
+		lines = append(lines, "250-STARTTLS")
 	}
 	if s.submission && s.secure {
-		if err := s.writef("250-AUTH PLAIN"); err != nil {
+		lines = append(lines, "250-AUTH PLAIN LOGIN")
+	}
+	for _, line := range lines {
+		if err := s.writef(line); err != nil {
 			return err
 		}
 	}
-	return s.writef("250 OK")
+	return s.writef("250 2.0.0 Ok")
 }
 
-// cmdAuth handles AUTH PLAIN on submission listeners after TLS is active.
+const (
+	smtpOK        = "250 2.0.0 Ok"
+	smtpDataStart = "354 2.0.0 Start mail input; end with <CRLF>.<CRLF>"
+)
+
+// cmdAuth handles AUTH on submission listeners after TLS is active.
 func (s *session) cmdAuth(ctx context.Context, arg string) error {
 	if !s.submission {
-		return s.writef("502 command not implemented")
+		return s.writef("502 5.5.1 Command not implemented")
 	}
 	if !s.secure {
 		return s.writef("538 5.7.11 Encryption required for authentication")
 	}
 	mech, rest := splitAuthArg(arg)
-	if !strings.EqualFold(mech, "PLAIN") {
+	switch {
+	case strings.EqualFold(mech, "PLAIN"):
+		return s.authPlain(ctx, rest)
+	case strings.EqualFold(mech, "LOGIN"):
+		return s.authLogin(ctx, rest)
+	default:
 		return s.writef("504 5.5.4 Unrecognized authentication type")
 	}
-	credLine := strings.TrimSpace(rest)
+}
+
+func (s *session) authPlain(ctx context.Context, credLine string) error {
+	credLine = strings.TrimSpace(credLine)
 	if credLine == "" {
 		if err := s.writef("334 "); err != nil {
 			return err
@@ -298,6 +323,35 @@ func (s *session) cmdAuth(ctx context.Context, arg string) error {
 	if !ok {
 		return s.writef("535 5.7.8 Authentication credentials invalid")
 	}
+	return s.finishAuth(ctx, user, pass)
+}
+
+func (s *session) authLogin(ctx context.Context, credLine string) error {
+	if strings.TrimSpace(credLine) != "" {
+		return s.writef("535 5.7.8 Authentication credentials invalid")
+	}
+	if err := s.writef("334 " + base64.StdEncoding.EncodeToString([]byte("Username:"))); err != nil {
+		return err
+	}
+	userLine, err := s.readLine()
+	if err != nil {
+		return err
+	}
+	user := decodeSMTPBase64(userLine)
+	if user == "" {
+		return s.writef("535 5.7.8 Authentication credentials invalid")
+	}
+	if err := s.writef("334 " + base64.StdEncoding.EncodeToString([]byte("Password:"))); err != nil {
+		return err
+	}
+	passLine, err := s.readLine()
+	if err != nil {
+		return err
+	}
+	return s.finishAuth(ctx, user, decodeSMTPBase64(passLine))
+}
+
+func (s *session) finishAuth(ctx context.Context, user, pass string) error {
 	p, err := s.dir.Authenticate(ctx, user, pass)
 	if err != nil {
 		if errors.Is(err, directory.ErrInvalidCredentials) || errors.Is(err, directory.ErrInactive) {

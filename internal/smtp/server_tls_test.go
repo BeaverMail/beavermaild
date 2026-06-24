@@ -61,9 +61,7 @@ func TestSMTPSTARTTLS(t *testing.T) {
 	read := bufio.NewReader(conn)
 	expect(t, read, "220")
 	send(t, conn, "EHLO test")
-	expect(t, read, "250-")
-	expect(t, read, "250-STARTTLS")
-	expect(t, read, "250 OK")
+	readEHLO(t, read, "STARTTLS")
 	send(t, conn, "STARTTLS")
 	expect(t, read, "220")
 	tlsConn := tls.Client(conn, &tls.Config{InsecureSkipVerify: true, ServerName: "localhost"})
@@ -72,7 +70,7 @@ func TestSMTPSTARTTLS(t *testing.T) {
 	}
 	read = bufio.NewReader(tlsConn)
 	send(t, tlsConn, "EHLO test")
-	expect(t, read, "250")
+	readEHLO(t, read, "")
 	send(t, tlsConn, "QUIT")
 }
 
@@ -119,6 +117,6 @@ func TestSMTPImplicitTLS(t *testing.T) {
 	read := bufio.NewReader(conn)
 	expect(t, read, "220")
 	send(t, conn, "EHLO test")
-	expect(t, read, "250")
+	readEHLO(t, read, "")
 	send(t, conn, "QUIT")
 }
