@@ -230,6 +230,8 @@ func runDomain(args []string) int {
 		return runDomainAdd(args[1:])
 	case "list":
 		return runDomainList(args[1:])
+	case "delete":
+		return runDomainDelete(args[1:])
 	default:
 		domainUsage()
 		return cli.ExitUsage
@@ -326,6 +328,42 @@ func runDomainList(args []string) int {
 	return cli.ExitOK
 }
 
+func runDomainDelete(args []string) int {
+	fs := flag.NewFlagSet("domain delete", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	configPath := fs.String("config", filepath.Join(config.DefaultDataDir, "config.json"), "config file path")
+	if err := fs.Parse(args); err != nil {
+		return cli.ExitUsage
+	}
+	if len(fs.Args()) != 1 {
+		fmt.Fprintln(os.Stderr, "usage: beaver domain delete [-config path] <name>")
+		return cli.ExitUsage
+	}
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "domain delete: load config: %v\n", err)
+		return cli.ExitError
+	}
+
+	ctx := context.Background()
+	dir, closeStore, err := openDirectory(ctx, cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "domain delete: %v\n", err)
+		return cli.ExitError
+	}
+	defer closeStore()
+
+	res, err := dir.DeleteDomain(ctx, fs.Args()[0])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "domain delete: %v\n", err)
+		return cli.ExitError
+	}
+	fmt.Fprintf(os.Stderr, "deleted domain_id=%d name=%s accounts_deleted=%d\n",
+		res.Domain.ID, res.Domain.Name, res.AccountsDeleted)
+	return cli.ExitOK
+}
+
 func runAccount(args []string) int {
 	if len(args) == 0 {
 		accountUsage()
@@ -418,6 +456,7 @@ func domainUsage() {
 	fmt.Fprintln(os.Stderr, "usage:")
 	fmt.Fprintln(os.Stderr, "  beaver domain add [-config path] <name>")
 	fmt.Fprintln(os.Stderr, "  beaver domain list [-config path] [--json]")
+	fmt.Fprintln(os.Stderr, "  beaver domain delete [-config path] <name>")
 }
 
 func accountUsage() {
@@ -439,5 +478,6 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  beaver send [-config path] -from addr -to addr message...")
 	fmt.Fprintln(os.Stderr, "  beaver domain add [-config path] <name>")
 	fmt.Fprintln(os.Stderr, "  beaver domain list [-config path] [--json]")
+	fmt.Fprintln(os.Stderr, "  beaver domain delete [-config path] <name>")
 	fmt.Fprintln(os.Stderr, "  beaver account create [-config path] -domain name -local part -password pw")
 }
