@@ -49,6 +49,9 @@ type QueueRecipient struct {
 	Flags       uint64 `msgpack:"f"`
 	LastAttempt int64  `msgpack:"la,omitempty"` // unix milliseconds; 0 = never tried
 	NextDue     int64  `msgpack:"nd,omitempty"` // unix milliseconds; 0 = due now
+	Notify      uint8  `msgpack:"nt,omitempty"` // NotifyFlags; 0 = default FAILURE|DELAY
+	Orcpt       string `msgpack:"oc,omitempty"`
+	LastDiag    string `msgpack:"ld,omitempty"` // last SMTP diagnostic for DSN
 }
 
 // QueueMessage is an SMTP queue entry (SubspaceQueue).
@@ -60,6 +63,8 @@ type QueueMessage struct {
 	ReceivedFromIP [16]byte         `msgpack:"ip"`
 	Flags          uint64           `msgpack:"fl"`
 	Size           uint64           `msgpack:"sz"`
+	Ret            string           `msgpack:"ret,omitempty"`  // FULL or HDRS
+	Envid          string           `msgpack:"envid,omitempty"`
 }
 
 // HasBlob reports whether BlobHash points at filesystem blob storage.

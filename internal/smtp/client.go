@@ -72,7 +72,10 @@ func Send(ctx context.Context, addr, mailFrom, rcptTo string, data []byte, opts 
 		}
 	}
 
-	mailLine := fmt.Sprintf("MAIL FROM:<%s>", mailFrom)
+	mailLine := "MAIL FROM:<>"
+	if strings.TrimSpace(mailFrom) != "" {
+		mailLine = fmt.Sprintf("MAIL FROM:<%s>", mailFrom)
+	}
 	if len(data) > 0 {
 		mailLine += fmt.Sprintf(" SIZE=%d", len(data))
 	}

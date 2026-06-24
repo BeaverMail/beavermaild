@@ -98,7 +98,7 @@ func TestWorkerExpireBouncesReturnPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(body), "Delivery Status Notification") {
+	if !strings.Contains(string(body), "multipart/report") {
 		t.Fatalf("bounce body %q", body)
 	}
 	if !strings.Contains(string(body), "remote@example.com") {

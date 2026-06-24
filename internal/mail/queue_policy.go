@@ -18,17 +18,19 @@ var DefaultRetryIntervals = []time.Duration{
 
 // QueuePolicy controls outbound queue scan interval, retry table, and lifetime.
 type QueuePolicy struct {
-	RetryIntervals []time.Duration
-	MaxLifetime    time.Duration
-	RunDelay       time.Duration
+	RetryIntervals   []time.Duration
+	MaxLifetime      time.Duration
+	RunDelay         time.Duration
+	DelayNotifyAfter time.Duration // 0 = notify on first transient failure
 }
 
 // DefaultQueuePolicy returns production defaults (3d message lifetime).
 func DefaultQueuePolicy() QueuePolicy {
 	return QueuePolicy{
-		RetryIntervals: append([]time.Duration(nil), DefaultRetryIntervals...),
-		MaxLifetime:    3 * 24 * time.Hour,
-		RunDelay:       time.Second,
+		RetryIntervals:   append([]time.Duration(nil), DefaultRetryIntervals...),
+		MaxLifetime:      3 * 24 * time.Hour,
+		RunDelay:         time.Second,
+		DelayNotifyAfter: 30 * time.Minute,
 	}
 }
 

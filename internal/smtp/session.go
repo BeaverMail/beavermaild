@@ -33,6 +33,8 @@ type session struct {
 	principal directory.Principal
 
 	mailFrom string
+	mailRet  mail.RetMode
+	mailEnvid string
 	rcpt     []rcptTarget
 
 	bdatBuf  []byte
@@ -42,6 +44,8 @@ type session struct {
 type rcptTarget struct {
 	address   string
 	accountID uint32 // 0 = outbound queue recipient
+	notify    mail.NotifyFlags
+	orcpt     string
 }
 
 func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *mail.Inbox, queue *mail.Queue, certs *tlsload.Certs, secure, tlsRequired, submission bool, limits DataLimits) *session {
@@ -91,7 +95,7 @@ func (s *session) run(ctx context.Context) error {
 				return err
 			}
 		case "MAIL":
-			addr, declaredSize, ok := parseMailArg(arg)
+			addr, declaredSize, mailParams, ok := parseMailArg(arg)
 			if !ok {
 				if err := s.writef("501 5.5.4 Syntax: MAIL FROM:<address>"); err != nil {
 					return err
@@ -122,11 +126,13 @@ func (s *session) run(ctx context.Context) error {
 			}
 			s.reset()
 			s.mailFrom = addr
+			s.mailRet = mailParams.Ret
+			s.mailEnvid = mailParams.Envid
 			if err := s.writef(smtpOK); err != nil {
 				return err
 			}
 		case "RCPT":
-			addr, ok := parseRcptArg(arg)
+			addr, rcptParams, ok := parseRcptArg(arg)
 			if !ok {
 				if err := s.writef("501 syntax: RCPT TO:<address>"); err != nil {
 					return err
@@ -160,7 +166,11 @@ func (s *session) run(ctx context.Context) error {
 						}
 						continue
 					}
-					s.rcpt = append(s.rcpt, rcptTarget{address: strings.ToLower(addr)})
+					s.rcpt = append(s.rcpt, rcptTarget{
+						address: strings.ToLower(addr),
+						notify:  rcptParams.Notify,
+						orcpt:   rcptParams.Orcpt,
+					})
 					if err := s.writef(smtpOK); err != nil {
 						return err
 					}
@@ -184,7 +194,12 @@ func (s *session) run(ctx context.Context) error {
 				}
 				continue
 			}
-			s.rcpt = append(s.rcpt, rcptTarget{address: strings.ToLower(addr), accountID: acc.ID})
+			s.rcpt = append(s.rcpt, rcptTarget{
+				address:   strings.ToLower(addr),
+				accountID: acc.ID,
+				notify:    rcptParams.Notify,
+				orcpt:     rcptParams.Orcpt,
+			})
 			if err := s.writef(smtpOK); err != nil {
 				return err
 			}
@@ -424,6 +439,8 @@ func (s *session) cmdStartTLS() error {
 
 func (s *session) reset() {
 	s.mailFrom = ""
+	s.mailRet = mail.RetNone
+	s.mailEnvid = ""
 	s.rcpt = s.rcpt[:0]
 	s.bdatBuf = s.bdatBuf[:0]
 	s.bdatUsed = false
@@ -454,7 +471,7 @@ func (s *session) finishDelivery(ctx context.Context, raw []byte) error {
 			s.reset()
 			return nil
 		}
-		if _, err := s.queue.Enqueue(ctx, s.mailFrom, remotes, raw); err != nil {
+		if _, err := s.queue.EnqueueDSN(ctx, s.buildEnvelopeDSN(remotes), raw); err != nil {
 			s.log.Warn("enqueue failed", slog.Any("err", err))
 			if err := s.writef("451 delivery failed"); err != nil {
 				return err
@@ -502,6 +519,36 @@ func (s *session) cmdBDAT(ctx context.Context, arg string) error {
 		return err
 	}
 	return nil
+}
+
+// buildEnvelopeDSN collects MAIL/RCPT DSN parameters for queued remote recipients.
+func (s *session) buildEnvelopeDSN(remotes []string) mail.EnvelopeDSN {
+	env := mail.EnvelopeDSN{
+		ReturnPath: s.mailFrom,
+		Ret:        s.mailRet,
+		Envid:      s.mailEnvid,
+	}
+	remoteSet := make(map[string]rcptTarget, len(remotes))
+	for _, t := range s.rcpt {
+		if t.accountID == 0 {
+			remoteSet[t.address] = t
+		}
+	}
+	for _, addr := range remotes {
+		t, ok := remoteSet[strings.ToLower(addr)]
+		notify := mail.NotifyDefault
+		orcpt := ""
+		if ok {
+			notify = t.notify
+			orcpt = t.orcpt
+		}
+		env.Recipients = append(env.Recipients, mail.RcptDSN{
+			Address: addr,
+			Notify:  notify,
+			Orcpt:   orcpt,
+		})
+	}
+	return env
 }
 
 func (s *session) writef(format string, args ...any) error {

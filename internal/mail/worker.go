@@ -4,11 +4,13 @@ package mail
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/BeaverMail/beaver/internal/directory"
+	"github.com/BeaverMail/beaver/internal/storage"
 )
 
 // RemoteDeliverer submits mail to remote recipients (relay or MX).
@@ -102,15 +104,22 @@ func (w *Worker) deliverEntry(ctx context.Context, e QueueEntry) error {
 		RecordAttempt(&msg, i, now)
 		if err := w.deliverTo(ctx, msg.ReturnPath, rcpt.Address, raw); err != nil {
 			w.log.Debug("queue rcpt failed", "rcpt", rcpt.Address, slog.Any("err", err))
+			rcpt.LastDiag = err.Error()
 			if deliveryPermanent(err) {
 				MarkPermanentFail(&msg, i)
+				w.maybeSendDSN(ctx, e.ID, msg, *rcpt, raw, DSNActionFailed, err)
 			} else {
 				ScheduleNextRetry(&msg, i, w.policy, now)
+				if w.maybeSendDelayDSN(ctx, e.ID, msg, i, raw, created, now, err) {
+					MarkDelayNotified(&msg, i)
+					changed = true
+				}
 			}
 			changed = true
 			continue
 		}
 		MarkDelivered(&msg, i)
+		w.maybeSendDSN(ctx, e.ID, msg, *rcpt, raw, DSNActionDelivered, nil)
 		changed = true
 	}
 
@@ -127,17 +136,101 @@ func (w *Worker) deliverEntry(ctx context.Context, e QueueEntry) error {
 func (w *Worker) expireEntry(ctx context.Context, e QueueEntry) error {
 	msg := e.Msg
 	w.log.Info("queue message expired", "id", e.ID, "return_path", msg.ReturnPath)
+	raw, _ := w.queue.LoadRaw(ctx, msg)
 	returnPath := strings.TrimSpace(msg.ReturnPath)
-	for _, rcpt := range msg.Recipients {
+	for i, rcpt := range msg.Recipients {
 		if !recipientPending(rcpt) || returnPath == "" {
 			continue
 		}
-		bounce := BuildExpireBounce(returnPath, rcpt.Address, e.ID)
-		if err := w.deliverTo(ctx, "", returnPath, bounce); err != nil {
-			w.log.Warn("bounce deliver failed", "return_path", returnPath, slog.Any("err", err))
-		}
+		rcpt.LastDiag = "delivery time expired"
+		w.maybeSendDSN(ctx, e.ID, msg, rcpt, raw, DSNActionFailed, fmt.Errorf("delivery time expired"))
+		MarkPermanentFail(&msg, i)
 	}
 	return w.queue.Delete(ctx, e.ID)
+}
+
+func (w *Worker) maybeSendDelayDSN(ctx context.Context, queueID uint32, msg storage.QueueMessage, rcptIdx int, raw []byte, created, now time.Time, err error) bool {
+	rcpt := msg.Recipients[rcptIdx]
+	if DelayNotified(rcpt) {
+		return false
+	}
+	if w.policy.DelayNotifyAfter > 0 && now.Sub(created) < w.policy.DelayNotifyAfter {
+		return false
+	}
+	w.maybeSendDSN(ctx, queueID, msg, rcpt, raw, DSNActionDelayed, err)
+	return true
+}
+
+func (w *Worker) maybeSendDSN(ctx context.Context, queueID uint32, msg storage.QueueMessage, rcpt storage.QueueRecipient, raw []byte, action DSNAction, err error) {
+	returnPath := strings.TrimSpace(msg.ReturnPath)
+	if returnPath == "" {
+		return
+	}
+	notify := NotifyFlagsFromStorage(rcpt.Notify)
+	local := w.returnPathLocal(ctx, returnPath)
+	remoteOK := w.remote != nil
+	if !ShouldSendDSN(returnPath, notify, action, local, remoteOK) {
+		return
+	}
+
+	diag := rcpt.LastDiag
+	if diag == "" && err != nil {
+		diag = err.Error()
+	}
+	status := dsnStatusFor(action, err)
+	opts := DSNBuildOpts{
+		ReturnPath: returnPath,
+		FinalRcpt:  rcpt.Address,
+		Orcpt:      rcpt.Orcpt,
+		Envid:      msg.Envid,
+		Ret:        RetMode(msg.Ret),
+		Action:     action,
+		Status:     status,
+		Diagnostic: diag,
+		QueueID:    queueID,
+		OriginalRaw: raw,
+	}
+	bounce := BuildDSN(opts)
+	if err := w.deliverBounce(ctx, returnPath, bounce); err != nil {
+		w.log.Warn("dsn deliver failed", "return_path", returnPath, "action", action, slog.Any("err", err))
+	}
+}
+
+func dsnStatusFor(action DSNAction, err error) string {
+	switch action {
+	case DSNActionDelivered:
+		return "2.0.0"
+	case DSNActionDelayed:
+		if err != nil {
+			return SMTPStatusFromError(err)
+		}
+		return "4.0.0"
+	default:
+		if err != nil {
+			return SMTPStatusFromError(err)
+		}
+		return "5.0.0"
+	}
+}
+
+func (w *Worker) returnPathLocal(ctx context.Context, returnPath string) bool {
+	acc, _, err := w.dir.ResolveEmail(ctx, returnPath)
+	return err == nil && acc.Active
+}
+
+func (w *Worker) deliverBounce(ctx context.Context, returnPath string, raw []byte) error {
+	if w.returnPathLocal(ctx, returnPath) {
+		acc, _, err := w.dir.ResolveEmail(ctx, returnPath)
+		if err != nil {
+			return err
+		}
+		_, err = w.inbox.Deliver(ctx, acc.ID, raw)
+		return err
+	}
+	if w.remote == nil {
+		return errors.New("mail: no remote delivery for bounce")
+	}
+	return w.remote.DeliverRemote(ctx, "", returnPath, raw)
 }
 
 func (w *Worker) deliverTo(ctx context.Context, returnPath, rcpt string, raw []byte) error {

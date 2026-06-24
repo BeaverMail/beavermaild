@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/BeaverMail/beaver/internal/storage"
@@ -37,12 +38,27 @@ func NewQueue(store storage.Store, blobs *blob.FS) *Queue {
 	return &Queue{store: store, blobs: blobs}
 }
 
-// Enqueue stores raw message bytes for delivery to recipients.
+// Enqueue stores raw message bytes for delivery to recipients (default DSN notify flags).
 func (q *Queue) Enqueue(ctx context.Context, returnPath string, recipients []string, raw []byte) (uint32, error) {
+	env := EnvelopeDSN{
+		ReturnPath: returnPath,
+		Ret:        RetNone,
+	}
+	for _, addr := range recipients {
+		env.Recipients = append(env.Recipients, RcptDSN{
+			Address: addr,
+			Notify:  NotifyDefault,
+		})
+	}
+	return q.EnqueueDSN(ctx, env, raw)
+}
+
+// EnqueueDSN stores a message with MAIL/RCPT DSN parameters.
+func (q *Queue) EnqueueDSN(ctx context.Context, env EnvelopeDSN, raw []byte) (uint32, error) {
 	if len(raw) == 0 {
 		return 0, fmt.Errorf("mail: empty message")
 	}
-	if len(recipients) == 0 {
+	if len(env.Recipients) == 0 {
 		return 0, fmt.Errorf("mail: no recipients")
 	}
 
@@ -56,16 +72,26 @@ func (q *Queue) Enqueue(ctx context.Context, returnPath string, recipients []str
 		return 0, err
 	}
 
-	rcpts := make([]storage.QueueRecipient, len(recipients))
-	for i, addr := range recipients {
-		rcpts[i] = storage.QueueRecipient{Address: addr}
+	rcpts := make([]storage.QueueRecipient, len(env.Recipients))
+	for i, r := range env.Recipients {
+		notify := r.Notify
+		if notify == 0 {
+			notify = NotifyDefault
+		}
+		rcpts[i] = storage.QueueRecipient{
+			Address: strings.ToLower(strings.TrimSpace(r.Address)),
+			Notify:  NotifyToStorage(notify),
+			Orcpt:   r.Orcpt,
+		}
 	}
 	msg := storage.QueueMessage{
 		Created:    uint64(time.Now().Unix()),
 		BlobHash:   hash,
-		ReturnPath: returnPath,
+		ReturnPath: strings.ToLower(strings.TrimSpace(env.ReturnPath)),
 		Recipients: rcpts,
 		Size:       uint64(len(raw)),
+		Ret:        string(env.Ret),
+		Envid:      env.Envid,
 	}
 	wire, err := storage.MarshalPersist(nil, 1, msg)
 	if err != nil {
