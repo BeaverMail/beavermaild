@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/BeaverMail/beaver/internal/storage"
@@ -84,6 +85,26 @@ func (q *Queue) Enqueue(ctx context.Context, returnPath string, recipients []str
 
 // ListPending returns all queue entries with at least one undelivered recipient.
 func (q *Queue) ListPending(ctx context.Context) ([]QueueEntry, error) {
+	return q.list(ctx, true)
+}
+
+// ListAll returns every queue entry still stored.
+func (q *Queue) ListAll(ctx context.Context) ([]QueueEntry, error) {
+	return q.list(ctx, false)
+}
+
+// RecipientStatus returns pending, delivered, or failed for one queue recipient.
+func RecipientStatus(rcpt storage.QueueRecipient) string {
+	if rcpt.Flags&rcptDelivered != 0 {
+		return "delivered"
+	}
+	if rcpt.Flags&rcptPermanentFail != 0 {
+		return "failed"
+	}
+	return "pending"
+}
+
+func (q *Queue) list(ctx context.Context, pendingOnly bool) ([]QueueEntry, error) {
 	from := storage.AppendKeyPrefix(nil, storage.SubspaceQueue, queueAccountID, 0, queueMsgCollection, 6)
 	to := storage.AppendKey(nil, storage.SubspaceQueue, queueAccountID, ^uint32(0), queueMsgCollection, nil)
 
@@ -100,11 +121,20 @@ func (q *Queue) ListPending(ctx context.Context) ([]QueueEntry, error) {
 		if err := storage.UnmarshalPersist(v, &msg); err != nil {
 			return err
 		}
-		if pendingRecipients(msg) == 0 {
+		if pendingOnly && pendingRecipients(msg) == 0 {
 			return nil
 		}
 		out = append(out, QueueEntry{ID: parts.DocumentID, Msg: msg})
 		return nil
+	})
+	slices.SortFunc(out, func(a, b QueueEntry) int {
+		if a.ID < b.ID {
+			return -1
+		}
+		if a.ID > b.ID {
+			return 1
+		}
+		return 0
 	})
 	return out, err
 }

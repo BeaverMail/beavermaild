@@ -51,6 +51,8 @@ func run(args []string) int {
 		return runAuth(args[1:])
 	case "send":
 		return runSend(args[1:])
+	case "queue":
+		return runQueue(args[1:])
 	case "domain":
 		return runDomain(args[1:])
 	case "account":
@@ -218,6 +220,132 @@ func runSend(args []string) int {
 	}
 	fmt.Fprintf(os.Stderr, "queued id=%d to=%s\n", id, *to)
 	return cli.ExitOK
+}
+
+func runQueue(args []string) int {
+	if len(args) == 0 {
+		queueUsage()
+		return cli.ExitUsage
+	}
+	switch args[0] {
+	case "list":
+		return runQueueList(args[1:])
+	default:
+		queueUsage()
+		return cli.ExitUsage
+	}
+}
+
+func runQueueList(args []string) int {
+	fs := flag.NewFlagSet("queue list", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	configPath := fs.String("config", filepath.Join(config.DefaultDataDir, "config.json"), "config file path")
+	all := fs.Bool("all", false, "include entries with no pending recipients")
+	asJSON := fs.Bool("json", false, "emit JSON on stdout")
+	if err := fs.Parse(args); err != nil {
+		return cli.ExitUsage
+	}
+	if len(fs.Args()) != 0 {
+		fmt.Fprintln(os.Stderr, "usage: beaver queue list [-config path] [--all] [--json]")
+		return cli.ExitUsage
+	}
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "queue list: load config: %v\n", err)
+		return cli.ExitError
+	}
+
+	ctx := context.Background()
+	store, closeStore, err := openStore(ctx, cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "queue list: %v\n", err)
+		return cli.ExitError
+	}
+	defer closeStore()
+
+	queue := mail.NewQueue(store, blob.NewFS(cfg.BlobDir()))
+	var entries []mail.QueueEntry
+	if *all {
+		entries, err = queue.ListAll(ctx)
+	} else {
+		entries, err = queue.ListPending(ctx)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "queue list: %v\n", err)
+		return cli.ExitError
+	}
+
+	if *asJSON {
+		rows := make([]queueJSON, len(entries))
+		for i, e := range entries {
+			rows[i] = queueEntryJSON(e)
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(rows); err != nil {
+			fmt.Fprintf(os.Stderr, "queue list: %v\n", err)
+			return cli.ExitError
+		}
+		return cli.ExitOK
+	}
+
+	for _, e := range entries {
+		pending := 0
+		for _, rcpt := range e.Msg.Recipients {
+			if mail.RecipientStatus(rcpt) == "pending" {
+				pending++
+			}
+		}
+		fmt.Fprintf(os.Stderr, "queue_id=%d return_path=%s size=%d created=%d recipients=%d pending=%d\n",
+			e.ID, e.Msg.ReturnPath, e.Msg.Size, e.Msg.Created, len(e.Msg.Recipients), pending)
+		for _, rcpt := range e.Msg.Recipients {
+			fmt.Fprintf(os.Stderr, "  to=%s retry=%d status=%s next_due_ms=%d last_attempt_ms=%d\n",
+				rcpt.Address, rcpt.Retry, mail.RecipientStatus(rcpt), rcpt.NextDue, rcpt.LastAttempt)
+		}
+	}
+	return cli.ExitOK
+}
+
+type queueJSON struct {
+	ID         uint32          `json:"id"`
+	ReturnPath string          `json:"return_path"`
+	Size       uint64          `json:"size"`
+	Created    uint64          `json:"created"`
+	Recipients []queueRcptJSON `json:"recipients"`
+}
+
+type queueRcptJSON struct {
+	Address      string `json:"address"`
+	Retry        uint32 `json:"retry"`
+	Status       string `json:"status"`
+	NextDueMS    int64  `json:"next_due_ms"`
+	LastAttemptMS int64 `json:"last_attempt_ms"`
+}
+
+func queueEntryJSON(e mail.QueueEntry) queueJSON {
+	rcpts := make([]queueRcptJSON, len(e.Msg.Recipients))
+	for i, rcpt := range e.Msg.Recipients {
+		rcpts[i] = queueRcptJSON{
+			Address:       rcpt.Address,
+			Retry:         rcpt.Retry,
+			Status:        mail.RecipientStatus(rcpt),
+			NextDueMS:     rcpt.NextDue,
+			LastAttemptMS: rcpt.LastAttempt,
+		}
+	}
+	return queueJSON{
+		ID:         e.ID,
+		ReturnPath: e.Msg.ReturnPath,
+		Size:       e.Msg.Size,
+		Created:    e.Msg.Created,
+		Recipients: rcpts,
+	}
+}
+
+func queueUsage() {
+	fmt.Fprintln(os.Stderr, "usage:")
+	fmt.Fprintln(os.Stderr, "  beaver queue list [-config path] [--all] [--json]")
 }
 
 func runDomain(args []string) int {
@@ -476,6 +604,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  beaver seed [-config data/config.json]")
 	fmt.Fprintln(os.Stderr, "  beaver auth [-config path] email password")
 	fmt.Fprintln(os.Stderr, "  beaver send [-config path] -from addr -to addr message...")
+	fmt.Fprintln(os.Stderr, "  beaver queue list [-config path] [--all] [--json]")
 	fmt.Fprintln(os.Stderr, "  beaver domain add [-config path] <name>")
 	fmt.Fprintln(os.Stderr, "  beaver domain list [-config path] [--json]")
 	fmt.Fprintln(os.Stderr, "  beaver domain delete [-config path] <name>")
