@@ -42,15 +42,10 @@ func Send(ctx context.Context, addr, mailFrom, rcptTo string, data []byte) error
 	if err := cmd(conn, r, "DATA", 354); err != nil {
 		return err
 	}
-	if _, err := conn.Write(data); err != nil {
+	if err := writeDATABody(conn, data); err != nil {
 		return err
 	}
-	if !strings.HasSuffix(string(data), "\r\n") {
-		if _, err := conn.Write([]byte("\r\n")); err != nil {
-			return err
-		}
-	}
-	if err := cmd(conn, r, ".", 250); err != nil {
+	if err := expectCode(r, 250); err != nil {
 		return err
 	}
 	_ = cmd(conn, r, "QUIT", 221)

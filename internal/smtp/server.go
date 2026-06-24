@@ -16,6 +16,7 @@ import (
 type Options struct {
 	Certs       *tlsload.Certs
 	TLSRequired bool
+	DataLimits  DataLimits
 }
 
 // Server accepts inbound SMTP connections.
@@ -29,6 +30,7 @@ type Server struct {
 	queue               *mail.Queue
 	certs               *tlsload.Certs
 	tlsRequired         bool
+	dataLimits          DataLimits
 }
 
 // NewServer returns an SMTP server. submissionAddr is optional plain listener (e.g. :587).
@@ -44,6 +46,7 @@ func NewServer(log *slog.Logger, addr string, dir *directory.Local, inbox *mail.
 		queue:               queue,
 		certs:               opts.Certs,
 		tlsRequired:         opts.TLSRequired,
+		dataLimits:          opts.DataLimits.withDefaults(),
 	}
 }
 
@@ -131,7 +134,7 @@ func (s *Server) serve(ctx context.Context, slots []listenerSlot) error {
 
 func (s *Server) serveConn(ctx context.Context, conn net.Conn, secure, submission bool) {
 	defer conn.Close()
-	sess := newSession(s.log, conn, s.dir, s.inbox, s.queue, s.certs, secure, s.tlsRequired, submission)
+	sess := newSession(s.log, conn, s.dir, s.inbox, s.queue, s.certs, secure, s.tlsRequired, submission, s.dataLimits)
 	if err := sess.run(ctx); err != nil && ctx.Err() == nil {
 		s.log.Debug("smtp session", slog.Any("err", err))
 	}

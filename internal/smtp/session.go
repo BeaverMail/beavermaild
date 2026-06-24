@@ -3,7 +3,6 @@ package smtp
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -28,6 +27,7 @@ type session struct {
 	secure      bool
 	tlsRequired bool
 	submission  bool
+	dataLimits  DataLimits
 
 	principal directory.Principal
 
@@ -40,7 +40,7 @@ type rcptTarget struct {
 	accountID uint32 // 0 = outbound queue recipient
 }
 
-func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *mail.Inbox, queue *mail.Queue, certs *tlsload.Certs, secure, tlsRequired, submission bool) *session {
+func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *mail.Inbox, queue *mail.Queue, certs *tlsload.Certs, secure, tlsRequired, submission bool, limits DataLimits) *session {
 	return &session{
 		log:         log,
 		conn:        conn,
@@ -52,6 +52,7 @@ func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *ma
 		secure:      secure,
 		tlsRequired: tlsRequired,
 		submission:  submission,
+		dataLimits:  limits.withDefaults(),
 	}
 }
 
@@ -187,9 +188,14 @@ func (s *session) run(ctx context.Context) error {
 			if err := s.writef("354 start mail input; end with <CRLF>.<CRLF>"); err != nil {
 				return err
 			}
-			raw, err := readDATA(s.r)
+			raw, err := readDATA(s.r, s.dataLimits)
 			if err != nil {
-				return err
+				drainDATA(s.r)
+				if werr := s.writef(dataErrorResponse(err)); werr != nil {
+					return werr
+				}
+				s.reset()
+				continue
 			}
 			var remotes []string
 			for _, t := range s.rcpt {
@@ -404,25 +410,4 @@ func parsePath(arg string) (string, bool) {
 		return "", false
 	}
 	return strings.ToLower(strings.TrimSpace(arg[1 : len(arg)-1])), true
-}
-
-// readDATA reads RFC 5321 dot-stuffed message data.
-func readDATA(r *bufio.Reader) ([]byte, error) {
-	var buf bytes.Buffer
-	for {
-		line, err := r.ReadString('\n')
-		if err != nil {
-			return nil, err
-		}
-		line = strings.TrimRight(line, "\r\n")
-		if line == "." {
-			break
-		}
-		if strings.HasPrefix(line, "..") {
-			line = line[1:]
-		}
-		buf.WriteString(line)
-		buf.WriteByte('\n')
-	}
-	return buf.Bytes(), nil
 }

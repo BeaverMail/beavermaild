@@ -41,6 +41,7 @@ type SMTPConfig struct {
 	SubmissionListen    string `json:"submission_listen"`
 	SubmissionTLSListen string `json:"submission_tls_listen"`
 	Relay               string `json:"relay"`
+	MaxMessageBytes     int    `json:"max_message_bytes"`
 }
 
 // IMAPConfig holds IMAP listener settings.
@@ -155,6 +156,11 @@ func (c *Config) SMTPListen() string {
 // SMTPRelay returns the outbound SMTP relay (may be empty).
 func (c *Config) SMTPRelay() string {
 	return strings.TrimSpace(c.SMTP.Relay)
+}
+
+// SMTPMaxMessageBytes returns the inbound DATA size cap (0 lets smtp use its default).
+func (c *Config) SMTPMaxMessageBytes() int {
+	return c.SMTP.MaxMessageBytes
 }
 
 // IMAPListen returns the plain IMAP bind address.
