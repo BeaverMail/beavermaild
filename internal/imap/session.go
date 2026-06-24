@@ -551,6 +551,16 @@ func (s *session) resolveIndices(set seqSet, byUID bool) []int {
 }
 
 func (s *session) writeFetch(ctx context.Context, seq int, msg mail.Message, items fetchItems) error {
+	needRaw := items.body || items.envelope || items.headerFields != nil
+	var raw []byte
+	if needRaw {
+		var err error
+		raw, err = s.inbox.LoadRaw(ctx, msg.Meta)
+		if err != nil {
+			return err
+		}
+	}
+
 	var parts []string
 	if items.uid {
 		parts = append(parts, fmt.Sprintf("UID %d", msg.UID))
@@ -561,22 +571,47 @@ func (s *session) writeFetch(ctx context.Context, seq int, msg mail.Message, ite
 	if items.size {
 		parts = append(parts, fmt.Sprintf("RFC822.SIZE %d", msg.Meta.Size))
 	}
-	if items.body {
-		raw, err := s.inbox.LoadRaw(ctx, msg.Meta)
-		if err != nil {
+	if items.envelope {
+		parts = append(parts, "ENVELOPE "+formatEnvelope(raw))
+	}
+
+	hasLiteral := items.body || items.headerFields != nil
+	if !hasLiteral {
+		return s.untagged(fmt.Sprintf("%d FETCH (%s)", seq, strings.Join(parts, " ")))
+	}
+
+	if _, err := fmt.Fprintf(s.conn, "* %d FETCH (", seq); err != nil {
+		return err
+	}
+	if len(parts) > 0 {
+		if _, err := fmt.Fprintf(s.conn, "%s", strings.Join(parts, " ")); err != nil {
 			return err
 		}
-		parts = append(parts, fmt.Sprintf("BODY[] {%d}", len(raw)))
-		if err := s.untagged(fmt.Sprintf("%d FETCH (%s", seq, strings.Join(parts, " "))); err != nil {
+	}
+	sep := ""
+	if len(parts) > 0 {
+		sep = " "
+	}
+	if items.headerFields != nil {
+		hdr := extractHeaderFields(raw, items.headerFields)
+		if _, err := fmt.Fprintf(s.conn, "%s%s {%d}\r\n", sep, headerFieldsItemName(items.headerFields), len(hdr)); err != nil {
+			return err
+		}
+		if _, err := s.conn.Write(hdr); err != nil {
+			return err
+		}
+		sep = " "
+	}
+	if items.body {
+		if _, err := fmt.Fprintf(s.conn, "%sBODY[] {%d}\r\n", sep, len(raw)); err != nil {
 			return err
 		}
 		if _, err := s.conn.Write(raw); err != nil {
 			return err
 		}
-		_, err = fmt.Fprintf(s.conn, ")\r\n")
-		return err
 	}
-	return s.untagged(fmt.Sprintf("%d FETCH (%s)", seq, strings.Join(parts, " ")))
+	_, err := fmt.Fprintf(s.conn, ")\r\n")
+	return err
 }
 
 func formatSearch(nums []uint32) string {
@@ -717,7 +752,8 @@ func parseQuoted(s string) (val, rest string, ok bool) {
 }
 
 type fetchItems struct {
-	uid, flags, size, body bool
+	uid, flags, size, body, envelope bool
+	headerFields                    []string // non-nil when HEADER.FIELDS was requested
 }
 
 func parseFetchArg(arg string) (setStr string, items fetchItems, ok bool) {
@@ -741,7 +777,11 @@ func parseFetchItems(rest string) (fetchItems, bool) {
 	items.flags = strings.Contains(upper, "FLAGS")
 	items.size = strings.Contains(upper, "RFC822.SIZE")
 	items.body = wantsFullBody(upper)
-	if !items.uid && !items.flags && !items.size && !items.body {
+	items.envelope = strings.Contains(upper, "ENVELOPE")
+	if fields, ok := parseHeaderFieldsFetch(rest); ok {
+		items.headerFields = fields
+	}
+	if !items.uid && !items.flags && !items.size && !items.body && !items.envelope && items.headerFields == nil {
 		return items, false
 	}
 	return items, true
