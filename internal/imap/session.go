@@ -680,11 +680,18 @@ func parseFetchItems(rest string) (fetchItems, bool) {
 	items.uid = strings.Contains(upper, "UID")
 	items.flags = strings.Contains(upper, "FLAGS")
 	items.size = strings.Contains(upper, "RFC822.SIZE")
-	items.body = strings.Contains(upper, "BODY[]") || strings.Contains(upper, "RFC822")
+	items.body = wantsFullBody(upper)
 	if !items.uid && !items.flags && !items.size && !items.body {
 		return items, false
 	}
 	return items, true
+}
+
+func wantsFullBody(upper string) bool {
+	if strings.Contains(upper, "RFC822") && !strings.Contains(upper, "RFC822.SIZE") && !strings.Contains(upper, "RFC822.HEADER") {
+		return true
+	}
+	return strings.Contains(upper, "BODY[]") || strings.Contains(upper, "BODY.PEEK[]")
 }
 
 type storeMode int
