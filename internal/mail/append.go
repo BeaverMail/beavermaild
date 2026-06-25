@@ -13,7 +13,8 @@ import (
 const MaxAppendBytes = 32 << 20
 
 // Append stores raw bytes in mailboxID with optional IMAP flags.
-func (ib *Inbox) Append(ctx context.Context, accountID, mailboxID uint32, raw []byte, flags uint32) (uint32, error) {
+// receivedAt is Unix seconds for INTERNALDATE; when <= 0, uses the current time.
+func (ib *Inbox) Append(ctx context.Context, accountID, mailboxID uint32, raw []byte, flags uint32, receivedAt int64) (uint32, error) {
 	if len(raw) == 0 {
 		return 0, fmt.Errorf("mail: empty message")
 	}
@@ -39,10 +40,13 @@ func (ib *Inbox) Append(ctx context.Context, accountID, mailboxID uint32, raw []
 		return 0, err
 	}
 
+	if receivedAt <= 0 {
+		receivedAt = time.Now().Unix()
+	}
 	meta := storage.EmailMeta{
 		Version:    1,
 		MailboxID:  mailboxID,
-		ReceivedAt: time.Now().Unix(),
+		ReceivedAt: receivedAt,
 		Size:       uint32(len(raw)),
 		Flags:      flags | FlagRecent,
 		ModSeq:     modSeq,

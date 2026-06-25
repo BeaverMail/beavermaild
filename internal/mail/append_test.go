@@ -33,7 +33,8 @@ func TestAppendToDrafts(t *testing.T) {
 	}
 
 	raw := []byte("From: a@b\r\nSubject: draft\r\n\r\nbody\r\n")
-	id, err := inbox.Append(ctx, acc.ID, drafts.ID, raw, mail.FlagDraft)
+	wantDate := int64(1719313800) // 25-Jun-2024 10:30:00 UTC
+	id, err := inbox.Append(ctx, acc.ID, drafts.ID, raw, mail.FlagDraft, wantDate)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,5 +48,8 @@ func TestAppendToDrafts(t *testing.T) {
 	}
 	if msgs[0].Meta.Flags&mail.FlagDraft == 0 {
 		t.Fatalf("flags %#x", msgs[0].Meta.Flags)
+	}
+	if msgs[0].Meta.ReceivedAt != wantDate {
+		t.Fatalf("receivedAt %d want %d", msgs[0].Meta.ReceivedAt, wantDate)
 	}
 }
