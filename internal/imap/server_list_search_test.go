@@ -73,4 +73,13 @@ func TestIMAPListPatternAndSpecialUse(t *testing.T) {
 	send(t, conn, `l8 SEARCH SINCE 01-Jan-2020`)
 	expectPrefix(t, read, "* SEARCH 1")
 	expectPrefix(t, read, "l8 OK")
+	send(t, conn, `l9 SEARCH TEXT list`)
+	expectPrefix(t, read, "* SEARCH 1")
+	expectPrefix(t, read, "l9 OK")
+	send(t, conn, `l10 SEARCH BODY body`)
+	expectPrefix(t, read, "* SEARCH 1")
+	expectPrefix(t, read, "l10 OK")
+	send(t, conn, `l11 SEARCH LARGER 10`)
+	expectPrefix(t, read, "* SEARCH 1")
+	expectPrefix(t, read, "l11 OK")
 }

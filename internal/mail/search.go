@@ -4,7 +4,6 @@ package mail
 import (
 	"bytes"
 	"net/mail"
-	"strings"
 	"time"
 )
 
@@ -29,8 +28,14 @@ type SearchCriteria struct {
 
 	From    string
 	To      string
+	CC      string
+	BCC     string
 	Subject string
+	Text    string
+	Body    string
 	Headers []HeaderCriterion
+	Larger  *uint32 // RFC822 size strictly greater than this
+	Smaller *uint32 // RFC822 size strictly less than this
 	Since   *time.Time // inclusive, start of day UTC
 	Before  *time.Time // exclusive, start of day UTC
 	On      *time.Time // calendar day UTC
@@ -96,30 +101,55 @@ func matchSearchOne(m Message, c SearchCriteria, load RawLoader) bool {
 			return false
 		}
 	}
+	if c.Larger != nil && m.Meta.Size <= *c.Larger {
+		return false
+	}
+	if c.Smaller != nil && m.Meta.Size >= *c.Smaller {
+		return false
+	}
 	if c.Since != nil || c.Before != nil || c.On != nil {
 		if !matchSearchDate(m.Meta.ReceivedAt, c) {
 			return false
 		}
 	}
-	if needsHeaderSearch(c) {
+	if needsRawSearch(c) {
 		if load == nil {
 			return false
 		}
 		raw, err := load(m)
-		if err != nil || !matchSearchHeaders(raw, c) {
+		if err != nil {
+			return false
+		}
+		if c.Text != "" && !rawContains(raw, c.Text) {
+			return false
+		}
+		if c.Body != "" && !bodyContains(raw, c.Body) {
+			return false
+		}
+		if needsHeaderSearch(c) && !matchSearchHeaders(raw, c) {
 			return false
 		}
 	}
 	if c.All {
 		return true
 	}
+	return searchHasCriterion(c)
+}
+
+func searchHasCriterion(c SearchCriteria) bool {
 	return c.UIDSet || c.Seen != nil || c.Flagged != nil || c.Answered != nil ||
 		c.Deleted != nil || c.Draft != nil || c.Recent != nil ||
-		needsHeaderSearch(c) || c.Since != nil || c.Before != nil || c.On != nil
+		needsRawSearch(c) || c.Larger != nil || c.Smaller != nil ||
+		c.Since != nil || c.Before != nil || c.On != nil
+}
+
+func needsRawSearch(c SearchCriteria) bool {
+	return c.Text != "" || c.Body != "" || needsHeaderSearch(c)
 }
 
 func needsHeaderSearch(c SearchCriteria) bool {
-	return c.From != "" || c.To != "" || c.Subject != "" || len(c.Headers) > 0
+	return c.From != "" || c.To != "" || c.CC != "" || c.BCC != "" ||
+		c.Subject != "" || len(c.Headers) > 0
 }
 
 func matchSearchDate(receivedAt int64, c SearchCriteria) bool {
@@ -157,6 +187,12 @@ func matchSearchHeaders(raw []byte, c SearchCriteria) bool {
 	if c.To != "" && !headerContains(msg.Header.Get("To"), c.To) {
 		return false
 	}
+	if c.CC != "" && !headerContains(msg.Header.Get("Cc"), c.CC) {
+		return false
+	}
+	if c.BCC != "" && !headerContains(msg.Header.Get("Bcc"), c.BCC) {
+		return false
+	}
 	if c.Subject != "" && !headerContains(msg.Header.Get("Subject"), c.Subject) {
 		return false
 	}
@@ -169,7 +205,28 @@ func matchSearchHeaders(raw []byte, c SearchCriteria) bool {
 }
 
 func headerContains(haystack, needle string) bool {
-	return strings.Contains(strings.ToLower(haystack), strings.ToLower(needle))
+	return rawContains([]byte(haystack), needle)
+}
+
+// rawContains is case-insensitive substring search on RFC822 bytes or header text.
+func rawContains(raw []byte, needle string) bool {
+	return bytes.Contains(bytes.ToLower(raw), bytes.ToLower([]byte(needle)))
+}
+
+// bodyContains searches only the message body after the header/body separator.
+func bodyContains(raw []byte, needle string) bool {
+	_, body := splitHeaderBody(raw)
+	return rawContains(body, needle)
+}
+
+func splitHeaderBody(raw []byte) ([]byte, []byte) {
+	if i := bytes.Index(raw, []byte("\r\n\r\n")); i >= 0 {
+		return raw[:i], raw[i+4:]
+	}
+	if i := bytes.Index(raw, []byte("\n\n")); i >= 0 {
+		return raw[:i], raw[i+2:]
+	}
+	return raw, nil
 }
 
 // MatchSearchUID returns UIDs matching criteria (for UID SEARCH responses).

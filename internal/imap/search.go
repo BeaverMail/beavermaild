@@ -90,11 +90,57 @@ func parseSearchCriteria(arg string) (mail.SearchCriteria, bool) {
 			}
 			c.To = tokens[i+1]
 			i++
+		case "CC":
+			if i+1 >= len(tokens) {
+				return mail.SearchCriteria{}, false
+			}
+			c.CC = tokens[i+1]
+			i++
+		case "BCC":
+			if i+1 >= len(tokens) {
+				return mail.SearchCriteria{}, false
+			}
+			c.BCC = tokens[i+1]
+			i++
 		case "SUBJECT":
 			if i+1 >= len(tokens) {
 				return mail.SearchCriteria{}, false
 			}
 			c.Subject = tokens[i+1]
+			i++
+		case "TEXT":
+			if i+1 >= len(tokens) {
+				return mail.SearchCriteria{}, false
+			}
+			c.Text = tokens[i+1]
+			i++
+		case "BODY":
+			if i+1 >= len(tokens) {
+				return mail.SearchCriteria{}, false
+			}
+			c.Body = tokens[i+1]
+			i++
+		case "LARGER":
+			if i+1 >= len(tokens) {
+				return mail.SearchCriteria{}, false
+			}
+			n, err := strconv.ParseUint(tokens[i+1], 10, 32)
+			if err != nil {
+				return mail.SearchCriteria{}, false
+			}
+			v := uint32(n)
+			c.Larger = &v
+			i++
+		case "SMALLER":
+			if i+1 >= len(tokens) {
+				return mail.SearchCriteria{}, false
+			}
+			n, err := strconv.ParseUint(tokens[i+1], 10, 32)
+			if err != nil {
+				return mail.SearchCriteria{}, false
+			}
+			v := uint32(n)
+			c.Smaller = &v
 			i++
 		case "HEADER":
 			if i+2 >= len(tokens) {
@@ -141,7 +187,9 @@ func parseSearchCriteria(arg string) (mail.SearchCriteria, bool) {
 	}
 	if !c.All && c.Seen == nil && !c.UIDSet && c.Flagged == nil && c.Answered == nil &&
 		c.Deleted == nil && c.Draft == nil && c.Recent == nil &&
-		c.From == "" && c.To == "" && c.Subject == "" && len(c.Headers) == 0 &&
+		c.From == "" && c.To == "" && c.CC == "" && c.BCC == "" && c.Subject == "" &&
+		c.Text == "" && c.Body == "" && len(c.Headers) == 0 &&
+		c.Larger == nil && c.Smaller == nil &&
 		c.Since == nil && c.Before == nil && c.On == nil {
 		return mail.SearchCriteria{}, false
 	}
