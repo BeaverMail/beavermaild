@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"net"
 	"strings"
 	"time"
@@ -14,11 +15,12 @@ import (
 
 const clientTimeout = 30 * time.Second
 
-// ClientOptions configures optional STARTTLS and AUTH for outbound submission.
+// ClientOptions configures STARTTLS, AUTH, and MX opportunistic TLS for outbound Send.
 type ClientOptions struct {
-	STARTTLS bool
-	User     string
-	Password string
+	STARTTLS              bool // relay: upgrade when configured
+	OpportunisticSTARTTLS bool // MX: upgrade when EHLO offers STARTTLS
+	User                  string
+	Password              string
 }
 
 // Send submits one message to addr (relay or MX host:port).
@@ -48,18 +50,11 @@ func Send(ctx context.Context, addr, mailFrom, rcptTo string, data []byte, opts 
 	if err != nil {
 		return err
 	}
-	if opts.STARTTLS && caps.StartTLS {
-		if err := cmd(conn, r, "STARTTLS", 220); err != nil {
+	if wantSTARTTLS(opts) && caps.StartTLS {
+		conn, err = startTLS(conn, r, host)
+		if err != nil {
 			return err
 		}
-		tlsConn := tls.Client(conn, &tls.Config{
-			ServerName: host,
-			MinVersion: tls.VersionTLS12,
-		})
-		if err := tlsConn.Handshake(); err != nil {
-			return fmt.Errorf("smtp client starttls: %w", err)
-		}
-		conn = tlsConn
 		r = bufio.NewReader(conn)
 		caps, err = ehlo(conn, r, "localhost")
 		if err != nil {
@@ -99,6 +94,25 @@ func Send(ctx context.Context, addr, mailFrom, rcptTo string, data []byte, opts 
 	}
 	_ = cmd(conn, r, "QUIT", 221)
 	return nil
+}
+
+func wantSTARTTLS(opts ClientOptions) bool {
+	return opts.STARTTLS || opts.OpportunisticSTARTTLS
+}
+
+func startTLS(conn net.Conn, r *bufio.Reader, host string) (net.Conn, error) {
+	if err := cmd(conn, r, "STARTTLS", 220); err != nil {
+		return nil, err
+	}
+	tlsConn := tls.Client(conn, &tls.Config{
+		ServerName:         host,
+		MinVersion:         tls.VersionTLS12,
+		InsecureSkipVerify: true, // ponytail: relay/MX cert policy later
+	})
+	if err := tlsConn.Handshake(); err != nil {
+		return nil, fmt.Errorf("smtp client starttls: %w", err)
+	}
+	return tlsConn, nil
 }
 
 type clientCaps struct {
@@ -177,6 +191,9 @@ func cmd(conn net.Conn, r *bufio.Reader, line string, want int) error {
 func expectCode(r *bufio.Reader, want int) error {
 	line, err := r.ReadString('\n')
 	if err != nil {
+		if err == io.EOF {
+			return err
+		}
 		return err
 	}
 	if len(line) < 3 {

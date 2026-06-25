@@ -60,3 +60,18 @@ func TestACMECacheDirDefault(t *testing.T) {
 		t.Fatalf("cache %q want %q", got, want)
 	}
 }
+
+func TestSMTPRelayEnv(t *testing.T) {
+	cfg := config.Default(t.TempDir())
+	t.Setenv("BEAVER_SMTP_RELAY", "relay.test:587")
+	t.Setenv("BEAVER_SMTP_RELAY_USER", "u")
+	t.Setenv("BEAVER_SMTP_RELAY_PASSWORD", "p")
+	t.Setenv("BEAVER_SMTP_RELAY_STARTTLS", "true")
+	cfg.ApplyEnv()
+	if cfg.SMTPRelay() != "relay.test:587" {
+		t.Fatalf("relay %q", cfg.SMTPRelay())
+	}
+	if cfg.SMTPRelayUser() != "u" || cfg.SMTPRelayPassword() != "p" || !cfg.SMTPRelayStartTLS() {
+		t.Fatalf("relay opts user=%q pass=%q starttls=%v", cfg.SMTPRelayUser(), cfg.SMTPRelayPassword(), cfg.SMTPRelayStartTLS())
+	}
+}

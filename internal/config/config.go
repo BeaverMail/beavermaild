@@ -41,6 +41,9 @@ type SMTPConfig struct {
 	SubmissionListen    string `json:"submission_listen"`
 	SubmissionTLSListen string `json:"submission_tls_listen"`
 	Relay               string `json:"relay"`
+	RelayStartTLS       bool   `json:"relay_starttls"`
+	RelayUser           string `json:"relay_user"`
+	RelayPassword       string `json:"relay_password"`
 	MaxMessageBytes     int    `json:"max_message_bytes"`
 }
 
@@ -114,6 +117,15 @@ func (c *Config) ApplyEnv() {
 	if v := os.Getenv("BEAVER_SMTP_RELAY"); v != "" {
 		c.SMTP.Relay = v
 	}
+	if v := os.Getenv("BEAVER_SMTP_RELAY_USER"); v != "" {
+		c.SMTP.RelayUser = v
+	}
+	if v := os.Getenv("BEAVER_SMTP_RELAY_PASSWORD"); v != "" {
+		c.SMTP.RelayPassword = v
+	}
+	if v := os.Getenv("BEAVER_SMTP_RELAY_STARTTLS"); v == "1" || strings.EqualFold(v, "true") {
+		c.SMTP.RelayStartTLS = true
+	}
 	if v := os.Getenv("BEAVER_IMAP_LISTEN"); v != "" {
 		c.IMAP.Listen = v
 	}
@@ -156,6 +168,21 @@ func (c *Config) SMTPListen() string {
 // SMTPRelay returns the outbound SMTP relay (may be empty).
 func (c *Config) SMTPRelay() string {
 	return strings.TrimSpace(c.SMTP.Relay)
+}
+
+// SMTPRelayUser returns relay AUTH username (may be empty).
+func (c *Config) SMTPRelayUser() string {
+	return strings.TrimSpace(c.SMTP.RelayUser)
+}
+
+// SMTPRelayPassword returns relay AUTH password (may be empty).
+func (c *Config) SMTPRelayPassword() string {
+	return c.SMTP.RelayPassword
+}
+
+// SMTPRelayStartTLS reports whether outbound relay uses STARTTLS when offered.
+func (c *Config) SMTPRelayStartTLS() bool {
+	return c.SMTP.RelayStartTLS
 }
 
 // SMTPMaxMessageBytes returns the inbound DATA size cap (0 lets smtp use its default).

@@ -2,6 +2,7 @@ package mail_test
 
 import (
 	"context"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -320,5 +321,58 @@ func TestQueueEnqueueDSNPersist(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("entry missing")
+	}
+}
+
+func TestWorkerDNSPermanentFailDSN(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, "file:"+t.TempDir()+"/store.sqlite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	dir := directory.NewLocal(store)
+	acc, err := directory.SeedDev(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	blobs := blob.NewFS(t.TempDir() + "/blobs")
+	inbox := mail.NewInbox(store, blobs)
+	queue := mail.NewQueue(store, blobs)
+	raw := mail.BuildSimpleMessage("alice@localhost", "nobody@invalid.invalid", "dns fail")
+	env := mail.EnvelopeDSN{
+		ReturnPath: "alice@localhost",
+		Recipients: []mail.RcptDSN{{
+			Address: "nobody@invalid.invalid",
+			Notify:  mail.NotifyFailure,
+		}},
+	}
+	if _, err := queue.EnqueueDSN(ctx, env, raw); err != nil {
+		t.Fatal(err)
+	}
+
+	remote := stubRemote{err: smtp.WrapDNS(&net.DNSError{IsNotFound: true, Err: "no such host", Name: "invalid.invalid"})}
+	policy := mail.TestQueuePolicy()
+	policy.DelayNotifyAfter = 0
+	w := mail.NewWorker(log.New("error"), queue, inbox, dir, remote, policy)
+	w.ProcessOnce(ctx)
+
+	msgs, err := inbox.List(ctx, acc.ID, mail.InboxMailboxID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("inbox %d messages", len(msgs))
+	}
+	body, err := inbox.LoadRaw(ctx, msgs[0].Meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "Action: failed") {
+		t.Fatalf("body %q", body)
 	}
 }

@@ -20,7 +20,7 @@ func LookupHosts(ctx context.Context, domain string) ([]string, error) {
 	}
 	records, err := net.DefaultResolver.LookupMX(ctx, domain)
 	if err != nil {
-		return nil, err
+		return nil, WrapDNS(err)
 	}
 	if len(records) == 0 {
 		return []string{net.JoinHostPort(domain, smtpPort)}, nil
