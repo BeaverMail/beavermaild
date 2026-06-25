@@ -28,6 +28,8 @@ type session struct {
 	secure      bool
 	tlsRequired bool
 
+	condstore bool
+
 	principal directory.Principal
 	selected  bool
 	readOnly  bool
@@ -135,6 +137,10 @@ func (s *session) run(ctx context.Context) error {
 			if err := s.cmdNamespace(tag); err != nil {
 				return err
 			}
+		case "ENABLE":
+			if err := s.cmdEnable(tag, arg); err != nil {
+				return err
+			}
 		case "COPY":
 			if err := s.cmdCopy(ctx, tag, arg, false); err != nil {
 				return err
@@ -232,7 +238,7 @@ func (s *session) capabilityLine() string {
 		caps = append(caps, "LOGINDISABLED")
 	}
 	if s.principal.AccountID != 0 {
-		caps = append(caps, "IDLE", "NAMESPACE", "UIDPLUS", "UNSELECT", "SPECIAL-USE")
+		caps = append(caps, "IDLE", "NAMESPACE", "UIDPLUS", "UNSELECT", "SPECIAL-USE", "CONDSTORE")
 	}
 	return "CAPABILITY " + strings.Join(caps, " ")
 }
@@ -249,6 +255,7 @@ func (s *session) finishAuth(ctx context.Context, tag, user, pass, resp string) 
 	s.principal = p
 	s.selected = false
 	s.messages = nil
+	s.condstore = true
 	return s.tagged(tag, resp)
 }
 
@@ -357,6 +364,11 @@ func (s *session) openMailbox(ctx context.Context, tag, name string, examine boo
 	if err != nil {
 		return err
 	}
+	highest, err := s.inbox.HighestModSeq(ctx, s.principal.AccountID, mbox.ID)
+	if err != nil {
+		return err
+	}
+	mbox.HighestModSeq = highest
 	s.messages = msgs
 	s.mbox = mbox
 	s.selected = true
@@ -370,7 +382,12 @@ func (s *session) openMailbox(ctx context.Context, tag, name string, examine boo
 	if err := s.untagged(fmt.Sprintf("%d RECENT", recent)); err != nil {
 		return err
 	}
-	if err := s.untagged(fmt.Sprintf("OK [UIDVALIDITY %d] [PERMANENTFLAGS %s]", mbox.UIDValidity, mail.IMAPPermanentFlags)); err != nil {
+	okLine := fmt.Sprintf("OK [UIDVALIDITY %d] [PERMANENTFLAGS %s]", mbox.UIDValidity, mail.IMAPPermanentFlags)
+	if s.condstore {
+		okLine = fmt.Sprintf("OK [UIDVALIDITY %d] [HIGHESTMODSEQ %d] [PERMANENTFLAGS %s]",
+			mbox.UIDValidity, mbox.HighestModSeq, mail.IMAPPermanentFlags)
+	}
+	if err := s.untagged(okLine); err != nil {
 		return err
 	}
 	if examine {
@@ -407,7 +424,7 @@ func (s *session) cmdStore(ctx context.Context, tag, arg string, byUID bool) err
 	if s.readOnly {
 		return s.tagged(tag, "NO mailbox is read-only")
 	}
-	setStr, mode, set, clear, ok := parseStoreArg(arg)
+	setStr, mode, set, clear, unchangedSince, hasUnchanged, ok := parseStoreArg(arg)
 	if !ok {
 		return s.tagged(tag, "BAD STORE syntax")
 	}
@@ -416,21 +433,35 @@ func (s *session) cmdStore(ctx context.Context, tag, arg string, byUID bool) err
 		return s.tagged(tag, "BAD STORE syntax")
 	}
 	indices := s.resolveIndices(setParsed, byUID)
+	var modified bool
 	for _, idx := range indices {
 		msg := s.messages[idx]
-		if err := s.inbox.SetFlags(ctx, s.principal.AccountID, msg.UID, set, clear); err != nil {
-			return err
+		var unchanged uint64
+		if hasUnchanged {
+			unchanged = unchangedSince
 		}
-		meta, err := s.inbox.GetMeta(ctx, s.principal.AccountID, msg.UID)
+		applied, meta, err := s.inbox.SetFlagsIfUnchanged(ctx, s.principal.AccountID, msg.UID, set, clear, unchanged)
 		if err != nil {
 			return err
 		}
+		if !applied {
+			modified = true
+			continue
+		}
 		s.messages[idx].Meta = meta
 		if mode != storeSilent {
-			if err := s.untagged(fmt.Sprintf("%d FETCH (FLAGS %s)", idx+1, mail.FormatIMAPFlags(meta.Flags))); err != nil {
+			line := fmt.Sprintf("%d FETCH (FLAGS %s", idx+1, mail.FormatIMAPFlags(meta.Flags))
+			if s.condstore && meta.ModSeq > 0 {
+				line += " " + formatModSeq(meta.ModSeq)
+			}
+			line += ")"
+			if err := s.untagged(line); err != nil {
 				return err
 			}
 		}
+	}
+	if modified {
+		return s.tagged(tag, "OK STORE completed (MODIFIED)")
 	}
 	return s.tagged(tag, "OK STORE completed")
 }
@@ -676,6 +707,9 @@ func (s *session) writeFetch(ctx context.Context, seq int, msg mail.Message, ite
 	if items.internalDate {
 		parts = append(parts, "INTERNALDATE "+formatInternalDate(msg.Meta.ReceivedAt))
 	}
+	if items.modseq && msg.Meta.ModSeq > 0 {
+		parts = append(parts, formatModSeq(msg.Meta.ModSeq))
+	}
 
 	hasLiteral := items.body || items.headerFields != nil
 	if !hasLiteral {
@@ -854,8 +888,8 @@ func parseQuoted(s string) (val, rest string, ok bool) {
 }
 
 type fetchItems struct {
-	uid, flags, size, body, envelope, bodystructure, internalDate bool
-	headerFields                                               []string // non-nil when HEADER.FIELDS was requested
+	uid, flags, size, body, envelope, bodystructure, internalDate, modseq bool
+	headerFields                                                     []string // non-nil when HEADER.FIELDS was requested
 }
 
 func parseFetchArg(arg string) (setStr string, items fetchItems, ok bool) {
@@ -882,11 +916,12 @@ func parseFetchItems(rest string) (fetchItems, bool) {
 	items.envelope = strings.Contains(upper, "ENVELOPE")
 	items.bodystructure = strings.Contains(upper, "BODYSTRUCTURE")
 	items.internalDate = strings.Contains(upper, "INTERNALDATE")
+	items.modseq = strings.Contains(upper, "MODSEQ")
 	if fields, ok := parseHeaderFieldsFetch(rest); ok {
 		items.headerFields = fields
 	}
 	if !items.uid && !items.flags && !items.size && !items.body && !items.envelope &&
-		!items.bodystructure && !items.internalDate && items.headerFields == nil {
+		!items.bodystructure && !items.internalDate && !items.modseq && items.headerFields == nil {
 		return items, false
 	}
 	return items, true
@@ -907,15 +942,35 @@ const (
 	storeRemove
 )
 
-func parseStoreArg(arg string) (setStr string, mode storeMode, set, clear uint32, ok bool) {
+func parseStoreArg(arg string) (setStr string, mode storeMode, set, clear uint32, unchangedSince uint64, hasUnchanged bool, ok bool) {
 	arg = strings.TrimSpace(arg)
 	i := strings.IndexByte(arg, ' ')
 	if i < 0 {
-		return "", storeSilent, 0, 0, false
+		return "", storeSilent, 0, 0, 0, false, false
 	}
 	setStr = strings.TrimSpace(arg[:i])
-	mode, set, clear, ok = parseStoreFlags(strings.TrimSpace(arg[i+1:]))
-	return setStr, mode, set, clear, ok
+	rest := strings.TrimSpace(arg[i+1:])
+	for {
+		changed := false
+		if us, rem, okUS := parseUnchangedSince(rest); okUS {
+			unchangedSince, hasUnchanged = us, true
+			rest = rem
+			changed = true
+		}
+		if us, rem, okUS := parseTrailingUnchangedSince(rest); okUS {
+			unchangedSince, hasUnchanged = us, true
+			rest = rem
+			changed = true
+		}
+		if !changed {
+			break
+		}
+	}
+	mode, set, clear, ok = parseStoreFlags(rest)
+	if !ok {
+		return setStr, storeSilent, 0, 0, 0, false, false
+	}
+	return setStr, mode, set, clear, unchangedSince, hasUnchanged, true
 }
 
 func parseStoreFlags(rest string) (mode storeMode, set, clear uint32, ok bool) {

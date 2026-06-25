@@ -35,6 +35,11 @@ func (ib *Inbox) MoveMessages(ctx context.Context, accountID uint32, emailIDs []
 		}
 		meta.MailboxID = destMailboxID
 		meta.Flags &^= FlagRecent
+		modSeq, err := ib.allocateModSeq(ctx, accountID, destMailboxID)
+		if err != nil {
+			return err
+		}
+		meta.ModSeq = modSeq
 		wire, err := storage.MarshalPersist(nil, 1, meta)
 		if err != nil {
 			return err
@@ -68,6 +73,11 @@ func (ib *Inbox) CopyMessages(ctx context.Context, accountID uint32, emailIDs []
 		}
 		meta.MailboxID = destMailboxID
 		meta.Flags &^= FlagRecent
+		modSeq, err := ib.allocateModSeq(ctx, accountID, destMailboxID)
+		if err != nil {
+			return nil, err
+		}
+		meta.ModSeq = modSeq
 		wire, err := storage.MarshalPersist(nil, 1, meta)
 		if err != nil {
 			return nil, err

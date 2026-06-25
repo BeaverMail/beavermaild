@@ -20,9 +20,10 @@ const (
 
 // Mailbox is one IMAP-selectable folder for an account.
 type Mailbox struct {
-	ID          uint32
-	Name        string
-	UIDValidity uint32
+	ID            uint32
+	Name          string
+	UIDValidity   uint32
+	HighestModSeq uint64
 }
 
 var defaultMailboxDefs = []struct {
@@ -47,7 +48,7 @@ func (ib *Inbox) ListMailboxes(ctx context.Context, accountID uint32) ([]Mailbox
 	}
 	out := make([]Mailbox, len(records))
 	for i, m := range records {
-		out[i] = Mailbox{ID: m.ID, Name: m.Name, UIDValidity: m.UIDValidity}
+		out[i] = Mailbox{ID: m.ID, Name: m.Name, UIDValidity: m.UIDValidity, HighestModSeq: m.HighestModSeq}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out, nil
@@ -69,7 +70,7 @@ func (ib *Inbox) ResolveMailbox(ctx context.Context, accountID uint32, imapName 
 	upper := strings.ToUpper(imapName)
 	for _, m := range records {
 		if strings.ToUpper(m.Name) == upper {
-			return Mailbox{ID: m.ID, Name: m.Name, UIDValidity: m.UIDValidity}, nil
+			return Mailbox{ID: m.ID, Name: m.Name, UIDValidity: m.UIDValidity, HighestModSeq: m.HighestModSeq}, nil
 		}
 	}
 	return Mailbox{}, storage.ErrNotFound

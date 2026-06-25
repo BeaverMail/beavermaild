@@ -27,8 +27,9 @@ type Mailbox struct {
 	ID          uint32 `msgpack:"id"`
 	Name        string `msgpack:"n"`
 	Role        string `msgpack:"r,omitempty"`
-	UIDNext     uint32 `msgpack:"un"`
-	UIDValidity uint32 `msgpack:"uv"`
+	UIDNext       uint32 `msgpack:"un"`
+	UIDValidity   uint32 `msgpack:"uv"`
+	HighestModSeq uint64 `msgpack:"hm,omitempty"`
 }
 
 // EmailMeta is persisted mail metadata; raw body is inline KV or blob fs (BlobHash).
@@ -39,6 +40,7 @@ type EmailMeta struct {
 	ReceivedAt int64    `msgpack:"rcv"`
 	Size       uint32   `msgpack:"sz"`
 	Flags      uint32   `msgpack:"fl"`
+	ModSeq     uint64   `msgpack:"ms,omitempty"`
 	BlobHash   [32]byte `msgpack:"bh,omitempty"`
 }
 

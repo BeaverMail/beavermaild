@@ -38,12 +38,18 @@ func (ib *Inbox) Deliver(ctx context.Context, accountID uint32, raw []byte) (uin
 		return 0, err
 	}
 
+	modSeq, err := ib.allocateModSeq(ctx, accountID, InboxMailboxID)
+	if err != nil {
+		return 0, err
+	}
+
 	meta := storage.EmailMeta{
 		Version:    1,
 		MailboxID:  InboxMailboxID,
 		ReceivedAt: time.Now().Unix(),
 		Size:       uint32(len(raw)),
 		Flags:      FlagRecent,
+		ModSeq:     modSeq,
 		BlobHash:   hash,
 	}
 	wire, err := storage.MarshalPersist(nil, 1, meta)

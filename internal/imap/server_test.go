@@ -93,7 +93,10 @@ func TestIMAPFetchInbox(t *testing.T) {
 	expectPrefix(t, read, ")")
 	expectPrefix(t, read, "a4 OK")
 	send(t, conn, "a5 STORE 1 +FLAGS (\\Seen)")
-	expectPrefix(t, read, "* 1 FETCH (FLAGS (\\Seen))")
+	line, err = read.ReadString('\n')
+	if err != nil || !strings.Contains(line, `FLAGS (\Seen)`) {
+		t.Fatalf("store response %q err %v", line, err)
+	}
 	expectPrefix(t, read, "a5 OK")
 	send(t, conn, "a6 FETCH 1 (FLAGS)")
 	expectPrefix(t, read, "* 1 FETCH (FLAGS (\\Seen))")
@@ -268,7 +271,10 @@ func TestIMAPExpungeDeleted(t *testing.T) {
 	expectPrefix(t, read, "* OK [UIDVALIDITY")
 	expectPrefix(t, read, "b2 OK")
 	send(t, conn, "b3 STORE 1 +FLAGS (\\Deleted)")
-	expectPrefix(t, read, "* 1 FETCH (FLAGS (\\Deleted))")
+	line, err := read.ReadString('\n')
+	if err != nil || !strings.Contains(line, `FLAGS (\Deleted)`) {
+		t.Fatalf("store response %q err %v", line, err)
+	}
 	expectPrefix(t, read, "b3 OK")
 	send(t, conn, "b4 EXPUNGE")
 	expectPrefix(t, read, "* 1 EXPUNGE")

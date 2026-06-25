@@ -53,28 +53,10 @@ func (ib *Inbox) LoadRaw(ctx context.Context, meta storage.EmailMeta) ([]byte, e
 	return ib.blobs.Get(ctx, meta.BlobHash)
 }
 
-// SetFlags updates persisted flag bits for one message (set OR clear).
+// SetFlags updates persisted flag bits for one message (set OR clear) and bumps MODSEQ when flags change.
 func (ib *Inbox) SetFlags(ctx context.Context, accountID, emailID uint32, set, clear uint32) error {
-	key := storage.AppendKey(nil, storage.SubspaceMail, accountID, emailID, byte(storage.CollectionEmail), nil)
-	wire, err := ib.store.Get(ctx, key)
-	if err != nil {
-		return err
-	}
-	var meta storage.EmailMeta
-	if err := storage.UnmarshalPersist(wire, &meta); err != nil {
-		return err
-	}
-	meta.Flags = (meta.Flags & ^clear) | set
-	wire, err = storage.MarshalPersist(nil, 1, meta)
-	if err != nil {
-		return err
-	}
-	batch := storage.NewBatch().WithAccount(accountID)
-	suffix := storage.DocumentSuffix(storage.CollectionEmail, emailID, nil)
-	if err := batch.Set(storage.SubspaceMail, suffix, wire); err != nil {
-		return err
-	}
-	return ib.store.Commit(ctx, batch)
+	_, _, err := ib.SetFlagsIfUnchanged(ctx, accountID, emailID, set, clear, 0)
+	return err
 }
 
 // ClearRecentFlags clears \Recent on all messages in mailboxID and returns how many were recent.
@@ -92,6 +74,11 @@ func (ib *Inbox) ClearRecentFlags(ctx context.Context, accountID, mailboxID uint
 		recent++
 		meta := m.Meta
 		meta.Flags &^= FlagRecent
+		modSeq, err := ib.allocateModSeq(ctx, accountID, mailboxID)
+		if err != nil {
+			return 0, err
+		}
+		meta.ModSeq = modSeq
 		wire, err := storage.MarshalPersist(nil, 1, meta)
 		if err != nil {
 			return 0, err
