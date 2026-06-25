@@ -45,4 +45,8 @@ func TestParseStatusArg(t *testing.T) {
 	if !ok || name != "INBOX" || len(fields) != 2 {
 		t.Fatalf("parse %q %v %v", name, fields, ok)
 	}
+	_, fields, ok = parseStatusArg(`"Sent" (UIDNEXT MESSAGES UNSEEN RECENT)`)
+	if !ok || len(fields) != 4 {
+		t.Fatalf("recent fields %v ok=%v", fields, ok)
+	}
 }

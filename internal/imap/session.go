@@ -244,6 +244,10 @@ func (s *session) run(ctx context.Context) error {
 				if err := s.cmdMove(ctx, tag, rest, true); err != nil {
 					return err
 				}
+			case "EXPUNGE":
+				if err := s.cmdUIDExpunge(ctx, tag, rest); err != nil {
+					return err
+				}
 			default:
 				if err := s.tagged(tag, "BAD command not supported"); err != nil {
 					return err
@@ -523,37 +527,6 @@ func (s *session) cmdStore(ctx context.Context, tag, arg string, byUID bool) err
 		return s.tagged(tag, "OK STORE completed (MODIFIED)")
 	}
 	return s.tagged(tag, "OK STORE completed")
-}
-
-// cmdExpunge permanently removes messages marked \Deleted in the selected mailbox.
-func (s *session) cmdExpunge(ctx context.Context, tag string) error {
-	if !s.selected {
-		return s.tagged(tag, "NO not selected")
-	}
-	if s.readOnly {
-		return s.tagged(tag, "NO mailbox is read-only")
-	}
-	for {
-		var found bool
-		for i, m := range s.messages {
-			if m.Meta.Flags&mail.FlagDeleted == 0 {
-				continue
-			}
-			if err := s.inbox.DeleteMessage(ctx, s.principal.AccountID, m.UID); err != nil {
-				return err
-			}
-			if err := s.untagged(fmt.Sprintf("%d EXPUNGE", i+1)); err != nil {
-				return err
-			}
-			s.messages = append(s.messages[:i], s.messages[i+1:]...)
-			found = true
-			break
-		}
-		if !found {
-			break
-		}
-	}
-	return s.tagged(tag, "OK EXPUNGE completed")
 }
 
 func (s *session) cmdSearch(ctx context.Context, tag, arg string, byUID bool) error {
@@ -1130,7 +1103,7 @@ func parseStatusArg(arg string) (name string, fields []string, ok bool) {
 	}
 	for _, f := range strings.Fields(strings.ToUpper(inner)) {
 		switch f {
-		case "MESSAGES", "UNSEEN", "UIDNEXT", "UIDVALIDITY":
+		case "MESSAGES", "RECENT", "UNSEEN", "UIDNEXT", "UIDVALIDITY":
 			fields = append(fields, f)
 		default:
 			return "", nil, false
@@ -1148,6 +1121,8 @@ func formatStatus(name string, fields []string, st mail.MailboxStatus) string {
 		switch f {
 		case "MESSAGES":
 			parts = append(parts, fmt.Sprintf("MESSAGES %d", st.Messages))
+		case "RECENT":
+			parts = append(parts, fmt.Sprintf("RECENT %d", st.Recent))
 		case "UNSEEN":
 			parts = append(parts, fmt.Sprintf("UNSEEN %d", st.Unseen))
 		case "UIDNEXT":

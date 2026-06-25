@@ -109,6 +109,7 @@ func (ib *Inbox) mailboxRecord(ctx context.Context, accountID, mailboxID uint32)
 // MailboxStatus holds IMAP STATUS counters for one folder.
 type MailboxStatus struct {
 	Messages    uint32
+	Recent      uint32
 	Unseen      uint32
 	UIDNext     uint32
 	UIDValidity uint32
@@ -124,9 +125,12 @@ func (ib *Inbox) Status(ctx context.Context, accountID, mailboxID uint32) (Mailb
 	if err != nil {
 		return MailboxStatus{}, err
 	}
-	var unseen uint32
+	var unseen, recent uint32
 	var uidNext uint32 = 1
 	for _, m := range msgs {
+		if m.Meta.Flags&FlagRecent != 0 {
+			recent++
+		}
 		if m.Meta.Flags&FlagSeen == 0 {
 			unseen++
 		}
@@ -136,6 +140,7 @@ func (ib *Inbox) Status(ctx context.Context, accountID, mailboxID uint32) (Mailb
 	}
 	return MailboxStatus{
 		Messages:    uint32(len(msgs)),
+		Recent:      recent,
 		Unseen:      unseen,
 		UIDNext:     uidNext,
 		UIDValidity: mbox.UIDValidity,
