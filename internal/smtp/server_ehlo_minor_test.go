@@ -17,7 +17,7 @@ import (
 	"github.com/BeaverMail/beaver/internal/storage/sqlite"
 )
 
-func TestSMTPEHLOSlice6Extensions(t *testing.T) {
+func TestSMTPEHLOMinorExtensions(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -115,7 +115,7 @@ func TestSMTPVRFYDisabledByDefault(t *testing.T) {
 	read := bufio.NewReader(conn)
 	expect(t, read, "220")
 	send(t, conn, "EHLO test")
-	skipEHLOSlice6(t, read)
+	skipEHLO(t, read)
 	send(t, conn, "VRFY alice@localhost")
 	expect(t, read, "252")
 }
@@ -211,7 +211,7 @@ func TestSMTPRejectFutureReleaseHold(t *testing.T) {
 	read := bufio.NewReader(conn)
 	expect(t, read, "220")
 	send(t, conn, "EHLO test")
-	skipEHLOSlice6(t, read)
+	skipEHLO(t, read)
 	send(t, conn, "MAIL FROM:<sender@example.com> HOLD=20260101000000")
 	expect(t, read, "555 5.5.4")
 }
@@ -259,7 +259,7 @@ func TestSMTPRejectDeliverBy(t *testing.T) {
 	read := bufio.NewReader(conn)
 	expect(t, read, "220")
 	send(t, conn, "EHLO test")
-	skipEHLOSlice6(t, read)
+	skipEHLO(t, read)
 	send(t, conn, "AUTH PLAIN "+plainCred("alice@localhost", directory.SeedPassword()))
 	expect(t, read, "235")
 	send(t, conn, "MAIL FROM:<alice@localhost>")
@@ -311,7 +311,7 @@ func TestSMTPBody8BitMIMEQueued(t *testing.T) {
 	read := bufio.NewReader(conn)
 	expect(t, read, "220")
 	send(t, conn, "EHLO test")
-	skipEHLOSlice6(t, read)
+	skipEHLO(t, read)
 	send(t, conn, "AUTH PLAIN "+plainCred("alice@localhost", directory.SeedPassword()))
 	expect(t, read, "235")
 	send(t, conn, "MAIL FROM:<alice@localhost> BODY=8BITMIME")
@@ -332,18 +332,5 @@ func TestSMTPBody8BitMIMEQueued(t *testing.T) {
 	}
 	if len(all) != 1 || all[0].Msg.Body != "8BITMIME" {
 		t.Fatalf("queue body %q entries %d", all[0].Msg.Body, len(all))
-	}
-}
-
-func skipEHLOSlice6(t *testing.T, read *bufio.Reader) {
-	t.Helper()
-	for {
-		line, err := read.ReadString('\n')
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(line) >= 7 && line[:7] == "250 2.0" {
-			return
-		}
 	}
 }
