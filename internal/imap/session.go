@@ -480,7 +480,7 @@ func (s *session) cmdStore(ctx context.Context, tag, arg string, byUID bool) err
 	if s.readOnly {
 		return s.tagged(tag, "NO mailbox is read-only")
 	}
-	setStr, mode, set, clear, kwAdd, kwRemove, unchangedSince, hasUnchanged, ok := parseStoreArg(arg)
+	setStr, mode, set, clear, kwAdd, kwRemove, silent, unchangedSince, hasUnchanged, ok := parseStoreArg(arg)
 	if !ok {
 		return s.tagged(tag, "BAD STORE syntax")
 	}
@@ -505,7 +505,7 @@ func (s *session) cmdStore(ctx context.Context, tag, arg string, byUID bool) err
 			continue
 		}
 		s.messages[idx].Meta = meta
-		if mode != storeSilent {
+		if !silent && mode != storeSilent {
 			line := fmt.Sprintf("%d FETCH (FLAGS %s", idx+1, mail.FormatMessageFlags(meta))
 			if byUID {
 				line = fmt.Sprintf("%d FETCH (UID %d FLAGS %s", idx+1, msg.UID, mail.FormatMessageFlags(meta))
@@ -983,11 +983,11 @@ const (
 	storeRemove
 )
 
-func parseStoreArg(arg string) (setStr string, mode storeMode, set, clear uint32, kwAdd, kwRemove []string, unchangedSince uint64, hasUnchanged bool, ok bool) {
+func parseStoreArg(arg string) (setStr string, mode storeMode, set, clear uint32, kwAdd, kwRemove []string, silent bool, unchangedSince uint64, hasUnchanged bool, ok bool) {
 	arg = strings.TrimSpace(arg)
 	i := strings.IndexByte(arg, ' ')
 	if i < 0 {
-		return "", storeSilent, 0, 0, nil, nil, 0, false, false
+		return "", storeSilent, 0, 0, nil, nil, false, 0, false, false
 	}
 	setStr = strings.TrimSpace(arg[:i])
 	rest := strings.TrimSpace(arg[i+1:])
@@ -1007,40 +1007,43 @@ func parseStoreArg(arg string) (setStr string, mode storeMode, set, clear uint32
 			break
 		}
 	}
-	mode, set, clear, kwAdd, kwRemove, ok = parseStoreFlags(rest)
+	mode, set, clear, kwAdd, kwRemove, silent, ok = parseStoreFlags(rest)
 	if !ok {
-		return setStr, storeSilent, 0, 0, nil, nil, 0, false, false
+		return setStr, storeSilent, 0, 0, nil, nil, false, 0, false, false
 	}
-	return setStr, mode, set, clear, kwAdd, kwRemove, unchangedSince, hasUnchanged, true
+	return setStr, mode, set, clear, kwAdd, kwRemove, silent, unchangedSince, hasUnchanged, true
 }
 
-func parseStoreFlags(rest string) (mode storeMode, set, clear uint32, kwAdd, kwRemove []string, ok bool) {
+func parseStoreFlags(rest string) (mode storeMode, set, clear uint32, kwAdd, kwRemove []string, silent bool, ok bool) {
 	upper := strings.ToUpper(rest)
 	switch {
 	case strings.HasPrefix(upper, "+FLAGS.SILENT"):
 		mode = storeAdd
+		silent = true
 		rest = strings.TrimSpace(rest[len("+FLAGS.SILENT"):])
 	case strings.HasPrefix(upper, "+FLAGS"):
 		mode = storeAdd
 		rest = strings.TrimSpace(rest[len("+FLAGS"):])
 	case strings.HasPrefix(upper, "-FLAGS.SILENT"):
 		mode = storeRemove
+		silent = true
 		rest = strings.TrimSpace(rest[len("-FLAGS.SILENT"):])
 	case strings.HasPrefix(upper, "-FLAGS"):
 		mode = storeRemove
 		rest = strings.TrimSpace(rest[len("-FLAGS"):])
 	case strings.HasPrefix(upper, "FLAGS.SILENT"):
 		mode = storeSilent
+		silent = true
 		rest = strings.TrimSpace(rest[len("FLAGS.SILENT"):])
 	case strings.HasPrefix(upper, "FLAGS"):
 		mode = storeSilent
 		rest = strings.TrimSpace(rest[len("FLAGS"):])
 	default:
-		return storeSilent, 0, 0, nil, nil, false
+		return storeSilent, 0, 0, nil, nil, false, false
 	}
 	bits, kws, ok := parseIMAPFlagList(rest)
 	if !ok {
-		return storeSilent, 0, 0, nil, nil, false
+		return storeSilent, 0, 0, nil, nil, false, false
 	}
 	switch mode {
 	case storeAdd:
@@ -1053,7 +1056,7 @@ func parseStoreFlags(rest string) (mode storeMode, set, clear uint32, kwAdd, kwR
 		set = bits
 		clear = ^uint32(0) &^ bits
 	}
-	return mode, set, clear, kwAdd, kwRemove, true
+	return mode, set, clear, kwAdd, kwRemove, silent, true
 }
 
 // parseIMAPFlagList parses an IMAP flag list into system flag bits and custom keywords.

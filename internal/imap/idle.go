@@ -23,7 +23,6 @@ func (s *session) cmdIdle(ctx context.Context, tag string) error {
 	if _, err := fmt.Fprintf(s.conn, "+ idling\r\n"); err != nil {
 		return err
 	}
-	lastCount := len(s.messages)
 	defer func() { _ = s.conn.SetReadDeadline(time.Time{}) }()
 
 	for {
@@ -39,16 +38,8 @@ func (s *session) cmdIdle(ctx context.Context, tag string) error {
 		if !errors.As(err, &netErr) || !netErr.Timeout() {
 			return err
 		}
-		msgs, err := s.inbox.List(ctx, s.principal.AccountID, s.mbox.ID)
-		if err != nil {
+		if err := s.pushIdleMailboxChanges(ctx); err != nil {
 			return err
-		}
-		if len(msgs) != lastCount {
-			if err := s.untagged(fmt.Sprintf("%d EXISTS", len(msgs))); err != nil {
-				return err
-			}
-			s.messages = msgs
-			lastCount = len(msgs)
 		}
 	}
 }
