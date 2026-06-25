@@ -622,20 +622,3 @@ func parseCommand(line string) (cmd, arg string) {
 	}
 	return strings.ToUpper(line), ""
 }
-
-func parsePath(arg string) (string, bool) {
-	arg = strings.TrimSpace(strings.ToUpper(arg))
-	if !strings.HasPrefix(arg, "FROM:") && !strings.HasPrefix(arg, "TO:") {
-		// arg is already stripped of FROM:/TO: in caller - MAIL/RCPT pass full "FROM:<>"
-	}
-	arg = strings.TrimSpace(arg)
-	if len(arg) >= 5 && strings.EqualFold(arg[:5], "FROM:") {
-		arg = strings.TrimSpace(arg[5:])
-	} else if len(arg) >= 3 && strings.EqualFold(arg[:3], "TO:") {
-		arg = strings.TrimSpace(arg[3:])
-	}
-	if len(arg) < 3 || arg[0] != '<' || arg[len(arg)-1] != '>' {
-		return "", false
-	}
-	return normalizeEnvelopeAddress(strings.TrimSpace(arg[1 : len(arg)-1])), true
-}
