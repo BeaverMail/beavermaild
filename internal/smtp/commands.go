@@ -21,7 +21,7 @@ func (s *session) cmdHelp(arg string) error {
 // cmdVrfy is disabled by default (RFC 5321 security guidance).
 func (s *session) cmdVrfy(arg string) error {
 	if arg == "" {
-		return s.writef("501 5.5.4 Syntax: VRFY <address>")
+		return s.writef(replySyntaxVRFY)
 	}
 	return s.writef("252 2.5.1 VRFY is disabled")
 }

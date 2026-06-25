@@ -123,7 +123,7 @@ func writeDATABody(w io.Writer, data []byte) error {
 func dataErrorResponse(err error) string {
 	switch {
 	case errors.Is(err, ErrMessageTooLarge):
-		return "552 5.3.4 Message size exceeds fixed maximum message size"
+		return replyMessageTooLarge
 	case errors.Is(err, ErrLineTooLong):
 		return "552 5.3.4 Line length exceeds maximum permitted"
 	case errors.Is(err, ErrBareLF):

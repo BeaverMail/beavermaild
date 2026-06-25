@@ -109,7 +109,7 @@ func TestSMTPRCPTUnknownUser(t *testing.T) {
 	send(t, conn, "MAIL FROM:<sender@example.com>")
 	expect(t, read, "250")
 	send(t, conn, "RCPT TO:<nobody@known.test>")
-	expect(t, read, "550 no such user")
+	expect(t, read, "550 5.1.1")
 }
 
 func dialSMTP(t *testing.T, dir *directory.Local, store *sqlite.Store, queue *mail.Queue) net.Conn {

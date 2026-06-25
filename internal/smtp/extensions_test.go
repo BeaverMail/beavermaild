@@ -31,6 +31,11 @@ func TestParseMailArg(t *testing.T) {
 		t.Fatalf("dsn params: %q %d params=%+v ok=%v", addr, size, params, ok)
 	}
 
+	addr, _, params, ok = parseMailArg("FROM:<üser@example.com> SMTPUTF8")
+	if !ok || addr != "üser@example.com" || !params.SMTPUTF8 {
+		t.Fatalf("utf8 mail: %q params=%+v ok=%v", addr, params, ok)
+	}
+
 	addr, rcptParams, ok := parseRcptArg("TO:<bob@localhost> NOTIFY=FAILURE ORCPT=rfc822;bob@localhost")
 	if !ok || addr != "bob@localhost" || rcptParams.Notify != mail.NotifyFailure {
 		t.Fatalf("rcpt dsn: %q params=%+v ok=%v", addr, rcptParams, ok)

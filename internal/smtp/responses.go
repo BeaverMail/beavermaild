@@ -1,0 +1,32 @@
+// SMTP server reply lines with RFC 3463 enhanced status codes.
+package smtp
+
+const (
+	replyOK                 = "250 2.0.0 Ok"
+	replyDataStart          = "354 2.0.0 Start mail input; end with <CRLF>.<CRLF>"
+	replyBye                = "221 2.0.0 Bye"
+	replyTLSReady           = "220 2.0.0 Ready to start TLS"
+	replyAuthOK             = "235 2.7.0 Authentication successful"
+	replySyntaxMail         = "501 5.5.4 Syntax: MAIL FROM:<address>"
+	replySyntaxRcpt         = "501 5.5.4 Syntax: RCPT TO:<address>"
+	replySyntaxBDAT         = "501 5.5.4 Syntax: BDAT <size> [LAST]"
+	replySyntaxVRFY         = "501 5.5.4 Syntax: VRFY <address>"
+	replyBadSequence        = "503 5.5.1 Bad sequence of commands"
+	replyBDATInProgress     = "503 5.5.1 BDAT transfer in progress"
+	replyTLSAlreadyActive   = "503 5.5.1 TLS already active"
+	replyNotImplemented     = "502 5.5.1 Command not implemented"
+	replyTLSUnavailable     = "502 5.5.1 TLS not available"
+	replyAuthRequired       = "530 5.7.0 Authentication required"
+	replyTLSRequired        = "530 5.7.0 Must issue a STARTTLS command first"
+	replyTLSRequiredAuth    = "538 5.7.11 Encryption required for authentication"
+	replySenderRejected     = "553 5.7.1 Sender address rejected"
+	replyRelayDenied        = "554 5.7.1 Relay access denied"
+	replyUserUnknown        = "550 5.1.1 User unknown"
+	replyDomainUnknown      = "550 5.1.2 Mailbox unavailable"
+	replyUserInactive       = "550 5.1.1 User inactive"
+	replyMessageTooLarge    = "552 5.3.4 Message size exceeds fixed maximum message size"
+	replyBinaryNotSupported = "555 5.6.1 BINARYMIME not supported"
+	replyUTF8Required       = "553 5.6.7 Non-ASCII addresses require SMTPUTF8"
+	replyLocalError         = "451 4.3.0 Local error in processing"
+	replyOutboundUnavailable = "451 4.3.0 Outbound delivery unavailable"
+)

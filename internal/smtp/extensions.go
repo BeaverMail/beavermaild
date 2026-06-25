@@ -11,9 +11,10 @@ import (
 
 // MailParams holds optional MAIL FROM ESMTP parameters.
 type MailParams struct {
-	Ret   mail.RetMode
-	Envid string
-	Body  string
+	Ret       mail.RetMode
+	Envid     string
+	Body      string
+	SMTPUTF8  bool
 }
 
 // RcptParams holds optional RCPT TO ESMTP parameters.
@@ -50,11 +51,15 @@ func parseMailArg(arg string) (address string, declaredSize int, params MailPara
 	if gt < 0 {
 		return "", 0, MailParams{}, false
 	}
-	address = strings.ToLower(strings.TrimSpace(arg[lt+1 : lt+gt]))
+	address = normalizeEnvelopeAddress(strings.TrimSpace(arg[lt+1 : lt+gt]))
 	for _, field := range strings.Fields(arg[lt+gt+1:]) {
 		upper := strings.ToUpper(field)
 		key, val, hasVal := strings.Cut(upper, "=")
 		if !hasVal {
+			if key == "SMTPUTF8" {
+				params.SMTPUTF8 = true
+				continue
+			}
 			if strings.Contains(upper, "=") {
 				return "", 0, MailParams{}, false
 			}
@@ -99,7 +104,7 @@ func parseRcptArg(arg string) (address string, params RcptParams, ok bool) {
 	if gt < 0 {
 		return "", RcptParams{}, false
 	}
-	address = strings.ToLower(strings.TrimSpace(arg[lt+1 : lt+gt]))
+	address = normalizeEnvelopeAddress(strings.TrimSpace(arg[lt+1 : lt+gt]))
 	params.Notify = mail.NotifyDefault
 	for _, field := range strings.Fields(arg[lt+gt+1:]) {
 		upper := strings.ToUpper(field)
