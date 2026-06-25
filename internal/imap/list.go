@@ -2,41 +2,11 @@
 package imap
 
 import (
-	"context"
-	"fmt"
 	"regexp"
 	"strings"
 
 	"github.com/BeaverMail/beaver/internal/mail"
 )
-
-// cmdList returns mailboxes matching LIST reference and pattern (RFC 3501 subset).
-func (s *session) cmdList(ctx context.Context, tag, arg string) error {
-	ref, pattern, ok := parseListArg(arg)
-	if !ok {
-		return s.tagged(tag, "BAD LIST syntax")
-	}
-	if ref != "" && ref != "/" {
-		if _, err := s.inbox.ResolveMailbox(ctx, s.principal.AccountID, ref); err != nil {
-			return s.tagged(tag, "OK LIST completed")
-		}
-	}
-	mboxes, err := s.inbox.ListMailboxes(ctx, s.principal.AccountID)
-	if err != nil {
-		return err
-	}
-	match := compileListPattern(pattern)
-	for _, mb := range mboxes {
-		if !match(mb.Name) {
-			continue
-		}
-		line := fmt.Sprintf(`LIST (%s) "/" %s`, listMailboxAttrs(mb.ID), formatListMailbox(mb.Name))
-		if err := s.untagged(line); err != nil {
-			return err
-		}
-	}
-	return s.tagged(tag, "OK LIST completed")
-}
 
 func parseListArg(arg string) (ref, pattern string, ok bool) {
 	ref, rest, ok := parseListToken(arg)

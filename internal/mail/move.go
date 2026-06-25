@@ -157,7 +157,7 @@ func (ib *Inbox) CreateMailbox(ctx context.Context, accountID uint32, name strin
 	if err != nil {
 		return Mailbox{}, err
 	}
-	mbox := storage.Mailbox{ID: id, Name: name, UIDNext: 1, UIDValidity: 1}
+	mbox := storage.Mailbox{ID: id, Name: name, UIDNext: 1, UIDValidity: 1, Subscribed: false, SubSet: true}
 	wire, err := storage.MarshalPersist(nil, 1, mbox)
 	if err != nil {
 		return Mailbox{}, err

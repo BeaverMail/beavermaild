@@ -24,12 +24,14 @@ type Account struct {
 
 // Mailbox is an IMAP/JMAP mailbox belonging to an account.
 type Mailbox struct {
-	ID          uint32 `msgpack:"id"`
-	Name        string `msgpack:"n"`
-	Role        string `msgpack:"r,omitempty"`
+	ID            uint32 `msgpack:"id"`
+	Name          string `msgpack:"n"`
+	Role          string `msgpack:"r,omitempty"`
 	UIDNext       uint32 `msgpack:"un"`
 	UIDValidity   uint32 `msgpack:"uv"`
 	HighestModSeq uint64 `msgpack:"hm,omitempty"`
+	Subscribed  bool `msgpack:"sub,omitempty"`
+	SubSet      bool `msgpack:"ss,omitempty"` // true once SUBSCRIBE/UNSUBSCRIBE touched this folder
 }
 
 // EmailMeta is persisted mail metadata; raw body is inline KV or blob fs (BlobHash).

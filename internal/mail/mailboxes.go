@@ -24,6 +24,7 @@ type Mailbox struct {
 	Name          string
 	UIDValidity   uint32
 	HighestModSeq uint64
+	Subscribed    bool
 }
 
 var defaultMailboxDefs = []struct {
@@ -48,7 +49,13 @@ func (ib *Inbox) ListMailboxes(ctx context.Context, accountID uint32) ([]Mailbox
 	}
 	out := make([]Mailbox, len(records))
 	for i, m := range records {
-		out[i] = Mailbox{ID: m.ID, Name: m.Name, UIDValidity: m.UIDValidity, HighestModSeq: m.HighestModSeq}
+		out[i] = Mailbox{
+			ID:            m.ID,
+			Name:          m.Name,
+			UIDValidity:   m.UIDValidity,
+			HighestModSeq: m.HighestModSeq,
+			Subscribed:    mailboxSubscribed(m),
+		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out, nil
@@ -70,7 +77,13 @@ func (ib *Inbox) ResolveMailbox(ctx context.Context, accountID uint32, imapName 
 	upper := strings.ToUpper(imapName)
 	for _, m := range records {
 		if strings.ToUpper(m.Name) == upper {
-			return Mailbox{ID: m.ID, Name: m.Name, UIDValidity: m.UIDValidity, HighestModSeq: m.HighestModSeq}, nil
+			return Mailbox{
+				ID:            m.ID,
+				Name:          m.Name,
+				UIDValidity:   m.UIDValidity,
+				HighestModSeq: m.HighestModSeq,
+				Subscribed:    mailboxSubscribed(m),
+			}, nil
 		}
 	}
 	return Mailbox{}, storage.ErrNotFound
@@ -98,6 +111,8 @@ func (ib *Inbox) EnsureMailboxes(ctx context.Context, accountID uint32) error {
 			Role:        def.role,
 			UIDNext:     1,
 			UIDValidity: 1,
+			Subscribed:  true,
+			SubSet:      true,
 		}
 		wire, err := storage.MarshalPersist(nil, 1, mbox)
 		if err != nil {

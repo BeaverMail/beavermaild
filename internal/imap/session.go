@@ -115,6 +115,36 @@ func (s *session) run(ctx context.Context) error {
 			if err := s.cmdList(ctx, tag, arg); err != nil {
 				return err
 			}
+		case "LSUB":
+			if s.principal.AccountID == 0 {
+				if err := s.tagged(tag, "NO LOGIN required"); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := s.cmdLsub(ctx, tag, arg); err != nil {
+				return err
+			}
+		case "SUBSCRIBE":
+			if s.principal.AccountID == 0 {
+				if err := s.tagged(tag, "NO LOGIN required"); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := s.cmdSubscribe(ctx, tag, arg); err != nil {
+				return err
+			}
+		case "UNSUBSCRIBE":
+			if s.principal.AccountID == 0 {
+				if err := s.tagged(tag, "NO LOGIN required"); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := s.cmdUnsubscribe(ctx, tag, arg); err != nil {
+				return err
+			}
 		case "SELECT":
 			name, err := mailboxNameFromArg(arg)
 			if err != nil {
