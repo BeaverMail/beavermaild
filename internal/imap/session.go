@@ -521,7 +521,7 @@ func (s *session) cmdSearch(ctx context.Context, tag, arg string, byUID bool) er
 	if !s.selected {
 		return s.tagged(tag, "NO not selected")
 	}
-	criteria, ok := parseSearchCriteria(arg)
+	expr, ok := parseSearchExpr(arg)
 	if !ok {
 		return s.tagged(tag, "BAD SEARCH syntax")
 	}
@@ -530,9 +530,9 @@ func (s *session) cmdSearch(ctx context.Context, tag, arg string, byUID bool) er
 	})
 	var nums []uint32
 	if byUID {
-		nums = mail.MatchSearchUIDWithLoader(s.messages, criteria, load)
+		nums = mail.MatchSearchUIDExprWithLoader(s.messages, expr, load)
 	} else {
-		nums = mail.MatchSearchWithLoader(s.messages, criteria, load)
+		nums = mail.MatchSearchExprWithLoader(s.messages, expr, load)
 	}
 	if err := s.untagged(formatSearch(nums)); err != nil {
 		return err

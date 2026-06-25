@@ -18,13 +18,13 @@ func TestParseIMAPFlagListIgnoresRecent(t *testing.T) {
 func TestParseSearchFlagged(t *testing.T) {
 	t.Parallel()
 
-	c, ok := parseSearchCriteria("FLAGGED")
-	if !ok || c.Flagged == nil || !*c.Flagged {
+	c, ok := parseSearchExpr("FLAGGED")
+	if !ok || c.Kind != mail.SearchExprCrit || c.Crit.Flagged == nil || !*c.Crit.Flagged {
 		t.Fatalf("flagged %+v ok=%v", c, ok)
 	}
 
-	c, ok = parseSearchCriteria("NEW")
-	if !ok || c.Recent == nil || !*c.Recent || c.Seen == nil || *c.Seen {
+	c, ok = parseSearchExpr("NEW")
+	if !ok || c.Crit.Recent == nil || !*c.Crit.Recent || c.Crit.Seen == nil || *c.Crit.Seen {
 		t.Fatalf("new %+v ok=%v", c, ok)
 	}
 }
