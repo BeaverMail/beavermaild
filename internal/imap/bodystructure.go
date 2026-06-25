@@ -161,14 +161,6 @@ func mapEncoding(cte string) string {
 	}
 }
 
-func nstring(s string) string {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return "NIL"
-	}
-	return quoteIMAPString(s)
-}
-
 func countLines(body []byte) int {
 	if len(body) == 0 {
 		return 0
