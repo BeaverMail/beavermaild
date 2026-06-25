@@ -184,6 +184,49 @@ func (ib *Inbox) DeleteMailbox(ctx context.Context, accountID, mailboxID uint32)
 	return ib.store.Commit(ctx, batch)
 }
 
+// RenameMailbox renames a user folder and bumps UIDVALIDITY (RFC 3501).
+func (ib *Inbox) RenameMailbox(ctx context.Context, accountID uint32, oldName, newName string) (Mailbox, error) {
+	oldName = stringsTrimMailboxName(oldName)
+	newName = stringsTrimMailboxName(newName)
+	if oldName == "" || newName == "" {
+		return Mailbox{}, fmt.Errorf("mail: empty mailbox name")
+	}
+	if strings.EqualFold(oldName, "INBOX") {
+		return Mailbox{}, ErrSystemMailbox
+	}
+	old, err := ib.ResolveMailbox(ctx, accountID, oldName)
+	if err != nil {
+		return Mailbox{}, err
+	}
+	if old.ID <= DraftsMailboxID {
+		return Mailbox{}, ErrSystemMailbox
+	}
+	if _, err := ib.ResolveMailbox(ctx, accountID, newName); err == nil {
+		return Mailbox{}, ErrMailboxExists
+	} else if !errors.Is(err, storage.ErrNotFound) {
+		return Mailbox{}, err
+	}
+	rec, err := ib.mailboxRecord(ctx, accountID, old.ID)
+	if err != nil {
+		return Mailbox{}, err
+	}
+	rec.Name = newName
+	rec.UIDValidity++
+	wire, err := storage.MarshalPersist(nil, 1, rec)
+	if err != nil {
+		return Mailbox{}, err
+	}
+	batch := storage.NewBatch().WithAccount(accountID)
+	suffix := storage.DocumentSuffix(storage.CollectionMailbox, old.ID, nil)
+	if err := batch.Set(storage.SubspaceMail, suffix, wire); err != nil {
+		return Mailbox{}, err
+	}
+	if err := ib.store.Commit(ctx, batch); err != nil {
+		return Mailbox{}, err
+	}
+	return Mailbox{ID: old.ID, Name: newName, UIDValidity: rec.UIDValidity}, nil
+}
+
 func (ib *Inbox) nextCustomMailboxID(ctx context.Context, accountID uint32) (uint32, error) {
 	records, err := ib.listMailboxRecords(ctx, accountID)
 	if err != nil {

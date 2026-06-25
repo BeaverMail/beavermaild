@@ -17,12 +17,14 @@ func (s *session) cmdAppend(ctx context.Context, tag, arg string) error {
 	if s.principal.AccountID == 0 {
 		return s.tagged(tag, "NO LOGIN required")
 	}
-	mboxName, flags, size, ok := parseAppendArg(arg)
+	mboxName, flags, size, nonsync, ok := parseAppendArg(arg)
 	if !ok || size <= 0 || size > mail.MaxAppendBytes {
 		return s.tagged(tag, "BAD APPEND syntax")
 	}
-	if err := s.continuation(); err != nil {
-		return err
+	if !nonsync {
+		if err := s.continuation(); err != nil {
+			return err
+		}
 	}
 	raw, err := s.readLiteral(size)
 	if err != nil {
@@ -64,30 +66,35 @@ func (s *session) readLiteral(n int) ([]byte, error) {
 	return buf, nil
 }
 
-func parseAppendArg(arg string) (mailbox string, flags uint32, size int, ok bool) {
+func parseAppendArg(arg string) (mailbox string, flags uint32, size int, nonsync bool, ok bool) {
 	arg = strings.TrimSpace(arg)
 	litStart := strings.LastIndexByte(arg, '{')
 	if litStart < 0 || len(arg) == 0 || arg[len(arg)-1] != '}' {
-		return "", 0, 0, false
+		return "", 0, 0, false, false
 	}
-	size, err := strconv.Atoi(strings.TrimSpace(arg[litStart+1 : len(arg)-1]))
+	lit := strings.TrimSpace(arg[litStart+1 : len(arg)-1])
+	if strings.HasSuffix(lit, "+") {
+		nonsync = true
+		lit = strings.TrimSuffix(lit, "+")
+	}
+	size, err := strconv.Atoi(strings.TrimSpace(lit))
 	if err != nil {
-		return "", 0, 0, false
+		return "", 0, 0, false, false
 	}
 
 	rest := strings.TrimSpace(arg[:litStart])
 	if rest == "" {
-		return "", 0, 0, false
+		return "", 0, 0, false, false
 	}
 	mboxName, rest, ok := parseAppendMailboxToken(rest)
 	if !ok {
-		return "", 0, 0, false
+		return "", 0, 0, false, false
 	}
 	rest = strings.TrimSpace(rest)
 	if strings.HasPrefix(rest, "(") {
 		close := strings.IndexByte(rest, ')')
 		if close < 0 {
-			return "", 0, 0, false
+			return "", 0, 0, false, false
 		}
 		flags = parseAppendFlags(rest[:close+1])
 		rest = strings.TrimSpace(rest[close+1:])
@@ -95,14 +102,14 @@ func parseAppendArg(arg string) (mailbox string, flags uint32, size int, ok bool
 	if strings.HasPrefix(rest, "\"") {
 		_, rest, ok = parseQuoted(rest)
 		if !ok {
-			return "", 0, 0, false
+			return "", 0, 0, false, false
 		}
 		rest = strings.TrimSpace(rest)
 	}
 	if rest != "" {
-		return "", 0, 0, false
+		return "", 0, 0, false, false
 	}
-	return mboxName, flags, size, true
+	return mboxName, flags, size, nonsync, true
 }
 
 func parseAppendMailboxToken(rest string) (name string, tail string, ok bool) {

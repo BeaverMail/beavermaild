@@ -90,20 +90,11 @@ func (s *session) run(ctx context.Context) error {
 				}
 				continue
 			}
-			p, err := s.dir.Authenticate(ctx, user, pass)
-			if err != nil {
-				if errors.Is(err, directory.ErrInvalidCredentials) || errors.Is(err, directory.ErrInactive) {
-					if err := s.tagged(tag, "NO LOGIN failed"); err != nil {
-						return err
-					}
-					continue
-				}
+			if err := s.finishAuth(ctx, tag, user, pass, "OK LOGIN completed"); err != nil {
 				return err
 			}
-			s.principal = p
-			s.selected = false
-			s.messages = nil
-			if err := s.tagged(tag, "OK LOGIN completed"); err != nil {
+		case "AUTHENTICATE":
+			if err := s.cmdAuthenticate(ctx, tag, arg); err != nil {
 				return err
 			}
 		case "LIST":
@@ -143,6 +134,14 @@ func (s *session) run(ctx context.Context) error {
 			}
 		case "DELETE":
 			if err := s.cmdDelete(ctx, tag, arg); err != nil {
+				return err
+			}
+		case "RENAME":
+			if err := s.cmdRename(ctx, tag, arg); err != nil {
+				return err
+			}
+		case "NAMESPACE":
+			if err := s.cmdNamespace(tag); err != nil {
 				return err
 			}
 		case "COPY":
@@ -201,6 +200,10 @@ func (s *session) run(ctx context.Context) error {
 			if err := s.cmdAppend(ctx, tag, arg); err != nil {
 				return err
 			}
+		case "IDLE":
+			if err := s.cmdIdle(ctx, tag); err != nil {
+				return err
+			}
 		case "STARTTLS":
 			if err := s.cmdStartTLS(tag); err != nil {
 				return err
@@ -218,11 +221,98 @@ func (s *session) run(ctx context.Context) error {
 }
 
 func (s *session) capabilityLine() string {
-	caps := "IMAP4rev1 MOVE"
+	caps := []string{"IMAP4rev1", "MOVE", "LITERAL+", "SASL-IR", "AUTH=PLAIN"}
 	if s.tls != nil && !s.secure {
-		caps += " STARTTLS"
+		caps = append(caps, "STARTTLS")
 	}
-	return "CAPABILITY " + caps
+	if s.tlsRequired && !s.secure {
+		caps = append(caps, "LOGINDISABLED")
+	}
+	if s.principal.AccountID != 0 {
+		caps = append(caps, "IDLE", "NAMESPACE")
+	}
+	return "CAPABILITY " + strings.Join(caps, " ")
+}
+
+// finishAuth validates credentials and resets mailbox selection state.
+func (s *session) finishAuth(ctx context.Context, tag, user, pass, resp string) error {
+	p, err := s.dir.Authenticate(ctx, user, pass)
+	if err != nil {
+		if errors.Is(err, directory.ErrInvalidCredentials) || errors.Is(err, directory.ErrInactive) {
+			return s.tagged(tag, "NO LOGIN failed")
+		}
+		return err
+	}
+	s.principal = p
+	s.selected = false
+	s.messages = nil
+	return s.tagged(tag, resp)
+}
+
+// cmdAuthenticate handles AUTHENTICATE PLAIN with optional SASL-IR initial response.
+func (s *session) cmdAuthenticate(ctx context.Context, tag, arg string) error {
+	if s.tlsRequired && !s.secure {
+		return s.tagged(tag, "NO TLS required")
+	}
+	mech, initial := splitCommand(arg)
+	if !strings.EqualFold(mech, "PLAIN") {
+		return s.tagged(tag, "BAD unsupported mechanism")
+	}
+	cred := strings.TrimSpace(initial)
+	if cred == "" {
+		if err := s.continuation(); err != nil {
+			return err
+		}
+		line, err := s.readLine()
+		if err != nil {
+			return err
+		}
+		cred = line
+	}
+	user, pass, ok := decodeAuthPlain(cred)
+	if !ok {
+		return s.tagged(tag, "BAD invalid credentials")
+	}
+	return s.finishAuth(ctx, tag, user, pass, "OK AUTHENTICATE completed")
+}
+
+// cmdNamespace returns the personal namespace for the logged-in account.
+func (s *session) cmdNamespace(tag string) error {
+	if s.principal.AccountID == 0 {
+		return s.tagged(tag, "NO LOGIN required")
+	}
+	if err := s.untagged(`NAMESPACE (("" "/")) NIL NIL`); err != nil {
+		return err
+	}
+	return s.tagged(tag, "OK NAMESPACE completed")
+}
+
+// cmdRename renames a user mailbox and clears selection when the open folder is renamed.
+func (s *session) cmdRename(ctx context.Context, tag, arg string) error {
+	if s.principal.AccountID == 0 {
+		return s.tagged(tag, "NO LOGIN required")
+	}
+	oldName, newName, ok := parseRenameArg(arg)
+	if !ok {
+		return s.tagged(tag, "BAD RENAME syntax")
+	}
+	renamed, err := s.inbox.RenameMailbox(ctx, s.principal.AccountID, oldName, newName)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			return s.tagged(tag, "NO mailbox does not exist")
+		}
+		if errors.Is(err, mail.ErrMailboxExists) {
+			return s.tagged(tag, "NO mailbox already exists")
+		}
+		if errors.Is(err, mail.ErrSystemMailbox) {
+			return s.tagged(tag, "NO cannot rename mailbox")
+		}
+		return err
+	}
+	if s.selected && strings.EqualFold(s.mbox.Name, oldName) {
+		s.mbox = renamed
+	}
+	return s.tagged(tag, "OK RENAME completed")
 }
 
 func (s *session) cmdStartTLS(tag string) error {
@@ -929,4 +1019,40 @@ func parseSeqSetAndMailbox(arg string) (setStr, mboxName string, ok bool) {
 		return "", "", false
 	}
 	return strings.TrimSpace(arg[:i]), parseMailboxName(arg[i+1:]), true
+}
+
+func parseRenameArg(arg string) (oldName, newName string, ok bool) {
+	arg = strings.TrimSpace(arg)
+	if arg == "" {
+		return "", "", false
+	}
+	var rest string
+	if arg[0] == '"' {
+		oldName, rest, ok = parseQuoted(arg)
+		if !ok {
+			return "", "", false
+		}
+	} else {
+		i := strings.IndexByte(arg, ' ')
+		if i < 0 {
+			return "", "", false
+		}
+		oldName = arg[:i]
+		rest = arg[i+1:]
+	}
+	rest = strings.TrimSpace(rest)
+	if rest == "" {
+		return "", "", false
+	}
+	if rest[0] == '"' {
+		newName, tail, ok := parseQuoted(rest)
+		if !ok || strings.TrimSpace(tail) != "" {
+			return "", "", false
+		}
+		return oldName, newName, true
+	}
+	if strings.Contains(rest, " ") {
+		return "", "", false
+	}
+	return oldName, rest, true
 }
