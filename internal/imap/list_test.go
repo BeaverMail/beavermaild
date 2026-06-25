@@ -38,3 +38,21 @@ func TestParseListArg(t *testing.T) {
 		t.Fatalf(`parse sent: %q %q`, ref, pat)
 	}
 }
+
+func TestMailboxHasChildren(t *testing.T) {
+	t.Parallel()
+
+	names := []string{"INBOX", "Work", "Work/Projects", "Archive"}
+	if !mailboxHasChildren("Work", names) {
+		t.Fatal("Work should have children")
+	}
+	if mailboxHasChildren("Work/Projects", names) {
+		t.Fatal("leaf should have no children")
+	}
+	if mailboxHasChildren("INBOX", names) {
+		t.Fatal("INBOX has no child mailboxes in this set")
+	}
+	if !mailboxHasChildren("work", names) {
+		t.Fatal("case-insensitive parent should see children")
+	}
+}

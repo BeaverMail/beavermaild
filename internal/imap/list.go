@@ -72,15 +72,36 @@ func compileListPattern(pattern string) func(string) bool {
 	}
 }
 
-func listMailboxAttrs(mailboxID uint32) string {
-	switch mailboxID {
-	case mail.SentMailboxID:
-		return `\HasNoChildren \Sent`
-	case mail.TrashMailboxID:
-		return `\HasNoChildren \Trash`
-	case mail.DraftsMailboxID:
-		return `\HasNoChildren \Drafts`
-	default:
-		return `\HasNoChildren`
+// listMailboxAttrs returns IMAP LIST attributes for one folder (RFC 3501 + SPECIAL-USE).
+func listMailboxAttrs(mb mail.Mailbox, allNames []string) string {
+	childAttr := `\HasNoChildren`
+	if mailboxHasChildren(mb.Name, allNames) {
+		childAttr = `\HasChildren`
 	}
+	switch mb.ID {
+	case mail.SentMailboxID:
+		return childAttr + ` \Sent`
+	case mail.TrashMailboxID:
+		return childAttr + ` \Trash`
+	case mail.DraftsMailboxID:
+		return childAttr + ` \Drafts`
+	default:
+		return childAttr
+	}
+}
+
+// mailboxHasChildren reports whether any listed folder name is a direct or nested child.
+func mailboxHasChildren(parent string, allNames []string) bool {
+	parent = strings.TrimSpace(parent)
+	if parent == "" {
+		return false
+	}
+	prefix := strings.ToUpper(parent) + "/"
+	for _, name := range allNames {
+		upper := strings.ToUpper(strings.TrimSpace(name))
+		if len(upper) > len(prefix) && strings.HasPrefix(upper, prefix) {
+			return true
+		}
+	}
+	return false
 }

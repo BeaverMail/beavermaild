@@ -58,6 +58,10 @@ func (s *session) cmdMailboxList(ctx context.Context, tag, arg, cmd string, subs
 		return err
 	}
 	match := compileListPattern(pattern)
+	names := make([]string, len(mboxes))
+	for i, mb := range mboxes {
+		names[i] = mb.Name
+	}
 	for _, mb := range mboxes {
 		if subscribedOnly && !mb.Subscribed {
 			continue
@@ -65,7 +69,7 @@ func (s *session) cmdMailboxList(ctx context.Context, tag, arg, cmd string, subs
 		if !match(mb.Name) {
 			continue
 		}
-		line := fmt.Sprintf(`%s (%s) "/" %s`, cmd, listMailboxAttrs(mb.ID), formatListMailbox(mb.Name))
+		line := fmt.Sprintf(`%s (%s) "/" %s`, cmd, listMailboxAttrs(mb, names), formatListMailbox(mb.Name))
 		if err := s.untagged(line); err != nil {
 			return err
 		}
