@@ -221,6 +221,14 @@ func (s *session) run(ctx context.Context) error {
 			if err := s.cmdSearch(ctx, tag, arg, false); err != nil {
 				return err
 			}
+		case "SORT":
+			if err := s.cmdSort(ctx, tag, arg, false); err != nil {
+				return err
+			}
+		case "THREAD":
+			if err := s.cmdThread(ctx, tag, arg, false); err != nil {
+				return err
+			}
 		case "UID":
 			sub, rest := splitCommand(arg)
 			switch sub {
@@ -234,6 +242,14 @@ func (s *session) run(ctx context.Context) error {
 				}
 			case "SEARCH":
 				if err := s.cmdSearch(ctx, tag, rest, true); err != nil {
+					return err
+				}
+			case "SORT":
+				if err := s.cmdSort(ctx, tag, rest, true); err != nil {
+					return err
+				}
+			case "THREAD":
+				if err := s.cmdThread(ctx, tag, rest, true); err != nil {
 					return err
 				}
 			case "COPY":
@@ -286,7 +302,7 @@ func (s *session) capabilityLine() string {
 		caps = append(caps, "LOGINDISABLED")
 	}
 	if s.principal.AccountID != 0 {
-		caps = append(caps, "IDLE", "NAMESPACE", "UIDPLUS", "UNSELECT", "SPECIAL-USE", "CONDSTORE")
+		caps = append(caps, "IDLE", "NAMESPACE", "UIDPLUS", "UNSELECT", "SPECIAL-USE", "CONDSTORE", "SORT", "THREAD=REFERENCES")
 	}
 	return "CAPABILITY " + strings.Join(caps, " ")
 }
