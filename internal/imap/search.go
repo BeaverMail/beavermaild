@@ -96,6 +96,15 @@ func parseSearchCriteria(arg string) (mail.SearchCriteria, bool) {
 			}
 			c.Subject = tokens[i+1]
 			i++
+		case "HEADER":
+			if i+2 >= len(tokens) {
+				return mail.SearchCriteria{}, false
+			}
+			c.Headers = append(c.Headers, mail.HeaderCriterion{
+				Field: tokens[i+1],
+				Value: tokens[i+2],
+			})
+			i += 2
 		case "SINCE":
 			if i+1 >= len(tokens) {
 				return mail.SearchCriteria{}, false
@@ -132,7 +141,7 @@ func parseSearchCriteria(arg string) (mail.SearchCriteria, bool) {
 	}
 	if !c.All && c.Seen == nil && !c.UIDSet && c.Flagged == nil && c.Answered == nil &&
 		c.Deleted == nil && c.Draft == nil && c.Recent == nil &&
-		c.From == "" && c.To == "" && c.Subject == "" &&
+		c.From == "" && c.To == "" && c.Subject == "" && len(c.Headers) == 0 &&
 		c.Since == nil && c.Before == nil && c.On == nil {
 		return mail.SearchCriteria{}, false
 	}

@@ -21,6 +21,9 @@ func (s *session) cmdAppend(ctx context.Context, tag, arg string) error {
 	if !ok || size <= 0 || size > mail.MaxAppendBytes {
 		return s.tagged(tag, "BAD APPEND syntax")
 	}
+	if err := mail.ValidateMailboxName(mboxName); err != nil {
+		return s.tagged(tag, "BAD mailbox name syntax")
+	}
 	if !nonsync {
 		if err := s.continuation(); err != nil {
 			return err

@@ -8,6 +8,12 @@ import (
 	"time"
 )
 
+// HeaderCriterion is one IMAP SEARCH HEADER field/value pair (ANDed).
+type HeaderCriterion struct {
+	Field string
+	Value string
+}
+
 // SearchCriteria is an IMAP SEARCH filter (AND of set fields).
 type SearchCriteria struct {
 	All      bool
@@ -24,6 +30,7 @@ type SearchCriteria struct {
 	From    string
 	To      string
 	Subject string
+	Headers []HeaderCriterion
 	Since   *time.Time // inclusive, start of day UTC
 	Before  *time.Time // exclusive, start of day UTC
 	On      *time.Time // calendar day UTC
@@ -112,7 +119,7 @@ func matchSearchOne(m Message, c SearchCriteria, load RawLoader) bool {
 }
 
 func needsHeaderSearch(c SearchCriteria) bool {
-	return c.From != "" || c.To != "" || c.Subject != ""
+	return c.From != "" || c.To != "" || c.Subject != "" || len(c.Headers) > 0
 }
 
 func matchSearchDate(receivedAt int64, c SearchCriteria) bool {
@@ -152,6 +159,11 @@ func matchSearchHeaders(raw []byte, c SearchCriteria) bool {
 	}
 	if c.Subject != "" && !headerContains(msg.Header.Get("Subject"), c.Subject) {
 		return false
+	}
+	for _, h := range c.Headers {
+		if !headerContains(msg.Header.Get(h.Field), h.Value) {
+			return false
+		}
 	}
 	return true
 }

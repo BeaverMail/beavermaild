@@ -60,3 +60,18 @@ func TestMatchSearchSinceBeforeOn(t *testing.T) {
 		t.Fatalf("since future %v", n)
 	}
 }
+
+func TestMatchSearchHeaderCriterion(t *testing.T) {
+	t.Parallel()
+
+	raw := []byte("From: a@b.com\r\nMessage-ID: <needle@example.com>\r\n\r\nbody\r\n")
+	msgs := []mail.Message{{UID: 1}}
+	load := func(m mail.Message) ([]byte, error) { return raw, nil }
+
+	found := mail.MatchSearchWithLoader(msgs, mail.SearchCriteria{
+		Headers: []mail.HeaderCriterion{{Field: "Message-ID", Value: "needle@example"}},
+	}, load)
+	if len(found) != 1 {
+		t.Fatalf("header search %v", found)
+	}
+}

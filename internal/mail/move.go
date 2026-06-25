@@ -4,7 +4,6 @@ package mail
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 
 	"github.com/BeaverMail/beaver/internal/storage"
@@ -146,8 +145,8 @@ func (ib *Inbox) Status(ctx context.Context, accountID, mailboxID uint32) (Mailb
 // CreateMailbox adds a user folder and returns its record.
 func (ib *Inbox) CreateMailbox(ctx context.Context, accountID uint32, name string) (Mailbox, error) {
 	name = stringsTrimMailboxName(name)
-	if name == "" {
-		return Mailbox{}, fmt.Errorf("mail: empty mailbox name")
+	if err := ValidateMailboxName(name); err != nil {
+		return Mailbox{}, err
 	}
 	if _, err := ib.ResolveMailbox(ctx, accountID, name); err == nil {
 		return Mailbox{}, ErrMailboxExists
@@ -198,8 +197,11 @@ func (ib *Inbox) DeleteMailbox(ctx context.Context, accountID, mailboxID uint32)
 func (ib *Inbox) RenameMailbox(ctx context.Context, accountID uint32, oldName, newName string) (Mailbox, error) {
 	oldName = stringsTrimMailboxName(oldName)
 	newName = stringsTrimMailboxName(newName)
-	if oldName == "" || newName == "" {
-		return Mailbox{}, fmt.Errorf("mail: empty mailbox name")
+	if err := ValidateMailboxName(oldName); err != nil {
+		return Mailbox{}, err
+	}
+	if err := ValidateMailboxName(newName); err != nil {
+		return Mailbox{}, err
 	}
 	if strings.EqualFold(oldName, "INBOX") {
 		return Mailbox{}, ErrSystemMailbox

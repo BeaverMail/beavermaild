@@ -66,6 +66,12 @@ func (s *session) run(ctx context.Context) error {
 		if tag == "" {
 			continue
 		}
+		if !validIMAPTag(tag) {
+			if err := s.rejectBadTag(); err != nil {
+				return err
+			}
+			continue
+		}
 		switch cmd {
 		case "CAPABILITY":
 			if err := s.untagged(s.capabilityLine()); err != nil {
@@ -110,11 +116,19 @@ func (s *session) run(ctx context.Context) error {
 				return err
 			}
 		case "SELECT":
-			if err := s.openMailbox(ctx, tag, parseMailboxName(arg), false); err != nil {
+			name, err := mailboxNameFromArg(arg)
+			if err != nil {
+				return s.tagged(tag, "BAD mailbox name syntax")
+			}
+			if err := s.openMailbox(ctx, tag, name, false); err != nil {
 				return err
 			}
 		case "EXAMINE":
-			if err := s.openMailbox(ctx, tag, parseMailboxName(arg), true); err != nil {
+			name, err := mailboxNameFromArg(arg)
+			if err != nil {
+				return s.tagged(tag, "BAD mailbox name syntax")
+			}
+			if err := s.openMailbox(ctx, tag, name, true); err != nil {
 				return err
 			}
 		case "STATUS":
@@ -305,6 +319,12 @@ func (s *session) cmdRename(ctx context.Context, tag, arg string) error {
 	oldName, newName, ok := parseRenameArg(arg)
 	if !ok {
 		return s.tagged(tag, "BAD RENAME syntax")
+	}
+	if err := mail.ValidateMailboxName(oldName); err != nil {
+		return s.tagged(tag, "BAD mailbox name syntax")
+	}
+	if err := mail.ValidateMailboxName(newName); err != nil {
+		return s.tagged(tag, "BAD mailbox name syntax")
 	}
 	renamed, err := s.inbox.RenameMailbox(ctx, s.principal.AccountID, oldName, newName)
 	if err != nil {
@@ -528,6 +548,9 @@ func (s *session) cmdStatus(ctx context.Context, tag, arg string) error {
 	if !ok {
 		return s.tagged(tag, "BAD STATUS syntax")
 	}
+	if err := mail.ValidateMailboxName(name); err != nil {
+		return s.tagged(tag, "BAD mailbox name syntax")
+	}
 	mbox, err := s.inbox.ResolveMailbox(ctx, s.principal.AccountID, name)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
@@ -549,7 +572,11 @@ func (s *session) cmdCreate(ctx context.Context, tag, arg string) error {
 	if s.principal.AccountID == 0 {
 		return s.tagged(tag, "NO LOGIN required")
 	}
-	_, err := s.inbox.CreateMailbox(ctx, s.principal.AccountID, parseMailboxName(arg))
+	name, err := mailboxNameFromArg(arg)
+	if err != nil {
+		return s.tagged(tag, "BAD mailbox name syntax")
+	}
+	_, err = s.inbox.CreateMailbox(ctx, s.principal.AccountID, name)
 	if err != nil {
 		if errors.Is(err, mail.ErrMailboxExists) {
 			return s.tagged(tag, "NO mailbox already exists")
@@ -563,7 +590,11 @@ func (s *session) cmdDelete(ctx context.Context, tag, arg string) error {
 	if s.principal.AccountID == 0 {
 		return s.tagged(tag, "NO LOGIN required")
 	}
-	mbox, err := s.inbox.ResolveMailbox(ctx, s.principal.AccountID, parseMailboxName(arg))
+	name, err := mailboxNameFromArg(arg)
+	if err != nil {
+		return s.tagged(tag, "BAD mailbox name syntax")
+	}
+	mbox, err := s.inbox.ResolveMailbox(ctx, s.principal.AccountID, name)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			return s.tagged(tag, "NO mailbox does not exist")
@@ -597,6 +628,9 @@ func (s *session) cmdCopy(ctx context.Context, tag, arg string, byUID bool) erro
 	if !ok {
 		return s.tagged(tag, "BAD COPY syntax")
 	}
+	if err := mail.ValidateMailboxName(destName); err != nil {
+		return s.tagged(tag, "BAD mailbox name syntax")
+	}
 	dest, err := s.inbox.ResolveMailbox(ctx, s.principal.AccountID, destName)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
@@ -626,6 +660,9 @@ func (s *session) cmdMove(ctx context.Context, tag, arg string, byUID bool) erro
 	setStr, destName, ok := parseSeqSetAndMailbox(arg)
 	if !ok {
 		return s.tagged(tag, "BAD MOVE syntax")
+	}
+	if err := mail.ValidateMailboxName(destName); err != nil {
+		return s.tagged(tag, "BAD mailbox name syntax")
 	}
 	dest, err := s.inbox.ResolveMailbox(ctx, s.principal.AccountID, destName)
 	if err != nil {
