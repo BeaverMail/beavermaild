@@ -164,6 +164,18 @@ func (s *session) run(ctx context.Context) error {
 			if err := s.cmdExpunge(ctx, tag); err != nil {
 				return err
 			}
+		case "CLOSE":
+			if err := s.cmdClose(ctx, tag); err != nil {
+				return err
+			}
+		case "UNSELECT":
+			if err := s.cmdUnselect(tag); err != nil {
+				return err
+			}
+		case "CHECK":
+			if err := s.cmdCheck(tag); err != nil {
+				return err
+			}
 		case "SEARCH":
 			if err := s.cmdSearch(ctx, tag, arg, false); err != nil {
 				return err
@@ -229,7 +241,7 @@ func (s *session) capabilityLine() string {
 		caps = append(caps, "LOGINDISABLED")
 	}
 	if s.principal.AccountID != 0 {
-		caps = append(caps, "IDLE", "NAMESPACE")
+		caps = append(caps, "IDLE", "NAMESPACE", "UIDPLUS", "UNSELECT")
 	}
 	return "CAPABILITY " + strings.Join(caps, " ")
 }
@@ -573,10 +585,11 @@ func (s *session) cmdCopy(ctx context.Context, tag, arg string, byUID bool) erro
 		return s.tagged(tag, "BAD COPY syntax")
 	}
 	ids := s.emailIDsFromIndices(s.resolveIndices(set, byUID))
-	if _, err := s.inbox.CopyMessages(ctx, s.principal.AccountID, ids, dest.ID); err != nil {
+	newIDs, err := s.inbox.CopyMessages(ctx, s.principal.AccountID, ids, dest.ID)
+	if err != nil {
 		return err
 	}
-	return s.tagged(tag, "OK COPY completed")
+	return s.tagged(tag, fmt.Sprintf("OK [%s] COPY completed", formatCopyUID(dest.UIDValidity, ids, newIDs)))
 }
 
 func (s *session) cmdMove(ctx context.Context, tag, arg string, byUID bool) error {
@@ -610,7 +623,7 @@ func (s *session) cmdMove(ctx context.Context, tag, arg string, byUID bool) erro
 		return err
 	}
 	s.messages = msgs
-	return s.tagged(tag, "OK MOVE completed")
+	return s.tagged(tag, fmt.Sprintf("OK [%s] MOVE completed", formatCopyUID(dest.UIDValidity, ids, ids)))
 }
 
 func (s *session) emailIDsFromIndices(indices []int) []uint32 {

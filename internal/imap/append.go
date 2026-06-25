@@ -55,7 +55,7 @@ func (s *session) cmdAppend(ctx context.Context, tag, arg string) error {
 		}
 	}
 
-	return s.tagged(tag, "OK APPEND completed")
+	return s.tagged(tag, fmt.Sprintf("OK [%s] APPEND completed", formatAppendUID(mbox.UIDValidity, uid)))
 }
 
 func (s *session) readLiteral(n int) ([]byte, error) {
