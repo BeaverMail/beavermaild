@@ -3,6 +3,7 @@ package mail
 
 import (
 	"context"
+	"strings"
 
 	"github.com/BeaverMail/beaver/internal/storage"
 )
@@ -46,24 +47,25 @@ func (ib *Inbox) saveMailbox(ctx context.Context, accountID uint32, mbox storage
 	return ib.store.Commit(ctx, batch)
 }
 
-// SetFlagsIfUnchanged updates flags when UNCHANGEDSINCE allows it and bumps MODSEQ on change.
-func (ib *Inbox) SetFlagsIfUnchanged(ctx context.Context, accountID, emailID uint32, set, clear uint32, unchangedSince uint64) (applied bool, meta storage.EmailMeta, err error) {
+// SetFlagsIfUnchanged updates flags/keywords when UNCHANGEDSINCE allows it and bumps MODSEQ on change.
+func (ib *Inbox) SetFlagsIfUnchanged(ctx context.Context, accountID, emailID uint32, set, clear uint32, kwAdd, kwRemove []string, unchangedSince uint64) (applied bool, meta storage.EmailMeta, err error) {
 	meta, err = ib.GetMeta(ctx, accountID, emailID)
 	if err != nil {
 		return false, storage.EmailMeta{}, err
 	}
-	newFlags := (meta.Flags & ^clear) | set
-	if newFlags == meta.Flags {
-		return true, meta, nil
+	before := meta
+	meta.Flags = (meta.Flags & ^clear) | set
+	ApplyKeywords(&meta, kwAdd, kwRemove)
+	if unchangedSince > 0 && before.ModSeq > unchangedSince {
+		return false, before, nil
 	}
-	if unchangedSince > 0 && meta.ModSeq > unchangedSince {
-		return false, meta, nil
+	if meta.Flags == before.Flags && keywordsEqual(meta.Keywords, before.Keywords) {
+		return true, meta, nil
 	}
 	modSeq, err := ib.allocateModSeq(ctx, accountID, meta.MailboxID)
 	if err != nil {
 		return false, storage.EmailMeta{}, err
 	}
-	meta.Flags = newFlags
 	meta.ModSeq = modSeq
 	wire, err := storage.MarshalPersist(nil, 1, meta)
 	if err != nil {
@@ -78,4 +80,16 @@ func (ib *Inbox) SetFlagsIfUnchanged(ctx context.Context, accountID, emailID uin
 		return false, storage.EmailMeta{}, err
 	}
 	return true, meta, nil
+}
+
+func keywordsEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !strings.EqualFold(a[i], b[i]) {
+			return false
+		}
+	}
+	return true
 }

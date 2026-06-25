@@ -41,7 +41,7 @@ func TestIMAPBodySectionFetch(t *testing.T) {
 
 	send(t, conn, "f3 FETCH 1 (BODY.PEEK[2])")
 	line, err := read.ReadString('\n')
-	if err != nil || !strings.Contains(line, "BODY.PEEK[2]") {
+	if err != nil || !strings.Contains(line, "BODY[2]") || strings.Contains(line, "BODY.PEEK") {
 		t.Fatalf("prelude %q err %v", line, err)
 	}
 	n, err := literalSize(line)

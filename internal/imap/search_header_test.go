@@ -82,4 +82,10 @@ func TestParseSearchOrNotParens(t *testing.T) {
 	if _, ok := parseSearchExpr(`(FROM a`); ok {
 		t.Fatal("unclosed paren")
 	}
+
+	expr, ok = parseSearchExpr(`SENTSINCE 10-Jun-2024 KEYWORD Flag_007`)
+	crits := flatSearchCrits(expr)
+	if !ok || len(crits) != 2 {
+		t.Fatalf("sent keyword: %+v ok=%v", crits, ok)
+	}
 }

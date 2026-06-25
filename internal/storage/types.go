@@ -44,6 +44,7 @@ type EmailMeta struct {
 	Flags      uint32   `msgpack:"fl"`
 	ModSeq     uint64   `msgpack:"ms,omitempty"`
 	BlobHash   [32]byte `msgpack:"bh,omitempty"`
+	Keywords   []string `msgpack:"kw,omitempty"` // IMAP custom keywords (non-system flags)
 }
 
 // QueueRecipient is one RCPT in an outbound queue record.

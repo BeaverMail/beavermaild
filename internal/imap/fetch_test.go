@@ -48,6 +48,9 @@ func TestWantsFullBodySection(t *testing.T) {
 	if len(secs) != 1 || secs[0].section != "HEADER.FIELDS" {
 		t.Fatal("header only")
 	}
+	if got := bodyFetchResponseName(secs[0].itemName); got != "BODY[HEADER.FIELDS (SUBJECT)]" {
+		t.Fatalf("response name %q", got)
+	}
 	if len(parseAllBodyFetches("RFC822.SIZE")) != 0 {
 		t.Fatal("size only")
 	}

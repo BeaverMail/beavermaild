@@ -22,7 +22,7 @@ func TestParseUnchangedSince(t *testing.T) {
 func TestParseStoreArgUnchangedSince(t *testing.T) {
 	t.Parallel()
 
-	_, mode, set, _, us, has, ok := parseStoreArg(`1 (UNCHANGEDSINCE 10) +FLAGS (\Seen)`)
+	_, mode, set, _, _, _, us, has, ok := parseStoreArg(`1 (UNCHANGEDSINCE 10) +FLAGS (\Seen)`)
 	if !ok || !has || us != 10 || mode != storeAdd || set&mail.FlagSeen == 0 {
 		t.Fatalf("parse %+v us=%d ok=%v", mode, us, ok)
 	}

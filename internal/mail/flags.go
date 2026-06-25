@@ -25,7 +25,7 @@ const StoreableIMAPFlags = FlagSeen | FlagDraft | FlagDeleted | FlagAnswered | F
 const IMAPCapabilityFlags = `FLAGS (\Answered \Flagged \Deleted \Seen \Draft)`
 
 // IMAPPermanentFlags is the PERMANENTFLAGS response code payload (excludes \Recent).
-const IMAPPermanentFlags = `(\Answered \Flagged \Deleted \Seen \Draft)`
+const IMAPPermanentFlags = `(\Answered \Flagged \Deleted \Seen \Draft \*)`
 
 // FormatIMAPFlags renders flags for IMAP FETCH/STORE responses.
 func FormatIMAPFlags(f uint32) string {

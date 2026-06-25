@@ -9,9 +9,9 @@ import (
 func TestParseIMAPFlagListIgnoresRecent(t *testing.T) {
 	t.Parallel()
 
-	bits, ok := parseIMAPFlagList(`(\Recent \Seen)`)
-	if !ok || bits != mail.FlagSeen {
-		t.Fatalf("store list %#x ok=%v", bits, ok)
+	bits, kws, ok := parseIMAPFlagList(`(\Recent \Seen)`)
+	if !ok || bits != mail.FlagSeen || len(kws) != 0 {
+		t.Fatalf("store list %#x kws=%v ok=%v", bits, kws, ok)
 	}
 }
 

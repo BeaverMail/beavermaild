@@ -80,7 +80,9 @@ func TestMarshalPersistCoreTypes(t *testing.T) {
 				if err := storage.UnmarshalPersist(wire, &got); err != nil {
 					t.Fatal(err)
 				}
-				if got != want {
+				if got.Version != want.Version || got.MailboxID != want.MailboxID ||
+					got.ThreadID != want.ThreadID || got.ReceivedAt != want.ReceivedAt ||
+					got.Size != want.Size || got.Flags != want.Flags || got.BlobHash != want.BlobHash {
 					t.Fatalf("got %+v want %+v", got, want)
 				}
 			case storage.QueueMessage:

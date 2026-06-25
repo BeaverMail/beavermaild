@@ -84,13 +84,13 @@ func TestSetFlagsUnchangedSince(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	applied, _, err := inbox.SetFlagsIfUnchanged(ctx, acc.ID, id, mail.FlagSeen, 0, meta.ModSeq)
+	applied, _, err := inbox.SetFlagsIfUnchanged(ctx, acc.ID, id, mail.FlagSeen, 0, nil, nil, meta.ModSeq)
 	if err != nil || !applied {
 		t.Fatalf("apply %v err %v", applied, err)
 	}
 	meta, _ = inbox.GetMeta(ctx, acc.ID, id)
 
-	applied, _, err = inbox.SetFlagsIfUnchanged(ctx, acc.ID, id, mail.FlagFlagged, 0, meta.ModSeq-1)
+	applied, _, err = inbox.SetFlagsIfUnchanged(ctx, acc.ID, id, mail.FlagFlagged, 0, nil, nil, meta.ModSeq-1)
 	if err != nil || applied {
 		t.Fatalf("conflict apply %v err %v", applied, err)
 	}

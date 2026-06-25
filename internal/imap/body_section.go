@@ -126,6 +126,14 @@ done:
 	return strings.Fields(inner), true
 }
 
+// bodyFetchResponseName maps BODY.PEEK[...] request items to BODY[...] in FETCH responses (RFC 3501).
+func bodyFetchResponseName(itemName string) string {
+	if len(itemName) >= 10 && strings.EqualFold(itemName[:10], "BODY.PEEK[") {
+		return "BODY[" + itemName[10:]
+	}
+	return itemName
+}
+
 // extractBodySection returns bytes for an IMAP BODY section specifier.
 func extractBodySection(raw []byte, section string, hdrFields []string) []byte {
 	section = strings.TrimSpace(section)

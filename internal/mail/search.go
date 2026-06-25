@@ -4,6 +4,7 @@ package mail
 import (
 	"bytes"
 	"net/mail"
+	"strings"
 	"time"
 )
 
@@ -36,9 +37,14 @@ type SearchCriteria struct {
 	Headers []HeaderCriterion
 	Larger  *uint32 // RFC822 size strictly greater than this
 	Smaller *uint32 // RFC822 size strictly less than this
-	Since   *time.Time // inclusive, start of day UTC
-	Before  *time.Time // exclusive, start of day UTC
-	On      *time.Time // calendar day UTC
+	Since   *time.Time // inclusive, start of day UTC (ReceivedAt)
+	Before  *time.Time // exclusive, start of day UTC (ReceivedAt)
+	On      *time.Time // calendar day UTC (ReceivedAt)
+	SentSince  *time.Time // Date header, inclusive day UTC
+	SentBefore *time.Time // Date header, exclusive day UTC
+	SentOn     *time.Time // Date header, calendar day UTC
+	Keyword    string     // KEYWORD criterion
+	Unkeyword  string     // UNKEYWORD criterion
 }
 
 // RawLoader loads RFC 822 bytes for header SEARCH criteria.
@@ -108,9 +114,15 @@ func matchSearchOne(m Message, c SearchCriteria, load RawLoader) bool {
 		return false
 	}
 	if c.Since != nil || c.Before != nil || c.On != nil {
-		if !matchSearchDate(m.Meta.ReceivedAt, c) {
+		if !matchSearchDay(time.Unix(m.Meta.ReceivedAt, 0).UTC(), c.Since, c.Before, c.On) {
 			return false
 		}
+	}
+	if c.Keyword != "" && !HasKeyword(m.Meta, c.Keyword) {
+		return false
+	}
+	if c.Unkeyword != "" && HasKeyword(m.Meta, c.Unkeyword) {
+		return false
 	}
 	if needsRawSearch(c) {
 		if load == nil {
@@ -129,6 +141,12 @@ func matchSearchOne(m Message, c SearchCriteria, load RawLoader) bool {
 		if needsHeaderSearch(c) && !matchSearchHeaders(raw, c) {
 			return false
 		}
+		if c.SentSince != nil || c.SentBefore != nil || c.SentOn != nil {
+			sent, ok := parseMessageDate(raw)
+			if !ok || !matchSearchDay(sent, c.SentSince, c.SentBefore, c.SentOn) {
+				return false
+			}
+		}
 	}
 	if c.All {
 		return true
@@ -139,12 +157,15 @@ func matchSearchOne(m Message, c SearchCriteria, load RawLoader) bool {
 func searchHasCriterion(c SearchCriteria) bool {
 	return c.UIDSet || c.Seen != nil || c.Flagged != nil || c.Answered != nil ||
 		c.Deleted != nil || c.Draft != nil || c.Recent != nil ||
+		c.Keyword != "" || c.Unkeyword != "" ||
 		needsRawSearch(c) || c.Larger != nil || c.Smaller != nil ||
-		c.Since != nil || c.Before != nil || c.On != nil
+		c.Since != nil || c.Before != nil || c.On != nil ||
+		c.SentSince != nil || c.SentBefore != nil || c.SentOn != nil
 }
 
 func needsRawSearch(c SearchCriteria) bool {
-	return c.Text != "" || c.Body != "" || needsHeaderSearch(c)
+	return c.Text != "" || c.Body != "" || needsHeaderSearch(c) ||
+		c.SentSince != nil || c.SentBefore != nil || c.SentOn != nil
 }
 
 func needsHeaderSearch(c SearchCriteria) bool {
@@ -152,28 +173,43 @@ func needsHeaderSearch(c SearchCriteria) bool {
 		c.Subject != "" || len(c.Headers) > 0
 }
 
-func matchSearchDate(receivedAt int64, c SearchCriteria) bool {
-	t := time.Unix(receivedAt, 0).UTC()
+func matchSearchDay(t time.Time, since, before, on *time.Time) bool {
 	day := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
-	if c.On != nil {
-		on := time.Date(c.On.Year(), c.On.Month(), c.On.Day(), 0, 0, 0, 0, time.UTC)
-		if !day.Equal(on) {
+	if on != nil {
+		onDay := time.Date(on.Year(), on.Month(), on.Day(), 0, 0, 0, 0, time.UTC)
+		if !day.Equal(onDay) {
 			return false
 		}
 	}
-	if c.Since != nil {
-		since := time.Date(c.Since.Year(), c.Since.Month(), c.Since.Day(), 0, 0, 0, 0, time.UTC)
-		if day.Before(since) {
+	if since != nil {
+		sinceDay := time.Date(since.Year(), since.Month(), since.Day(), 0, 0, 0, 0, time.UTC)
+		if day.Before(sinceDay) {
 			return false
 		}
 	}
-	if c.Before != nil {
-		before := time.Date(c.Before.Year(), c.Before.Month(), c.Before.Day(), 0, 0, 0, 0, time.UTC)
-		if !day.Before(before) {
+	if before != nil {
+		beforeDay := time.Date(before.Year(), before.Month(), before.Day(), 0, 0, 0, 0, time.UTC)
+		if !day.Before(beforeDay) {
 			return false
 		}
 	}
 	return true
+}
+
+func parseMessageDate(raw []byte) (time.Time, bool) {
+	msg, err := mail.ReadMessage(bytes.NewReader(raw))
+	if err != nil {
+		return time.Time{}, false
+	}
+	date := strings.TrimSpace(msg.Header.Get("Date"))
+	if date == "" {
+		return time.Time{}, false
+	}
+	t, err := mail.ParseDate(date)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return t.UTC(), true
 }
 
 func matchSearchHeaders(raw []byte, c SearchCriteria) bool {

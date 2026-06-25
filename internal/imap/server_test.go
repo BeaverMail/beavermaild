@@ -76,8 +76,15 @@ func TestIMAPFetchInbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !strings.Contains(line, "UID 1") || !strings.Contains(line, "RFC822.SIZE") || strings.Contains(line, "BODY[]") {
+		t.Fatalf("fetch metadata %q", line)
+	}
+	line, err = read.ReadString('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !strings.HasPrefix(line, "* 1 FETCH") || !strings.Contains(line, "BODY[]") {
-		t.Fatalf("fetch prelude %q", line)
+		t.Fatalf("fetch body prelude %q", line)
 	}
 	n, err := literalSize(line)
 	if err != nil {
@@ -99,7 +106,10 @@ func TestIMAPFetchInbox(t *testing.T) {
 	}
 	expectPrefix(t, read, "a5 OK")
 	send(t, conn, "a6 FETCH 1 (FLAGS)")
-	expectPrefix(t, read, "* 1 FETCH (FLAGS (\\Seen))")
+	line, err = read.ReadString('\n')
+	if err != nil || !strings.Contains(line, `FLAGS (\Seen)`) || !strings.Contains(line, "MODSEQ (") {
+		t.Fatalf("fetch flags %q err %v", line, err)
+	}
 	expectPrefix(t, read, "a6 OK")
 	send(t, conn, "a7 SEARCH ALL")
 	expectPrefix(t, read, "* SEARCH 1")
@@ -108,7 +118,10 @@ func TestIMAPFetchInbox(t *testing.T) {
 	expectPrefix(t, read, "* SEARCH")
 	expectPrefix(t, read, "a8 OK")
 	send(t, conn, "a9 UID FETCH 1 (UID FLAGS)")
-	expectPrefix(t, read, "* 1 FETCH (UID 1 FLAGS (\\Seen))")
+	line, err = read.ReadString('\n')
+	if err != nil || !strings.Contains(line, "UID 1") || !strings.Contains(line, `FLAGS (\Seen)`) || !strings.Contains(line, "MODSEQ (") {
+		t.Fatalf("uid fetch %q err %v", line, err)
+	}
 	expectPrefix(t, read, "a9 OK")
 	send(t, conn, "aa LIST \"\" \"*\"")
 	expectPrefix(t, read, "* LIST")
@@ -293,7 +306,8 @@ func literalSize(line string) (int, error) {
 	if i < 0 || j <= i {
 		return 0, fmt.Errorf("imap: no literal size in %q", line)
 	}
-	return strconv.Atoi(line[i+1 : j])
+	size := strings.TrimSuffix(line[i+1:j], "+")
+	return strconv.Atoi(size)
 }
 
 func send(t *testing.T, conn net.Conn, line string) {

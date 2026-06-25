@@ -199,7 +199,7 @@ func parseSearchAtom(tokens []string) (mail.SearchCriteria, int, bool) {
 			return mail.SearchCriteria{}, 0, false
 		}
 		return c, 3, true
-	case "SINCE", "BEFORE", "ON":
+	case "SINCE", "BEFORE", "ON", "SENTSINCE", "SENTBEFORE", "SENTON":
 		if len(tokens) < 2 {
 			return mail.SearchCriteria{}, 0, false
 		}
@@ -214,6 +214,25 @@ func parseSearchAtom(tokens []string) (mail.SearchCriteria, int, bool) {
 			c.Before = &t
 		case "ON":
 			c.On = &t
+		case "SENTSINCE":
+			c.SentSince = &t
+		case "SENTBEFORE":
+			c.SentBefore = &t
+		case "SENTON":
+			c.SentOn = &t
+		}
+		if !searchAtomHasCriterion(c) {
+			return mail.SearchCriteria{}, 0, false
+		}
+		return c, 2, true
+	case "KEYWORD", "UNKEYWORD":
+		if len(tokens) < 2 {
+			return mail.SearchCriteria{}, 0, false
+		}
+		if key == "KEYWORD" {
+			c.Keyword = tokens[1]
+		} else {
+			c.Unkeyword = tokens[1]
 		}
 		if !searchAtomHasCriterion(c) {
 			return mail.SearchCriteria{}, 0, false
@@ -234,5 +253,7 @@ func searchAtomHasCriterion(c mail.SearchCriteria) bool {
 		c.From != "" || c.To != "" || c.CC != "" || c.BCC != "" || c.Subject != "" ||
 		c.Text != "" || c.Body != "" || len(c.Headers) > 0 ||
 		c.Larger != nil || c.Smaller != nil ||
-		c.Since != nil || c.Before != nil || c.On != nil
+		c.Since != nil || c.Before != nil || c.On != nil ||
+		c.SentSince != nil || c.SentBefore != nil || c.SentOn != nil ||
+		c.Keyword != "" || c.Unkeyword != ""
 }
