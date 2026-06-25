@@ -45,6 +45,9 @@ func (s *session) cmdAppend(ctx context.Context, tag, arg string) error {
 
 	uid, err := s.inbox.Append(ctx, s.principal.AccountID, mbox.ID, raw, flags, internalDate)
 	if err != nil {
+		if errors.Is(err, mail.ErrOverQuota) {
+			return s.tagged(tag, "NO [OVERQUOTA] APPEND failed")
+		}
 		return err
 	}
 

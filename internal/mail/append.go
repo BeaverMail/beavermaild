@@ -24,6 +24,9 @@ func (ib *Inbox) Append(ctx context.Context, accountID, mailboxID uint32, raw []
 	if _, err := ib.mailboxRecord(ctx, accountID, mailboxID); err != nil {
 		return 0, err
 	}
+	if err := ib.checkQuota(ctx, accountID, uint64(len(raw)), 1); err != nil {
+		return 0, err
+	}
 
 	hash, err := ib.blobs.Put(ctx, raw)
 	if err != nil {
@@ -63,6 +66,9 @@ func (ib *Inbox) Append(ctx context.Context, accountID, mailboxID uint32, raw []
 		return 0, err
 	}
 	if err := ib.store.Commit(ctx, batch); err != nil {
+		return 0, err
+	}
+	if err := ib.addQuotaUsage(ctx, accountID, uint64(len(raw)), 1); err != nil {
 		return 0, err
 	}
 	return emailID, nil

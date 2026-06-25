@@ -30,4 +30,5 @@ const (
 	replyParamNotSupported  = "555 5.5.4 Extension parameter not supported"
 	replyLocalError         = "451 4.3.0 Local error in processing"
 	replyOutboundUnavailable = "451 4.3.0 Outbound delivery unavailable"
+	replyMailboxFull         = "552 5.2.2 Mailbox full"
 )

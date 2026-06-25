@@ -59,13 +59,25 @@ func (ib *Inbox) CopyMessages(ctx context.Context, accountID uint32, emailIDs []
 	if _, err := ib.mailboxRecord(ctx, accountID, destMailboxID); err != nil {
 		return nil, err
 	}
-	var newIDs []uint32
-	batch := storage.NewBatch().WithAccount(accountID)
+	var addBytes uint64
+	var addMsgs uint32
+	metas := make([]storage.EmailMeta, 0, len(emailIDs))
 	for _, srcID := range emailIDs {
 		meta, err := ib.GetMeta(ctx, accountID, srcID)
 		if err != nil {
 			return nil, err
 		}
+		metas = append(metas, meta)
+		addBytes += uint64(meta.Size)
+		addMsgs++
+	}
+	if err := ib.checkQuota(ctx, accountID, addBytes, addMsgs); err != nil {
+		return nil, err
+	}
+	var newIDs []uint32
+	batch := storage.NewBatch().WithAccount(accountID)
+	for i := range emailIDs {
+		meta := metas[i]
 		newID, err := ib.nextEmailID(ctx, accountID)
 		if err != nil {
 			return nil, err
@@ -88,6 +100,9 @@ func (ib *Inbox) CopyMessages(ctx context.Context, accountID uint32, emailIDs []
 		newIDs = append(newIDs, newID)
 	}
 	if err := ib.store.Commit(ctx, batch); err != nil {
+		return nil, err
+	}
+	if err := ib.addQuotaUsage(ctx, accountID, addBytes, addMsgs); err != nil {
 		return nil, err
 	}
 	return newIDs, nil

@@ -229,6 +229,14 @@ func (s *session) run(ctx context.Context) error {
 			if err := s.cmdThread(ctx, tag, arg, false); err != nil {
 				return err
 			}
+		case "GETQUOTA":
+			if err := s.cmdGetQuota(ctx, tag, arg); err != nil {
+				return err
+			}
+		case "GETQUOTAROOT":
+			if err := s.cmdGetQuotaRoot(ctx, tag, arg); err != nil {
+				return err
+			}
 		case "UID":
 			sub, rest := splitCommand(arg)
 			switch sub {
@@ -302,7 +310,7 @@ func (s *session) capabilityLine() string {
 		caps = append(caps, "LOGINDISABLED")
 	}
 	if s.principal.AccountID != 0 {
-		caps = append(caps, "IDLE", "NAMESPACE", "UIDPLUS", "UNSELECT", "SPECIAL-USE", "CONDSTORE", "SORT", "THREAD=REFERENCES")
+		caps = append(caps, "IDLE", "NAMESPACE", "UIDPLUS", "UNSELECT", "SPECIAL-USE", "CONDSTORE", "SORT", "THREAD=REFERENCES", "QUOTA")
 	}
 	return "CAPABILITY " + strings.Join(caps, " ")
 }

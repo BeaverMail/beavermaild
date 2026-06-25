@@ -501,6 +501,13 @@ func (s *session) finishDelivery(ctx context.Context, raw []byte) error {
 			continue
 		}
 		if _, err := s.inbox.Deliver(ctx, t.accountID, raw); err != nil {
+			if errors.Is(err, mail.ErrOverQuota) {
+				if err := s.writef(replyMailboxFull); err != nil {
+					return err
+				}
+				s.reset()
+				return nil
+			}
 			s.log.Warn("deliver failed", "rcpt", t.address, slog.Any("err", err))
 			if err := s.writef(replyLocalError); err != nil {
 				return err

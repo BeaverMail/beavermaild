@@ -13,8 +13,9 @@ import (
 
 // Inbox stores received messages for an account.
 type Inbox struct {
-	store storage.Store
-	blobs *blob.FS
+	store        storage.Store
+	blobs        *blob.FS
+	quotaDefault QuotaDefaults
 }
 
 // NewInbox returns a delivery helper over store and blobs.
@@ -26,6 +27,9 @@ func NewInbox(store storage.Store, blobs *blob.FS) *Inbox {
 func (ib *Inbox) Deliver(ctx context.Context, accountID uint32, raw []byte) (uint32, error) {
 	if len(raw) == 0 {
 		return 0, fmt.Errorf("mail: empty message")
+	}
+	if err := ib.checkQuota(ctx, accountID, uint64(len(raw)), 1); err != nil {
+		return 0, err
 	}
 
 	hash, err := ib.blobs.Put(ctx, raw)
@@ -63,6 +67,9 @@ func (ib *Inbox) Deliver(ctx context.Context, accountID uint32, raw []byte) (uin
 		return 0, err
 	}
 	if err := ib.store.Commit(ctx, batch); err != nil {
+		return 0, err
+	}
+	if err := ib.addQuotaUsage(ctx, accountID, uint64(len(raw)), 1); err != nil {
 		return 0, err
 	}
 	return emailID, nil

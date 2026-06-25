@@ -23,6 +23,7 @@ type Config struct {
 	SMTP     SMTPConfig  `json:"smtp"`
 	IMAP     IMAPConfig  `json:"imap"`
 	Queue    QueueConfig `json:"queue"`
+	Quota    QuotaConfig `json:"quota"`
 }
 
 // TLSConfig holds PEM paths or ACME hostnames for server TLS.
@@ -59,6 +60,12 @@ type QueueConfig struct {
 	RetryIntervals []string `json:"retry_intervals"`
 	MaxLifetime    string   `json:"max_lifetime"`
 	RunDelay       string   `json:"run_delay"`
+}
+
+// QuotaConfig holds default per-account storage limits (0 = unlimited).
+type QuotaConfig struct {
+	DefaultStorageBytes uint64 `json:"default_storage_bytes"`
+	DefaultMessages     uint32 `json:"default_messages"`
 }
 
 // Secrets holds generated credentials written by beaver init.

@@ -39,6 +39,10 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 	blobs := blob.NewFS(cfg.BlobDir())
 	dir := directory.NewLocal(store)
 	inbox := mail.NewInbox(store, blobs)
+	inbox.SetQuotaDefaults(mail.QuotaDefaults{
+		StorageBytes: cfg.Quota.DefaultStorageBytes,
+		Messages:     cfg.Quota.DefaultMessages,
+	})
 	queue := mail.NewQueue(store, blobs)
 
 	certs, err := openTLSCerts(cfg)
