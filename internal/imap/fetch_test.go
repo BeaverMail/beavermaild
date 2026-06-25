@@ -9,21 +9,26 @@ func TestParseFetchItemsPeekBody(t *testing.T) {
 	t.Parallel()
 
 	_, items, ok := parseFetchArg(`1 (UID FLAGS RFC822.SIZE BODY.PEEK[])`)
-	if !ok || !items.uid || !items.flags || !items.size || !items.body {
+	if !ok || !items.uid || !items.flags || !items.size || len(items.bodySections) != 1 {
 		t.Fatalf("peek in parens: ok=%v items=%+v", ok, items)
 	}
 
 	_, items, ok = parseFetchArg(`1 BODY.PEEK[]`)
-	if !ok || !items.body || items.uid {
+	if !ok || len(items.bodySections) != 1 || items.uid {
 		t.Fatalf("bare peek: ok=%v items=%+v", ok, items)
 	}
 
 	_, items, ok = parseFetchArg(`1 (UID FLAGS RFC822.SIZE BODY.PEEK[HEADER.FIELDS (SUBJECT)])`)
-	if !ok || !items.uid || items.body || items.headerFields == nil {
+	if !ok || !items.uid || len(items.bodySections) != 1 || items.bodySections[0].hdrFields == nil {
 		t.Fatalf("header fields only: ok=%v items=%+v", ok, items)
 	}
-	if len(items.headerFields) != 1 || items.headerFields[0] != "SUBJECT" {
-		t.Fatalf("fields %v", items.headerFields)
+	if len(items.bodySections[0].hdrFields) != 1 || items.bodySections[0].hdrFields[0] != "SUBJECT" {
+		t.Fatalf("fields %v", items.bodySections[0].hdrFields)
+	}
+
+	_, items, ok = parseFetchArg(`1 (BODY.PEEK[1] BODY.PEEK[2])`)
+	if !ok || len(items.bodySections) != 2 {
+		t.Fatalf("sections: %+v ok=%v", items.bodySections, ok)
 	}
 
 	_, items, ok = parseFetchArg(`1 (UID FLAGS RFC822.SIZE ENVELOPE)`)
@@ -32,16 +37,18 @@ func TestParseFetchItemsPeekBody(t *testing.T) {
 	}
 }
 
-func TestWantsFullBody(t *testing.T) {
+func TestWantsFullBodySection(t *testing.T) {
 	t.Parallel()
 
-	if !wantsFullBody("BODY.PEEK[]") {
+	secs := parseAllBodyFetches("BODY.PEEK[]")
+	if len(secs) != 1 || secs[0].section != "" {
 		t.Fatal("peek full body")
 	}
-	if wantsFullBody("BODY.PEEK[HEADER.FIELDS (SUBJECT)]") {
+	secs = parseAllBodyFetches("BODY.PEEK[HEADER.FIELDS (SUBJECT)]")
+	if len(secs) != 1 || secs[0].section != "HEADER.FIELDS" {
 		t.Fatal("header only")
 	}
-	if wantsFullBody("RFC822.SIZE") {
+	if len(parseAllBodyFetches("RFC822.SIZE")) != 0 {
 		t.Fatal("size only")
 	}
 }

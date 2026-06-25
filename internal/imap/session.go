@@ -715,7 +715,7 @@ func (s *session) resolveIndices(set seqSet, byUID bool) []int {
 }
 
 func (s *session) writeFetch(ctx context.Context, seq int, msg mail.Message, items fetchItems) error {
-	needRaw := items.body || items.envelope || items.bodystructure || items.headerFields != nil
+	needRaw := len(items.bodySections) > 0 || items.envelope || items.bodystructure
 	var raw []byte
 	if needRaw {
 		var err error
@@ -748,7 +748,7 @@ func (s *session) writeFetch(ctx context.Context, seq int, msg mail.Message, ite
 		parts = append(parts, formatModSeq(msg.Meta.ModSeq))
 	}
 
-	hasLiteral := items.body || items.headerFields != nil
+	hasLiteral := len(items.bodySections) > 0
 	if !hasLiteral {
 		return s.untagged(fmt.Sprintf("%d FETCH (%s)", seq, strings.Join(parts, " ")))
 	}
@@ -765,23 +765,15 @@ func (s *session) writeFetch(ctx context.Context, seq int, msg mail.Message, ite
 	if len(parts) > 0 {
 		sep = " "
 	}
-	if items.headerFields != nil {
-		hdr := extractHeaderFields(raw, items.headerFields)
-		if _, err := fmt.Fprintf(s.conn, "%s%s {%d}\r\n", sep, headerFieldsItemName(items.headerFields), len(hdr)); err != nil {
+	for _, bs := range items.bodySections {
+		data := extractBodySection(raw, bs.section, bs.hdrFields)
+		if _, err := fmt.Fprintf(s.conn, "%s%s {%d}\r\n", sep, bs.itemName, len(data)); err != nil {
 			return err
 		}
-		if _, err := s.conn.Write(hdr); err != nil {
+		if _, err := s.conn.Write(data); err != nil {
 			return err
 		}
 		sep = " "
-	}
-	if items.body {
-		if _, err := fmt.Fprintf(s.conn, "%sBODY[] {%d}\r\n", sep, len(raw)); err != nil {
-			return err
-		}
-		if _, err := s.conn.Write(raw); err != nil {
-			return err
-		}
 	}
 	_, err := fmt.Fprintf(s.conn, ")\r\n")
 	return err
@@ -925,8 +917,8 @@ func parseQuoted(s string) (val, rest string, ok bool) {
 }
 
 type fetchItems struct {
-	uid, flags, size, body, envelope, bodystructure, internalDate, modseq bool
-	headerFields                                                     []string // non-nil when HEADER.FIELDS was requested
+	uid, flags, size, envelope, bodystructure, internalDate, modseq bool
+	bodySections                                                   []bodySectionFetch
 }
 
 func parseFetchArg(arg string) (setStr string, items fetchItems, ok bool) {
@@ -936,7 +928,7 @@ func parseFetchArg(arg string) (setStr string, items fetchItems, ok bool) {
 		if _, err := strconv.ParseUint(arg, 10, 32); err != nil {
 			return "", items, false
 		}
-		return arg, fetchItems{body: true}, true
+		return arg, fetchItems{bodySections: []bodySectionFetch{{itemName: "BODY[]", section: ""}}}, true
 	}
 	setStr = strings.TrimSpace(arg[:i])
 	items, ok = parseFetchItems(arg[i+1:])
@@ -949,26 +941,16 @@ func parseFetchItems(rest string) (fetchItems, bool) {
 	items.uid = strings.Contains(upper, "UID")
 	items.flags = strings.Contains(upper, "FLAGS")
 	items.size = strings.Contains(upper, "RFC822.SIZE")
-	items.body = wantsFullBody(upper)
+	items.bodySections = parseAllBodyFetches(rest)
 	items.envelope = strings.Contains(upper, "ENVELOPE")
 	items.bodystructure = strings.Contains(upper, "BODYSTRUCTURE")
 	items.internalDate = strings.Contains(upper, "INTERNALDATE")
 	items.modseq = strings.Contains(upper, "MODSEQ")
-	if fields, ok := parseHeaderFieldsFetch(rest); ok {
-		items.headerFields = fields
-	}
-	if !items.uid && !items.flags && !items.size && !items.body && !items.envelope &&
-		!items.bodystructure && !items.internalDate && !items.modseq && items.headerFields == nil {
+	if !items.uid && !items.flags && !items.size && len(items.bodySections) == 0 && !items.envelope &&
+		!items.bodystructure && !items.internalDate && !items.modseq {
 		return items, false
 	}
 	return items, true
-}
-
-func wantsFullBody(upper string) bool {
-	if strings.Contains(upper, "RFC822") && !strings.Contains(upper, "RFC822.SIZE") && !strings.Contains(upper, "RFC822.HEADER") {
-		return true
-	}
-	return strings.Contains(upper, "BODY[]") || strings.Contains(upper, "BODY.PEEK[]")
 }
 
 type storeMode int
