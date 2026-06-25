@@ -104,16 +104,7 @@ func (s *session) run(ctx context.Context) error {
 				}
 				continue
 			}
-			mboxes, err := s.inbox.ListMailboxes(ctx, s.principal.AccountID)
-			if err != nil {
-				return err
-			}
-			for _, mb := range mboxes {
-				if err := s.untagged(fmt.Sprintf(`LIST (\HasNoChildren) "/" %s`, formatListMailbox(mb.Name))); err != nil {
-					return err
-				}
-			}
-			if err := s.tagged(tag, "OK LIST completed"); err != nil {
+			if err := s.cmdList(ctx, tag, arg); err != nil {
 				return err
 			}
 		case "SELECT":
@@ -241,7 +232,7 @@ func (s *session) capabilityLine() string {
 		caps = append(caps, "LOGINDISABLED")
 	}
 	if s.principal.AccountID != 0 {
-		caps = append(caps, "IDLE", "NAMESPACE", "UIDPLUS", "UNSELECT")
+		caps = append(caps, "IDLE", "NAMESPACE", "UIDPLUS", "UNSELECT", "SPECIAL-USE")
 	}
 	return "CAPABILITY " + strings.Join(caps, " ")
 }
@@ -479,16 +470,18 @@ func (s *session) cmdSearch(ctx context.Context, tag, arg string, byUID bool) er
 	if !s.selected {
 		return s.tagged(tag, "NO not selected")
 	}
-	_ = ctx
 	criteria, ok := parseSearchCriteria(arg)
 	if !ok {
 		return s.tagged(tag, "BAD SEARCH syntax")
 	}
+	load := mail.RawLoader(func(m mail.Message) ([]byte, error) {
+		return s.inbox.LoadRaw(ctx, m.Meta)
+	})
 	var nums []uint32
 	if byUID {
-		nums = mail.MatchSearchUID(s.messages, criteria)
+		nums = mail.MatchSearchUIDWithLoader(s.messages, criteria, load)
 	} else {
-		nums = mail.MatchSearch(s.messages, criteria)
+		nums = mail.MatchSearchWithLoader(s.messages, criteria, load)
 	}
 	if err := s.untagged(formatSearch(nums)); err != nil {
 		return err

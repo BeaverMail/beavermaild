@@ -4,20 +4,25 @@ package imap
 import (
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/BeaverMail/beaver/internal/mail"
 )
 
-// parseSearchCriteria parses SEARCH filters (ALL, flag criteria, UID ranges).
+// parseSearchCriteria parses SEARCH filters (flags, UID, header, date).
 func parseSearchCriteria(arg string) (mail.SearchCriteria, bool) {
 	arg = strings.TrimSpace(arg)
 	if arg == "" {
 		return mail.SearchCriteria{}, false
 	}
+	tokens := tokenizeSearchArg(arg)
+	if len(tokens) == 0 {
+		return mail.SearchCriteria{}, false
+	}
 	var c mail.SearchCriteria
-	tokens := strings.Fields(strings.ToUpper(arg))
 	for i := 0; i < len(tokens); i++ {
-		switch tokens[i] {
+		key := strings.ToUpper(tokens[i])
+		switch key {
 		case "ALL":
 			c.All = true
 		case "NEW":
@@ -73,15 +78,101 @@ func parseSearchCriteria(arg string) (mail.SearchCriteria, bool) {
 			c.UIDMin = lo
 			c.UIDMax = hi
 			i++
+		case "FROM":
+			if i+1 >= len(tokens) {
+				return mail.SearchCriteria{}, false
+			}
+			c.From = tokens[i+1]
+			i++
+		case "TO":
+			if i+1 >= len(tokens) {
+				return mail.SearchCriteria{}, false
+			}
+			c.To = tokens[i+1]
+			i++
+		case "SUBJECT":
+			if i+1 >= len(tokens) {
+				return mail.SearchCriteria{}, false
+			}
+			c.Subject = tokens[i+1]
+			i++
+		case "SINCE":
+			if i+1 >= len(tokens) {
+				return mail.SearchCriteria{}, false
+			}
+			t, ok := parseIMAPDate(tokens[i+1])
+			if !ok {
+				return mail.SearchCriteria{}, false
+			}
+			c.Since = &t
+			i++
+		case "BEFORE":
+			if i+1 >= len(tokens) {
+				return mail.SearchCriteria{}, false
+			}
+			t, ok := parseIMAPDate(tokens[i+1])
+			if !ok {
+				return mail.SearchCriteria{}, false
+			}
+			c.Before = &t
+			i++
+		case "ON":
+			if i+1 >= len(tokens) {
+				return mail.SearchCriteria{}, false
+			}
+			t, ok := parseIMAPDate(tokens[i+1])
+			if !ok {
+				return mail.SearchCriteria{}, false
+			}
+			c.On = &t
+			i++
 		default:
 			return mail.SearchCriteria{}, false
 		}
 	}
 	if !c.All && c.Seen == nil && !c.UIDSet && c.Flagged == nil && c.Answered == nil &&
-		c.Deleted == nil && c.Draft == nil && c.Recent == nil {
+		c.Deleted == nil && c.Draft == nil && c.Recent == nil &&
+		c.From == "" && c.To == "" && c.Subject == "" &&
+		c.Since == nil && c.Before == nil && c.On == nil {
 		return mail.SearchCriteria{}, false
 	}
 	return c, true
+}
+
+func tokenizeSearchArg(arg string) []string {
+	var tokens []string
+	arg = strings.TrimSpace(arg)
+	for len(arg) > 0 {
+		if arg[0] == '"' {
+			val, rest, ok := parseQuoted(arg)
+			if !ok {
+				return nil
+			}
+			tokens = append(tokens, val)
+			arg = strings.TrimSpace(rest)
+			continue
+		}
+		i := strings.IndexByte(arg, ' ')
+		if i < 0 {
+			tokens = append(tokens, arg)
+			break
+		}
+		tokens = append(tokens, arg[:i])
+		arg = strings.TrimSpace(arg[i+1:])
+	}
+	return tokens
+}
+
+func parseIMAPDate(s string) (time.Time, bool) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return time.Time{}, false
+	}
+	t, err := time.Parse("2-Jan-2006", s)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC), true
 }
 
 func parseUIDSearchRange(tok string) (lo, hi uint32, ok bool) {
