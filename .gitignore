@@ -12,6 +12,7 @@ vendor/
 *.failed
 *_failed
 run.sh
+*.tgz
 
 # Editor / tooling
 .*
