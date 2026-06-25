@@ -647,7 +647,7 @@ func (s *session) resolveIndices(set seqSet, byUID bool) []int {
 }
 
 func (s *session) writeFetch(ctx context.Context, seq int, msg mail.Message, items fetchItems) error {
-	needRaw := items.body || items.envelope || items.headerFields != nil
+	needRaw := items.body || items.envelope || items.bodystructure || items.headerFields != nil
 	var raw []byte
 	if needRaw {
 		var err error
@@ -669,6 +669,12 @@ func (s *session) writeFetch(ctx context.Context, seq int, msg mail.Message, ite
 	}
 	if items.envelope {
 		parts = append(parts, "ENVELOPE "+formatEnvelope(raw))
+	}
+	if items.bodystructure {
+		parts = append(parts, "BODYSTRUCTURE "+formatBodyStructure(raw))
+	}
+	if items.internalDate {
+		parts = append(parts, "INTERNALDATE "+formatInternalDate(msg.Meta.ReceivedAt))
 	}
 
 	hasLiteral := items.body || items.headerFields != nil
@@ -848,8 +854,8 @@ func parseQuoted(s string) (val, rest string, ok bool) {
 }
 
 type fetchItems struct {
-	uid, flags, size, body, envelope bool
-	headerFields                    []string // non-nil when HEADER.FIELDS was requested
+	uid, flags, size, body, envelope, bodystructure, internalDate bool
+	headerFields                                               []string // non-nil when HEADER.FIELDS was requested
 }
 
 func parseFetchArg(arg string) (setStr string, items fetchItems, ok bool) {
@@ -874,10 +880,13 @@ func parseFetchItems(rest string) (fetchItems, bool) {
 	items.size = strings.Contains(upper, "RFC822.SIZE")
 	items.body = wantsFullBody(upper)
 	items.envelope = strings.Contains(upper, "ENVELOPE")
+	items.bodystructure = strings.Contains(upper, "BODYSTRUCTURE")
+	items.internalDate = strings.Contains(upper, "INTERNALDATE")
 	if fields, ok := parseHeaderFieldsFetch(rest); ok {
 		items.headerFields = fields
 	}
-	if !items.uid && !items.flags && !items.size && !items.body && !items.envelope && items.headerFields == nil {
+	if !items.uid && !items.flags && !items.size && !items.body && !items.envelope &&
+		!items.bodystructure && !items.internalDate && items.headerFields == nil {
 		return items, false
 	}
 	return items, true
