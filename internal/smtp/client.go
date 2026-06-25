@@ -67,6 +67,20 @@ func Send(ctx context.Context, addr, mailFrom, rcptTo string, data []byte, opts 
 		}
 	}
 
+	mailLine := mailFromLine(mailFrom, data, caps)
+	rcptLine := fmt.Sprintf("RCPT TO:<%s>", rcptTo)
+
+	if caps.Pipelining {
+		return sendPipelined(conn, r, mailLine, rcptLine, data, caps)
+	}
+	return sendSequential(conn, r, mailLine, rcptLine, data, caps)
+}
+
+func wantSTARTTLS(opts ClientOptions) bool {
+	return opts.STARTTLS || opts.OpportunisticSTARTTLS
+}
+
+func mailFromLine(mailFrom string, data []byte, caps clientCaps) string {
 	mailLine := "MAIL FROM:<>"
 	if strings.TrimSpace(mailFrom) != "" {
 		mailLine = fmt.Sprintf("MAIL FROM:<%s>", mailFrom)
@@ -77,27 +91,106 @@ func Send(ctx context.Context, addr, mailFrom, rcptTo string, data []byte, opts 
 	if caps.EightBitMIME {
 		mailLine += " BODY=8BITMIME"
 	}
+	return mailLine
+}
+
+func sendSequential(conn net.Conn, r *bufio.Reader, mailLine, rcptLine string, data []byte, caps clientCaps) error {
 	if err := cmd(conn, r, mailLine, 250); err != nil {
 		return err
 	}
-	if err := cmd(conn, r, fmt.Sprintf("RCPT TO:<%s>", rcptTo), 250); err != nil {
+	if err := cmd(conn, r, rcptLine, 250); err != nil {
 		return err
 	}
-	if err := cmd(conn, r, "DATA", 354); err != nil {
+	return sendBody(conn, r, data, caps)
+}
+
+func sendPipelined(conn net.Conn, r *bufio.Reader, mailLine, rcptLine string, data []byte, caps clientCaps) error {
+	useBDAT := caps.Chunking && len(data) > 0
+	if err := writeLine(conn, mailLine); err != nil {
 		return err
 	}
-	if err := writeDATABody(conn, data); err != nil {
+	if err := writeLine(conn, rcptLine); err != nil {
+		return err
+	}
+	if useBDAT {
+		if err := writeLine(conn, fmt.Sprintf("BDAT %d LAST", len(data))); err != nil {
+			return err
+		}
+	} else {
+		if err := writeLine(conn, "DATA"); err != nil {
+			return err
+		}
+	}
+	if err := expectCode(r, 250); err != nil {
 		return err
 	}
 	if err := expectCode(r, 250); err != nil {
 		return err
 	}
+	if useBDAT {
+		if err := expectCode(r, 250); err != nil {
+			return err
+		}
+		if err := writeBDATChunk(conn, data); err != nil {
+			return err
+		}
+		if err := expectCode(r, 250); err != nil {
+			return err
+		}
+	} else {
+		if err := expectCode(r, 354); err != nil {
+			return err
+		}
+		if err := writeDATABody(conn, data); err != nil {
+			return err
+		}
+		if err := expectCode(r, 250); err != nil {
+			return err
+		}
+	}
 	_ = cmd(conn, r, "QUIT", 221)
 	return nil
 }
 
-func wantSTARTTLS(opts ClientOptions) bool {
-	return opts.STARTTLS || opts.OpportunisticSTARTTLS
+func sendBody(conn net.Conn, r *bufio.Reader, data []byte, caps clientCaps) error {
+	if caps.Chunking && len(data) > 0 {
+		if err := cmd(conn, r, fmt.Sprintf("BDAT %d LAST", len(data)), 250); err != nil {
+			return err
+		}
+		if err := writeBDATChunk(conn, data); err != nil {
+			return err
+		}
+		if err := expectCode(r, 250); err != nil {
+			return err
+		}
+	} else {
+		if err := cmd(conn, r, "DATA", 354); err != nil {
+			return err
+		}
+		if err := writeDATABody(conn, data); err != nil {
+			return err
+		}
+		if err := expectCode(r, 250); err != nil {
+			return err
+		}
+	}
+	_ = cmd(conn, r, "QUIT", 221)
+	return nil
+}
+
+func writeBDATChunk(conn net.Conn, data []byte) error {
+	if len(data) > 0 {
+		if _, err := conn.Write(data); err != nil {
+			return err
+		}
+	}
+	_, err := conn.Write([]byte("\r\n"))
+	return err
+}
+
+func writeLine(conn net.Conn, line string) error {
+	_, err := fmt.Fprintf(conn, "%s\r\n", line)
+	return err
 }
 
 func startTLS(conn net.Conn, r *bufio.Reader, host string) (net.Conn, error) {
@@ -119,6 +212,8 @@ type clientCaps struct {
 	SizeLimit    int
 	StartTLS     bool
 	EightBitMIME bool
+	Chunking     bool
+	Pipelining   bool
 	Auth         []string
 }
 
@@ -159,6 +254,12 @@ func readEHLOCaps(r *bufio.Reader) (clientCaps, error) {
 		if strings.Contains(upper, "8BITMIME") {
 			caps.EightBitMIME = true
 		}
+		if strings.Contains(upper, "CHUNKING") {
+			caps.Chunking = true
+		}
+		if strings.Contains(upper, "PIPELINING") {
+			caps.Pipelining = true
+		}
 		if strings.HasPrefix(upper, "AUTH ") {
 			caps.Auth = append(caps.Auth, strings.Fields(upper[5:])...)
 		}
@@ -182,7 +283,7 @@ func authPlain(conn net.Conn, r *bufio.Reader, caps clientCaps, user, pass strin
 }
 
 func cmd(conn net.Conn, r *bufio.Reader, line string, want int) error {
-	if _, err := fmt.Fprintf(conn, "%s\r\n", line); err != nil {
+	if err := writeLine(conn, line); err != nil {
 		return err
 	}
 	return expectCode(r, want)
