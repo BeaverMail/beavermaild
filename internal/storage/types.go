@@ -65,6 +65,7 @@ type QueueMessage struct {
 	Size           uint64           `msgpack:"sz"`
 	Ret            string           `msgpack:"ret,omitempty"`  // FULL or HDRS
 	Envid          string           `msgpack:"envid,omitempty"`
+	Body           string           `msgpack:"body,omitempty"` // 7BIT or 8BITMIME
 }
 
 // HasBlob reports whether BlobHash points at filesystem blob storage.

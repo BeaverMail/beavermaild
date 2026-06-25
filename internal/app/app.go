@@ -59,6 +59,7 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 		smtp: smtp.NewServer(log, cfg.SMTPListen(), dir, inbox, queue, cfg.SMTPSubmissionListen(), cfg.SMTPSubmissionTLSListen(), smtp.Options{
 			Certs:       certs,
 			TLSRequired: tlsOpts.required,
+			VRFYEnabled: cfg.SMTPVRFYEnabled(),
 			DataLimits:  smtp.DataLimits{MaxMessageBytes: cfg.SMTPMaxMessageBytes()},
 		}),
 		imap: imap.NewServer(log, cfg.IMAPListen(), dir, inbox, imap.Options{

@@ -45,6 +45,7 @@ type SMTPConfig struct {
 	RelayUser           string `json:"relay_user"`
 	RelayPassword       string `json:"relay_password"`
 	MaxMessageBytes     int    `json:"max_message_bytes"`
+	VRFYEnabled         bool   `json:"vrfy_enabled"` // off by default (RFC 5321: user enumeration risk)
 }
 
 // IMAPConfig holds IMAP listener settings.
@@ -126,6 +127,9 @@ func (c *Config) ApplyEnv() {
 	if v := os.Getenv("BEAVER_SMTP_RELAY_STARTTLS"); v == "1" || strings.EqualFold(v, "true") {
 		c.SMTP.RelayStartTLS = true
 	}
+	if v := os.Getenv("BEAVER_SMTP_VRFY_ENABLED"); v == "1" || strings.EqualFold(v, "true") {
+		c.SMTP.VRFYEnabled = true
+	}
 	if v := os.Getenv("BEAVER_IMAP_LISTEN"); v != "" {
 		c.IMAP.Listen = v
 	}
@@ -188,6 +192,11 @@ func (c *Config) SMTPRelayStartTLS() bool {
 // SMTPMaxMessageBytes returns the inbound DATA size cap (0 lets smtp use its default).
 func (c *Config) SMTPMaxMessageBytes() int {
 	return c.SMTP.MaxMessageBytes
+}
+
+// SMTPVRFYEnabled reports whether VRFY is advertised and honored on SMTP listeners.
+func (c *Config) SMTPVRFYEnabled() bool {
+	return c.SMTP.VRFYEnabled
 }
 
 // IMAPListen returns the plain IMAP bind address.

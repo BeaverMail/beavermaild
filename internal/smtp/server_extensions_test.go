@@ -63,6 +63,10 @@ func TestSMTPEHLOExtensionsInbound(t *testing.T) {
 		"250-DSN",
 		"250-REQUIRETLS",
 		"250-PIPELINING",
+		"250-FUTURERELEASE",
+		"250-DELIVER BY",
+		"250-MT-PRIORITY",
+		"250-NO-SOLICITING",
 		"250-SIZE 4096",
 		"250 2.0.0",
 	} {

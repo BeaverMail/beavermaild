@@ -11,16 +11,18 @@ import (
 
 // MailParams holds optional MAIL FROM ESMTP parameters.
 type MailParams struct {
-	Ret       mail.RetMode
-	Envid     string
-	Body      string
-	SMTPUTF8  bool
+	Ret          mail.RetMode
+	Envid        string
+	Body         string
+	SMTPUTF8     bool
+	Unsupported  string // non-empty: explicit reject reply for advertised extension params
 }
 
 // RcptParams holds optional RCPT TO ESMTP parameters.
 type RcptParams struct {
-	Notify mail.NotifyFlags
-	Orcpt  string
+	Notify      mail.NotifyFlags
+	Orcpt       string
+	Unsupported string
 }
 
 // decodeSMTPBase64 decodes a client base64 line; raw input is accepted on decode failure.
@@ -82,6 +84,8 @@ func parseMailArg(arg string) (address string, declaredSize int, params MailPara
 			params.Envid = field[len(key)+1:]
 		case "BODY":
 			params.Body = val
+		case "HOLD":
+			params.Unsupported = replyParamNotSupported
 		default:
 			return "", 0, MailParams{}, false
 		}
@@ -121,6 +125,12 @@ func parseRcptArg(arg string) (address string, params RcptParams, ok bool) {
 			params.Notify = notify
 		case "ORCPT":
 			params.Orcpt = field[len(key)+1:]
+		case "BY":
+			params.Unsupported = replyParamNotSupported
+		case "MT-PRIORITY":
+			params.Unsupported = replyParamNotSupported
+		case "SOLICIT":
+			params.Unsupported = replyParamNotSupported
 		default:
 			return "", RcptParams{}, false
 		}

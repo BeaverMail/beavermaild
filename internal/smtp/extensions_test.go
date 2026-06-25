@@ -49,6 +49,15 @@ func TestParseMailArg(t *testing.T) {
 		t.Fatalf("notify never: %+v", rcptParams)
 	}
 
+	_, _, params, ok = parseMailArg("FROM:<a@b> HOLD=20260101000000")
+	if !ok || params.Unsupported == "" {
+		t.Fatal("expected HOLD reject marker")
+	}
+	_, rcptParams, ok = parseRcptArg("TO:<x@y> BY=20260101000000")
+	if !ok || rcptParams.Unsupported == "" {
+		t.Fatal("expected BY reject marker")
+	}
+
 	sizeChunk, last, ok := parseBDAT("100 LAST")
 	if !ok || sizeChunk != 100 || !last {
 		t.Fatalf("bdat last: %d last=%v ok=%v", sizeChunk, last, ok)

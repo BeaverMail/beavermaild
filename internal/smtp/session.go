@@ -27,6 +27,7 @@ type session struct {
 
 	secure      bool
 	tlsRequired bool
+	vrfyEnabled bool
 	submission  bool
 	pipelining  bool
 	dataLimits  DataLimits
@@ -56,7 +57,7 @@ type smtpCommand struct {
 	arg string
 }
 
-func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *mail.Inbox, queue *mail.Queue, certs *tlsload.Certs, secure, tlsRequired, submission bool, limits DataLimits) *session {
+func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *mail.Inbox, queue *mail.Queue, certs *tlsload.Certs, secure, tlsRequired, vrfyEnabled, submission bool, limits DataLimits) *session {
 	return &session{
 		log:         log,
 		conn:        conn,
@@ -67,6 +68,7 @@ func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *ma
 		tls:         certs,
 		secure:      secure,
 		tlsRequired: tlsRequired,
+		vrfyEnabled: vrfyEnabled,
 		submission:  submission,
 		dataLimits:  limits.withDefaults(),
 	}
@@ -158,7 +160,7 @@ func (s *session) dispatch(ctx context.Context, cmd, arg string, mailBlocked boo
 	case "HELP":
 		return false, false, s.cmdHelp(arg)
 	case "VRFY":
-		return false, false, s.cmdVrfy(arg)
+		return false, false, s.cmdVrfy(ctx, arg)
 	case "EXPN":
 		return false, false, s.cmdExpn(arg)
 	case "ETRN", "ATRN", "BURL":
@@ -184,6 +186,9 @@ func (s *session) handleMail(ctx context.Context, arg string) (blockMail bool, e
 	addr, declaredSize, mailParams, ok := parseMailArg(arg)
 	if !ok {
 		return true, s.writef(replySyntaxMail)
+	}
+	if mailParams.Unsupported != "" {
+		return true, s.writef(mailParams.Unsupported)
 	}
 	body := strings.ToUpper(strings.TrimSpace(mailParams.Body))
 	switch body {
@@ -233,6 +238,9 @@ func (s *session) handleRcpt(ctx context.Context, arg string, mailBlocked bool) 
 	addr, rcptParams, ok := parseRcptArg(arg)
 	if !ok {
 		return s.writef(replySyntaxRcpt)
+	}
+	if rcptParams.Unsupported != "" {
+		return s.writef(rcptParams.Unsupported)
 	}
 	if s.mailFrom == "" {
 		return s.writef(replyBadSequence)
@@ -319,7 +327,14 @@ func (s *session) writeEHLO(extended bool) error {
 		"250-DSN",
 		"250-REQUIRETLS",
 		"250-PIPELINING",
+		"250-FUTURERELEASE",
+		"250-DELIVER BY",
+		"250-MT-PRIORITY",
+		"250-NO-SOLICITING",
 		fmt.Sprintf("250-SIZE %d", s.dataLimits.MaxMessageBytes),
+	}
+	if s.vrfyEnabled {
+		lines = append(lines, "250-VRFY", "250-EXPN")
 	}
 	if s.tls != nil && !s.secure {
 		lines = append(lines, "250-STARTTLS")
@@ -558,6 +573,7 @@ func (s *session) buildEnvelopeDSN(remotes []string) mail.EnvelopeDSN {
 		ReturnPath: s.mailFrom,
 		Ret:        s.mailRet,
 		Envid:      s.mailEnvid,
+		Body:       s.mailBody,
 	}
 	remoteSet := make(map[string]rcptTarget, len(remotes))
 	for _, t := range s.rcpt {

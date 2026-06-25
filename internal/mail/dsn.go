@@ -41,6 +41,7 @@ type EnvelopeDSN struct {
 	ReturnPath string
 	Ret        RetMode
 	Envid      string
+	Body       string // 7BIT or 8BITMIME from MAIL FROM BODY=
 	Recipients []RcptDSN
 }
 

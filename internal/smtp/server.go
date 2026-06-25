@@ -12,10 +12,11 @@ import (
 	"github.com/BeaverMail/beaver/internal/tlsload"
 )
 
-// Options configures optional TLS for SMTP listeners.
+// Options configures optional TLS and protocol knobs for SMTP listeners.
 type Options struct {
 	Certs       *tlsload.Certs
 	TLSRequired bool
+	VRFYEnabled bool
 	DataLimits  DataLimits
 }
 
@@ -30,6 +31,7 @@ type Server struct {
 	queue               *mail.Queue
 	certs               *tlsload.Certs
 	tlsRequired         bool
+	vrfyEnabled         bool
 	dataLimits          DataLimits
 }
 
@@ -46,6 +48,7 @@ func NewServer(log *slog.Logger, addr string, dir *directory.Local, inbox *mail.
 		queue:               queue,
 		certs:               opts.Certs,
 		tlsRequired:         opts.TLSRequired,
+		vrfyEnabled:         opts.VRFYEnabled,
 		dataLimits:          opts.DataLimits.withDefaults(),
 	}
 }
@@ -134,7 +137,7 @@ func (s *Server) serve(ctx context.Context, slots []listenerSlot) error {
 
 func (s *Server) serveConn(ctx context.Context, conn net.Conn, secure, submission bool) {
 	defer conn.Close()
-	sess := newSession(s.log, conn, s.dir, s.inbox, s.queue, s.certs, secure, s.tlsRequired, submission, s.dataLimits)
+	sess := newSession(s.log, conn, s.dir, s.inbox, s.queue, s.certs, secure, s.tlsRequired, s.vrfyEnabled, submission, s.dataLimits)
 	if err := sess.run(ctx); err != nil && ctx.Err() == nil {
 		s.log.Debug("smtp session", slog.Any("err", err))
 	}

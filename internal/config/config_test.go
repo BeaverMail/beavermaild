@@ -75,3 +75,12 @@ func TestSMTPRelayEnv(t *testing.T) {
 		t.Fatalf("relay opts user=%q pass=%q starttls=%v", cfg.SMTPRelayUser(), cfg.SMTPRelayPassword(), cfg.SMTPRelayStartTLS())
 	}
 }
+
+func TestSMTPVRFYEnv(t *testing.T) {
+	cfg := config.Default(t.TempDir())
+	t.Setenv("BEAVER_SMTP_VRFY_ENABLED", "true")
+	cfg.ApplyEnv()
+	if !cfg.SMTPVRFYEnabled() {
+		t.Fatal("expected vrfy enabled")
+	}
+}

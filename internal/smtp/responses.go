@@ -27,6 +27,7 @@ const (
 	replyMessageTooLarge    = "552 5.3.4 Message size exceeds fixed maximum message size"
 	replyBinaryNotSupported = "555 5.6.1 BINARYMIME not supported"
 	replyUTF8Required       = "553 5.6.7 Non-ASCII addresses require SMTPUTF8"
+	replyParamNotSupported  = "555 5.5.4 Extension parameter not supported"
 	replyLocalError         = "451 4.3.0 Local error in processing"
 	replyOutboundUnavailable = "451 4.3.0 Outbound delivery unavailable"
 )
