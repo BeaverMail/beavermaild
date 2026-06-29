@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"text/tabwriter"
 
 	"github.com/BeaverMail/beaver/internal/app"
 	"github.com/BeaverMail/beaver/internal/cli"
@@ -500,6 +501,8 @@ func runAccount(args []string) int {
 	switch args[0] {
 	case "create":
 		return runAccountCreate(args[1:])
+	case "info":
+		return runAccountInfo(args[1:])
 	default:
 		accountUsage()
 		return cli.ExitUsage
@@ -558,10 +561,115 @@ func runAccountCreate(args []string) int {
 	return cli.ExitOK
 }
 
+func runAccountInfo(args []string) int {
+	fs := flag.NewFlagSet("account info", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	configPath := fs.String("config", filepath.Join(config.DefaultDataDir, "config.json"), "config file path")
+	email := fs.String("email", "", "account email address")
+	asJSON := fs.Bool("json", false, "emit JSON on stdout")
+	if err := fs.Parse(args); err != nil {
+		return cli.ExitUsage
+	}
+	if len(fs.Args()) != 0 || *email == "" {
+		accountInfoUsage()
+		return cli.ExitUsage
+	}
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "account info: load config: %v\n", err)
+		return cli.ExitError
+	}
+
+	ctx := context.Background()
+	dir, inbox, closeStore, err := openMail(ctx, cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "account info: %v\n", err)
+		return cli.ExitError
+	}
+	defer closeStore()
+
+	acc, dom, err := dir.ResolveEmail(ctx, *email)
+	if err != nil {
+		if errors.Is(err, directory.ErrNotFound) {
+			fmt.Fprintf(os.Stderr, "account info: account not found\n")
+		} else {
+			fmt.Fprintf(os.Stderr, "account info: %v\n", err)
+		}
+		return cli.ExitError
+	}
+	fullEmail := acc.LocalPart + "@" + dom.Name
+
+	summaries, err := inbox.ListMailboxSummaries(ctx, acc.ID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "account info: %v\n", err)
+		return cli.ExitError
+	}
+	tree := mail.BuildFolderTree(summaries)
+
+	if *asJSON {
+		out := accountInfoJSON{
+			AccountID: acc.ID,
+			Email:     fullEmail,
+			DomainID:  dom.ID,
+			Folders:   make([]accountFolderJSON, len(tree)),
+		}
+		for i, line := range tree {
+			out.Folders[i] = accountFolderJSON{
+				Path:     line.Path,
+				Depth:    line.Depth,
+				Messages: line.Messages,
+			}
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(out); err != nil {
+			fmt.Fprintf(os.Stderr, "account info: %v\n", err)
+			return cli.ExitError
+		}
+		return cli.ExitOK
+	}
+
+	fmt.Fprintf(os.Stderr, "account_id=%d email=%s domain_id=%d\n", acc.ID, fullEmail, dom.ID)
+	w := tabwriter.NewWriter(os.Stderr, 0, 0, 2, ' ', 0)
+	for _, line := range tree {
+		indent := strings.Repeat("  ", line.Depth)
+		fmt.Fprintf(w, "%s%s\t%d\n", indent, line.Segment, line.Messages)
+	}
+	if err := w.Flush(); err != nil {
+		fmt.Fprintf(os.Stderr, "account info: %v\n", err)
+		return cli.ExitError
+	}
+	return cli.ExitOK
+}
+
+type accountInfoJSON struct {
+	AccountID uint32              `json:"account_id"`
+	Email     string              `json:"email"`
+	DomainID  uint32              `json:"domain_id"`
+	Folders   []accountFolderJSON `json:"folders"`
+}
+
+type accountFolderJSON struct {
+	Path     string `json:"path"`
+	Depth    int    `json:"depth"`
+	Messages uint32 `json:"messages"`
+}
+
 type domainJSON struct {
 	ID       uint32 `json:"id"`
 	Name     string `json:"name"`
 	TenantID uint32 `json:"tenant_id"`
+}
+
+func openMail(ctx context.Context, cfg *config.Config) (*directory.Local, *mail.Inbox, func(), error) {
+	store, closeStore, err := openStore(ctx, cfg)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	dir := directory.NewLocal(store)
+	inbox := mail.NewInbox(store, blob.NewFS(cfg.BlobDir()))
+	return dir, inbox, closeStore, nil
 }
 
 func openDirectory(ctx context.Context, cfg *config.Config) (*directory.Local, func(), error) {
@@ -590,10 +698,15 @@ func domainUsage() {
 func accountUsage() {
 	fmt.Fprintln(os.Stderr, "usage:")
 	accountCreateUsage()
+	accountInfoUsage()
 }
 
 func accountCreateUsage() {
 	fmt.Fprintln(os.Stderr, "  beaver account create [-config path] -domain name -local part -password pw")
+}
+
+func accountInfoUsage() {
+	fmt.Fprintln(os.Stderr, "  beaver account info [-config path] -email addr [--json]")
 }
 
 func usage() {
@@ -609,4 +722,6 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  beaver domain list [-config path] [--json]")
 	fmt.Fprintln(os.Stderr, "  beaver domain delete [-config path] <name>")
 	fmt.Fprintln(os.Stderr, "  beaver account create [-config path] -domain name -local part -password pw")
+	fmt.Fprintln(os.Stderr, "  beaver account info [-config path] -email addr [--json]")
+	fmt.Fprintln(os.Stderr, "  beaver plugins list [-config path]")
 }
