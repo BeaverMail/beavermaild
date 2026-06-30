@@ -44,12 +44,12 @@ func (s *session) cmdList(ctx context.Context, tag, arg string) error {
 }
 
 func (s *session) cmdMailboxList(ctx context.Context, tag, arg, cmd string, subscribedOnly bool) error {
-	ref, pattern, ok := parseListArg(arg)
+	opt, ok := parseListOptions(arg)
 	if !ok {
 		return s.tagged(tag, "BAD "+cmd+" syntax")
 	}
-	if ref != "" && ref != "/" {
-		if _, err := s.inbox.ResolveMailbox(ctx, s.principal.AccountID, ref); err != nil {
+	if opt.ref != "" && opt.ref != "/" {
+		if _, err := s.inbox.ResolveMailbox(ctx, s.principal.AccountID, opt.ref); err != nil {
 			return s.tagged(tag, "OK "+cmd+" completed")
 		}
 	}
@@ -57,19 +57,20 @@ func (s *session) cmdMailboxList(ctx context.Context, tag, arg, cmd string, subs
 	if err != nil {
 		return err
 	}
-	match := compileListPattern(pattern)
+	filterSubscribed := subscribedOnly || opt.subscribedOnly
+	match := compileListPattern(opt.pattern)
 	names := make([]string, len(mboxes))
 	for i, mb := range mboxes {
 		names[i] = mb.Name
 	}
 	for _, mb := range mboxes {
-		if subscribedOnly && !mb.Subscribed {
+		if filterSubscribed && !mb.Subscribed {
 			continue
 		}
 		if !match(mb.Name) {
 			continue
 		}
-		line := fmt.Sprintf(`%s (%s) "/" %s`, cmd, listMailboxAttrs(mb, names), formatListMailbox(mb.Name))
+		line := fmt.Sprintf(`%s (%s) "/" %s`, cmd, listMailboxAttrs(mb, names, filterSubscribed || opt.markSubscribed), formatListMailbox(mb.Name))
 		if err := s.untagged(line); err != nil {
 			return err
 		}

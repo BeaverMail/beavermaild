@@ -310,7 +310,7 @@ func (s *session) capabilityLine() string {
 		caps = append(caps, "LOGINDISABLED")
 	}
 	if s.principal.AccountID != 0 {
-		caps = append(caps, "IDLE", "NAMESPACE", "UIDPLUS", "UNSELECT", "SPECIAL-USE", "CONDSTORE", "SORT", "THREAD=REFERENCES", "QUOTA")
+		caps = append(caps, "IDLE", "NAMESPACE", "UIDPLUS", "UNSELECT", "SPECIAL-USE", "LIST-EXTENDED", "CONDSTORE", "SORT", "THREAD=REFERENCES", "QUOTA")
 	}
 	return "CAPABILITY " + strings.Join(caps, " ")
 }

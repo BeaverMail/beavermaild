@@ -177,7 +177,7 @@ func (ib *Inbox) CreateMailbox(ctx context.Context, accountID uint32, name strin
 	if err != nil {
 		return Mailbox{}, err
 	}
-	mbox := storage.Mailbox{ID: id, Name: name, UIDNext: 1, UIDValidity: 1, Subscribed: false, SubSet: true}
+	mbox := storage.Mailbox{ID: id, Name: name, UIDNext: 1, UIDValidity: 1}
 	wire, err := storage.MarshalPersist(nil, 1, mbox)
 	if err != nil {
 		return Mailbox{}, err
@@ -190,7 +190,7 @@ func (ib *Inbox) CreateMailbox(ctx context.Context, accountID uint32, name strin
 	if err := ib.store.Commit(ctx, batch); err != nil {
 		return Mailbox{}, err
 	}
-	return Mailbox{ID: id, Name: name, UIDValidity: 1}, nil
+	return Mailbox{ID: id, Name: name, UIDValidity: 1, Subscribed: true}, nil
 }
 
 // DeleteMailbox removes an empty non-system folder.

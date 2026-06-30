@@ -9,15 +9,65 @@ import (
 )
 
 func parseListArg(arg string) (ref, pattern string, ok bool) {
-	ref, rest, ok := parseListToken(arg)
+	opt, ok := parseListOptions(arg)
 	if !ok {
 		return "", "", false
 	}
-	pattern, rest, ok = parseListToken(rest)
-	if !ok || strings.TrimSpace(rest) != "" {
-		return "", "", false
+	return opt.ref, opt.pattern, true
+}
+
+// listOptions captures LIST / LSUB reference, pattern, and LIST-EXTENDED flags.
+type listOptions struct {
+	ref            string
+	pattern        string
+	subscribedOnly bool
+	markSubscribed bool
+}
+
+// parseListOptions parses LIST arguments including (SUBSCRIBED) and RETURN (SUBSCRIBED).
+func parseListOptions(arg string) (listOptions, bool) {
+	arg = strings.TrimSpace(arg)
+	var opt listOptions
+
+	for strings.HasPrefix(arg, "(") {
+		end := strings.IndexByte(arg, ')')
+		if end < 0 {
+			return listOptions{}, false
+		}
+		if strings.Contains(strings.ToUpper(arg[1:end]), "SUBSCRIBED") {
+			opt.subscribedOnly = true
+			opt.markSubscribed = true
+		}
+		arg = strings.TrimSpace(arg[end+1:])
 	}
-	return ref, pattern, true
+
+	ref, rest, ok := parseListToken(arg)
+	if !ok {
+		return listOptions{}, false
+	}
+	pattern, rest, ok := parseListToken(rest)
+	if !ok {
+		return listOptions{}, false
+	}
+	opt.ref = ref
+	opt.pattern = pattern
+
+	rest = strings.TrimSpace(rest)
+	if strings.HasPrefix(strings.ToUpper(rest), "RETURN") {
+		if i := strings.IndexByte(rest, '('); i >= 0 {
+			if j := strings.IndexByte(rest[i:], ')'); j >= 0 {
+				ret := strings.ToUpper(rest[i : i+j+1])
+				if strings.Contains(ret, "SUBSCRIBED") {
+					opt.markSubscribed = true
+				}
+			}
+		}
+		rest = ""
+	}
+	if rest != "" {
+		return listOptions{}, false
+	}
+	return opt, true
 }
 
 func parseListToken(arg string) (tok, rest string, ok bool) {
@@ -73,20 +123,36 @@ func compileListPattern(pattern string) func(string) bool {
 }
 
 // listMailboxAttrs returns IMAP LIST attributes for one folder (RFC 3501 + SPECIAL-USE).
-func listMailboxAttrs(mb mail.Mailbox, allNames []string) string {
+func listMailboxAttrs(mb mail.Mailbox, allNames []string, markSubscribed bool) string {
 	childAttr := `\HasNoChildren`
 	if mailboxHasChildren(mb.Name, allNames) {
 		childAttr = `\HasChildren`
 	}
+	attrs := childAttr
+	if markSubscribed && mb.Subscribed {
+		attrs += ` \Subscribed`
+	}
 	switch mb.ID {
 	case mail.SentMailboxID:
-		return childAttr + ` \Sent`
+		attrs += ` \Sent`
 	case mail.TrashMailboxID:
-		return childAttr + ` \Trash`
+		attrs += ` \Trash`
 	case mail.DraftsMailboxID:
-		return childAttr + ` \Drafts`
+		attrs += ` \Drafts`
+	}
+	if isJunkMailbox(mb.Name) {
+		attrs += ` \Junk`
+	}
+	return attrs
+}
+
+// isJunkMailbox reports well-known spam folder names for SPECIAL-USE \Junk.
+func isJunkMailbox(name string) bool {
+	switch strings.ToUpper(strings.TrimSpace(name)) {
+	case "SPAM", "JUNK", "BULK", "JUNK E-MAIL", "JUNK MAIL":
+		return true
 	default:
-		return childAttr
+		return false
 	}
 }
 

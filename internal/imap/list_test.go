@@ -26,16 +26,22 @@ func TestCompileListPattern(t *testing.T) {
 	}
 }
 
-func TestParseListArg(t *testing.T) {
+func TestParseListOptions(t *testing.T) {
 	t.Parallel()
 
-	ref, pat, ok := parseListArg(`"" "*"`)
-	if !ok || ref != "" || pat != "*" {
-		t.Fatalf(`parse star: ref=%q pat=%q ok=%v`, ref, pat, ok)
+	opt, ok := parseListOptions(`"" "*"`)
+	if !ok || opt.ref != "" || opt.pattern != "*" || opt.subscribedOnly {
+		t.Fatalf(`parse star: %+v ok=%v`, opt, ok)
 	}
-	ref, pat, ok = parseListArg(`"" "Sent"`)
-	if !ok || pat != "Sent" {
-		t.Fatalf(`parse sent: %q %q`, ref, pat)
+
+	opt, ok = parseListOptions(`(SUBSCRIBED) "" "*"`)
+	if !ok || !opt.subscribedOnly || opt.pattern != "*" {
+		t.Fatalf(`parse subscribed: %+v ok=%v`, opt, ok)
+	}
+
+	opt, ok = parseListOptions(`"" "*" RETURN (SUBSCRIBED CHILDREN)`)
+	if !ok || opt.subscribedOnly || !opt.markSubscribed || opt.pattern != "*" {
+		t.Fatalf(`parse return subscribed: %+v ok=%v`, opt, ok)
 	}
 }
 

@@ -31,8 +31,8 @@ func TestMailboxSubscribe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created.Subscribed {
-		t.Fatal("new folder should start unsubscribed")
+	if !created.Subscribed {
+		t.Fatal("new folder should start subscribed")
 	}
 
 	mboxes, err := inbox.ListMailboxes(ctx, acc.ID)
@@ -48,8 +48,8 @@ func TestMailboxSubscribe(t *testing.T) {
 			t.Fatal("inbox should be subscribed")
 		}
 	}
-	if workSubscribed {
-		t.Fatal("work should be unsubscribed")
+	if !workSubscribed {
+		t.Fatal("work should be subscribed")
 	}
 
 	if err := inbox.SetMailboxSubscribed(ctx, acc.ID, "Work", true); err != nil {
