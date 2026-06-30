@@ -491,14 +491,14 @@ func runDomainDelete(args []string) int {
 	}
 
 	ctx := context.Background()
-	dir, closeStore, err := openDirectory(ctx, cfg)
+	dir, inbox, closeStore, err := openMail(ctx, cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "domain delete: %v\n", err)
 		return cli.ExitError
 	}
 	defer closeStore()
 
-	res, err := dir.DeleteDomain(ctx, fs.Args()[0])
+	res, err := dir.DeleteDomain(ctx, fs.Args()[0], inbox.Blobs())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "domain delete: %v\n", err)
 		return cli.ExitError
@@ -518,6 +518,8 @@ func runAccount(args []string) int {
 		return runAccountCreate(args[1:])
 	case "info":
 		return runAccountInfo(args[1:])
+	case "delete":
+		return runAccountDelete(args[1:])
 	default:
 		accountUsage()
 		return cli.ExitUsage
@@ -658,6 +660,47 @@ func runAccountInfo(args []string) int {
 	return cli.ExitOK
 }
 
+func runAccountDelete(args []string) int {
+	fs := flag.NewFlagSet("account delete", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	configPath := configFlag(fs)
+	email := fs.String("email", "", "account email address")
+	if err := fs.Parse(args); err != nil {
+		return cli.ExitUsage
+	}
+	if len(fs.Args()) != 0 || *email == "" {
+		accountDeleteUsage()
+		return cli.ExitUsage
+	}
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "account delete: load config: %v\n", err)
+		return cli.ExitError
+	}
+
+	ctx := context.Background()
+	dir, inbox, closeStore, err := openMail(ctx, cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "account delete: %v\n", err)
+		return cli.ExitError
+	}
+	defer closeStore()
+
+	res, err := dir.DeleteAccount(ctx, *email, inbox.Blobs())
+	if err != nil {
+		if errors.Is(err, directory.ErrNotFound) {
+			fmt.Fprintf(os.Stderr, "account delete: account not found\n")
+		} else {
+			fmt.Fprintf(os.Stderr, "account delete: %v\n", err)
+		}
+		return cli.ExitError
+	}
+	fmt.Fprintf(os.Stderr, "deleted account_id=%d email=%s messages_removed=%d blobs_removed=%d\n",
+		res.Account.ID, res.Email, res.MessagesRemoved, res.BlobsRemoved)
+	return cli.ExitOK
+}
+
 type accountInfoJSON struct {
 	AccountID uint32              `json:"account_id"`
 	Email     string              `json:"email"`
@@ -775,6 +818,7 @@ func accountUsage() {
 	fmt.Fprintln(os.Stderr, "usage:")
 	accountCreateUsage()
 	accountInfoUsage()
+	accountDeleteUsage()
 }
 
 func accountCreateUsage() {
@@ -783,6 +827,10 @@ func accountCreateUsage() {
 
 func accountInfoUsage() {
 	fmt.Fprintln(os.Stderr, "  beaver account info [-c path] -email addr [--json]")
+}
+
+func accountDeleteUsage() {
+	fmt.Fprintln(os.Stderr, "  beaver account delete [-c path] -email addr")
 }
 
 func usage() {
@@ -799,6 +847,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  beaver domain delete [-c path] <name>")
 	fmt.Fprintln(os.Stderr, "  beaver account create [-c path] -domain name -local part -password pw")
 	fmt.Fprintln(os.Stderr, "  beaver account info [-c path] -email addr [--json]")
+	fmt.Fprintln(os.Stderr, "  beaver account delete [-c path] -email addr")
 	fmt.Fprintln(os.Stderr, "  beaver plugins list [-c path]")
 	printPluginUsageLines()
 }

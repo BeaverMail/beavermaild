@@ -23,6 +23,11 @@ func NewInbox(store storage.Store, blobs *blob.FS) *Inbox {
 	return &Inbox{store: store, blobs: blobs}
 }
 
+// Blobs returns the content-addressed blob store used by this inbox.
+func (ib *Inbox) Blobs() *blob.FS {
+	return ib.blobs
+}
+
 // Deliver saves raw message bytes to INBOX and returns the new email document id.
 func (ib *Inbox) Deliver(ctx context.Context, accountID uint32, raw []byte) (uint32, error) {
 	if len(raw) == 0 {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/BeaverMail/beaver/internal/storage"
+	"github.com/BeaverMail/beaver/internal/storage/blob"
 )
 
 // DeleteDomainResult reports what was removed.
@@ -14,8 +15,16 @@ type DeleteDomainResult struct {
 	AccountsDeleted int
 }
 
-// DeleteDomain removes a domain, all its accounts, and their mail metadata.
-func (d *Local) DeleteDomain(ctx context.Context, name string) (DeleteDomainResult, error) {
+// DeleteAccountResult reports account removal and mail purge counts.
+type DeleteAccountResult struct {
+	Account         storage.Account
+	Email           string
+	MessagesRemoved uint32
+	BlobsRemoved    uint32
+}
+
+// DeleteDomain removes a domain, all its accounts, their mail metadata, and unreferenced blobs.
+func (d *Local) DeleteDomain(ctx context.Context, name string, blobs *blob.FS) (DeleteDomainResult, error) {
 	dom, err := d.LookupDomain(ctx, name)
 	if err != nil {
 		return DeleteDomainResult{}, err
@@ -26,7 +35,7 @@ func (d *Local) DeleteDomain(ctx context.Context, name string) (DeleteDomainResu
 		return DeleteDomainResult{}, err
 	}
 	for _, acc := range accounts {
-		if err := d.deleteAccount(ctx, acc, dom.Name); err != nil {
+		if _, err := d.deleteAccount(ctx, acc, dom.Name, blobs); err != nil {
 			return DeleteDomainResult{}, err
 		}
 	}
@@ -43,6 +52,15 @@ func (d *Local) DeleteDomain(ctx context.Context, name string) (DeleteDomainResu
 	}
 
 	return DeleteDomainResult{Domain: dom, AccountsDeleted: len(accounts)}, nil
+}
+
+// DeleteAccount removes one account, its mail metadata, lookup keys, quota, and unreferenced blobs.
+func (d *Local) DeleteAccount(ctx context.Context, email string, blobs *blob.FS) (DeleteAccountResult, error) {
+	acc, dom, err := d.ResolveEmail(ctx, email)
+	if err != nil {
+		return DeleteAccountResult{}, err
+	}
+	return d.deleteAccount(ctx, acc, dom.Name, blobs)
 }
 
 func (d *Local) accountsForDomain(ctx context.Context, domainID uint32) ([]storage.Account, error) {
@@ -67,52 +85,42 @@ func (d *Local) accountsForDomain(ctx context.Context, domainID uint32) ([]stora
 	return out, err
 }
 
-func (d *Local) deleteAccount(ctx context.Context, acc storage.Account, domName string) error {
-	if err := d.deleteMailForAccount(ctx, acc.ID); err != nil {
-		return err
+func (d *Local) deleteAccount(ctx context.Context, acc storage.Account, domName string, blobs *blob.FS) (DeleteAccountResult, error) {
+	purge, err := purgeAccountMail(ctx, d.store, blobs, acc.ID)
+	if err != nil {
+		return DeleteAccountResult{}, err
 	}
 
 	batch := storage.NewBatch().WithAccount(acc.ID)
 	if err := batch.Delete(storage.SubspaceAccount, storage.BatchSuffix(colAccount, acc.ID, nil)); err != nil {
-		return err
+		return DeleteAccountResult{}, err
 	}
 	if err := batch.Delete(storage.SubspaceAccount, storage.BatchSuffix(colCred, acc.ID, nil)); err != nil {
-		return err
+		return DeleteAccountResult{}, err
 	}
 	if err := d.store.Commit(ctx, batch); err != nil {
-		return err
+		return DeleteAccountResult{}, err
 	}
 
 	email := acc.LocalPart + "@" + domName
 	lookup := storage.NewBatch().WithAccount(systemAccountID)
 	if err := lookup.Delete(storage.SubspaceLookup, storage.BatchSuffix(0, 0, []byte("acc/"+email))); err != nil {
-		return err
+		return DeleteAccountResult{}, err
 	}
 	if err := lookup.Delete(storage.SubspaceLookup, storage.BatchSuffix(0, 0, []byte(fmt.Sprintf("meta/email/%d", acc.ID)))); err != nil {
-		return err
+		return DeleteAccountResult{}, err
 	}
-	return d.store.Commit(ctx, lookup)
-}
+	if err := lookup.Delete(storage.SubspaceLookup, storage.BatchSuffix(0, 0, []byte(fmt.Sprintf("meta/quota/%d", acc.ID)))); err != nil {
+		return DeleteAccountResult{}, err
+	}
+	if err := d.store.Commit(ctx, lookup); err != nil {
+		return DeleteAccountResult{}, err
+	}
 
-func (d *Local) deleteMailForAccount(ctx context.Context, accountID uint32) error {
-	// ponytail: blob files on disk are not removed; content-addressed orphans are harmless until a future GC pass.
-	from := storage.AppendKeyPrefix(nil, storage.SubspaceMail, accountID, 0, 0, 5)
-	to := storage.AppendKey(nil, storage.SubspaceMail, accountID, ^uint32(0), 0xff, nil)
-
-	batch := storage.NewBatch().WithAccount(accountID)
-	err := d.store.Iterate(ctx, from, to, func(k, _ []byte) error {
-		parts, err := storage.DecodeKey(k)
-		if err != nil {
-			return err
-		}
-		suffix := storage.BatchSuffix(parts.Collection, parts.DocumentID, parts.Suffix)
-		return batch.Delete(parts.Subspace, suffix)
-	})
-	if err != nil {
-		return err
-	}
-	if len(batch.Ops()) == 0 {
-		return nil
-	}
-	return d.store.Commit(ctx, batch)
+	return DeleteAccountResult{
+		Account:         acc,
+		Email:           email,
+		MessagesRemoved: purge.messagesRemoved,
+		BlobsRemoved:    purge.blobsRemoved,
+	}, nil
 }

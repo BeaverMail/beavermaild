@@ -3,6 +3,7 @@ package directory_test
 import (
 	"context"
 	"errors"
+	"os"
 	"testing"
 
 	"github.com/BeaverMail/beaver/internal/directory"
@@ -135,8 +136,16 @@ func TestDeleteDomainRemovesAccountsAndMail(t *testing.T) {
 	if _, err := inbox.Deliver(ctx, acc.ID, []byte("From: a@b\r\n\r\nbody\r\n")); err != nil {
 		t.Fatal(err)
 	}
+	msgs, err := inbox.List(ctx, acc.ID, mail.InboxMailboxID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 1 || !msgs[0].Meta.HasBlob() {
+		t.Fatalf("messages %+v", msgs)
+	}
+	blobPath := inbox.Blobs().Path(msgs[0].Meta.BlobHash)
 
-	res, err := d.DeleteDomain(ctx, "gone.test")
+	res, err := d.DeleteDomain(ctx, "gone.test", inbox.Blobs())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,12 +162,15 @@ func TestDeleteDomainRemovesAccountsAndMail(t *testing.T) {
 		t.Fatalf("account still exists: %v", err)
 	}
 
-	msgs, err := inbox.List(ctx, acc.ID, mail.InboxMailboxID)
+	msgs, err = inbox.List(ctx, acc.ID, mail.InboxMailboxID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(msgs) != 0 {
 		t.Fatalf("mail left behind: %d messages", len(msgs))
+	}
+	if _, err := os.Stat(blobPath); !os.IsNotExist(err) {
+		t.Fatalf("blob still on disk: %v", err)
 	}
 }
 
@@ -166,7 +178,8 @@ func TestDeleteDomainNotFound(t *testing.T) {
 	t.Parallel()
 
 	d := openDir(t)
-	_, err := d.DeleteDomain(context.Background(), "missing.test")
+	blobs := blob.NewFS(t.TempDir() + "/blobs")
+	_, err := d.DeleteDomain(context.Background(), "missing.test", blobs)
 	if !errors.Is(err, directory.ErrNotFound) {
 		t.Fatalf("got %v", err)
 	}

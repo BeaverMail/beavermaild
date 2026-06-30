@@ -92,6 +92,15 @@ func (f *FS) Path(hash [storage.Blake3DigestLen]byte) string {
 	return f.path(hash)
 }
 
+// Remove deletes the blob file for hash; missing files are ignored.
+func (f *FS) Remove(hash [storage.Blake3DigestLen]byte) error {
+	err := os.Remove(f.path(hash))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	return err
+}
+
 func (f *FS) path(hash [storage.Blake3DigestLen]byte) string {
 	prefix := fmt.Sprintf("%02x", hash[0])
 	name := hex.EncodeToString(hash[:])
