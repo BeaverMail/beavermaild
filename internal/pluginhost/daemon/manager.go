@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/BeaverMail/beaver/internal/pluginhost"
@@ -16,20 +18,27 @@ import (
 
 // Manager loads daemon-capable plugins and manages their lifecycle.
 type Manager struct {
-	log      *slog.Logger
-	socketDir string
-	timeout  time.Duration
-	failOpen bool
-	registry *pluginhost.Registry
-	sessions []*pluginSession
-	chain    smtp.MessageFilter
+	log            *slog.Logger
+	socketDir      string
+	timeout        time.Duration
+	failOpen       bool
+	restartBackoff time.Duration
+	registry       *pluginhost.Registry
+	sessions       []*pluginSession
+	chain          smtp.MessageFilter
+
+	ctx      context.Context
+	cancel   context.CancelFunc
+	stopping atomic.Bool
+	watchWg  sync.WaitGroup
 }
 
 // Config holds daemon manager runtime settings.
 type Config struct {
-	SocketDir string
-	Timeout   time.Duration
-	FailOpen  bool
+	SocketDir      string
+	Timeout        time.Duration
+	FailOpen       bool
+	RestartBackoff time.Duration
 }
 
 // NewManager creates a daemon manager for pluginsDir.
@@ -37,12 +46,16 @@ func NewManager(log *slog.Logger, cfg Config) *Manager {
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = 10 * time.Second
 	}
+	if cfg.RestartBackoff <= 0 {
+		cfg.RestartBackoff = time.Second
+	}
 	return &Manager{
-		log:       log,
-		socketDir: cfg.SocketDir,
-		timeout:   cfg.Timeout,
-		failOpen:  cfg.FailOpen,
-		chain:     smtp.NopFilter{},
+		log:            log,
+		socketDir:      cfg.SocketDir,
+		timeout:        cfg.Timeout,
+		failOpen:       cfg.FailOpen,
+		restartBackoff: cfg.RestartBackoff,
+		chain:          smtp.NopFilter{},
 	}
 }
 
@@ -66,6 +79,7 @@ func (m *Manager) Start(ctx context.Context) error {
 		m.chain = smtp.NopFilter{}
 		return nil
 	}
+	m.ctx, m.cancel = context.WithCancel(ctx)
 	if err := mkdirAll(m.socketDir); err != nil {
 		return err
 	}
@@ -76,10 +90,13 @@ func (m *Manager) Start(ctx context.Context) error {
 		}
 		exe, err := m.registry.ResolveExe(e)
 		if err != nil {
+			for _, s := range sessions {
+				s.stop()
+			}
 			return err
 		}
 		socketPath := filepath.Join(m.socketDir, e.Name+".sock")
-		sess, err := spawnPluginSession(ctx, e.Name, exe, socketPath)
+		sess, err := spawnPluginSession(m.ctx, e.Name, exe, socketPath)
 		if err != nil {
 			for _, s := range sessions {
 				s.stop()
@@ -88,10 +105,45 @@ func (m *Manager) Start(ctx context.Context) error {
 		}
 		m.log.Info("smtp plugin ready", "plugin", e.Name, "socket", socketPath)
 		sessions = append(sessions, sess)
+		m.watchWg.Add(1)
+		go m.watchSession(sess)
 	}
 	m.sessions = sessions
 	m.chain = NewChain(m.log, sessions, m.timeout, m.failOpen)
 	return nil
+}
+
+// watchSession waits for plugin exit and respawns until Manager.Stop.
+func (m *Manager) watchSession(p *pluginSession) {
+	defer m.watchWg.Done()
+	for {
+		err := p.waitProcess()
+		if m.stopping.Load() || m.ctx.Err() != nil {
+			return
+		}
+		m.log.Warn("plugin_exit", "plugin", p.name, slog.Any("err", err))
+
+		for {
+			if m.stopping.Load() || m.ctx.Err() != nil {
+				return
+			}
+			select {
+			case <-m.ctx.Done():
+				return
+			case <-time.After(m.restartBackoff):
+			}
+			if err := p.reconnect(m.ctx); err != nil {
+				m.log.Warn("plugin_restart_failed",
+					"plugin", p.name,
+					"backoff_ms", m.restartBackoff.Milliseconds(),
+					slog.Any("err", err),
+				)
+				continue
+			}
+			m.log.Info("smtp plugin ready", "plugin", p.name, "socket", p.socket)
+			break
+		}
+	}
 }
 
 // Filter returns the SMTP message filter chain.
@@ -104,9 +156,14 @@ func (m *Manager) Filter() smtp.MessageFilter {
 
 // Stop terminates spawned daemon plugins.
 func (m *Manager) Stop() error {
+	m.stopping.Store(true)
+	if m.cancel != nil {
+		m.cancel()
+	}
 	for _, s := range m.sessions {
 		s.stop()
 	}
+	m.watchWg.Wait()
 	m.sessions = nil
 	m.chain = smtp.NopFilter{}
 	return nil

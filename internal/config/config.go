@@ -45,9 +45,10 @@ type PluginsConfig struct {
 
 // PluginsSMTPConfig holds SMTP filter plugin settings for beaver serve.
 type PluginsSMTPConfig struct {
-	FilterTimeoutMs int    `json:"filter_timeout_ms"`
-	TimeoutPolicy   string `json:"timeout_policy"` // accept (fail-open) or tempfail
-	SocketDir       string `json:"socket_dir"`
+	FilterTimeoutMs  int    `json:"filter_timeout_ms"`
+	TimeoutPolicy    string `json:"timeout_policy"` // accept (fail-open) or tempfail
+	SocketDir        string `json:"socket_dir"`
+	RestartBackoffMs int    `json:"restart_backoff_ms"`
 }
 
 // TLSConfig holds PEM paths or ACME hostnames for server TLS.
@@ -195,6 +196,9 @@ func (c *Config) Validate() error {
 	if c.Plugins.SMTP.TimeoutPolicy == "" {
 		c.Plugins.SMTP.TimeoutPolicy = "accept"
 	}
+	if c.Plugins.SMTP.RestartBackoffMs <= 0 {
+		c.Plugins.SMTP.RestartBackoffMs = 1000
+	}
 	switch c.Plugins.SMTP.TimeoutPolicy {
 	case "accept", "tempfail":
 	default:
@@ -227,6 +231,15 @@ func (c *Config) PluginsSMTPFilterTimeout() time.Duration {
 // PluginsSMTPTimeoutFailOpen reports whether plugin timeouts accept mail (fail-open).
 func (c *Config) PluginsSMTPTimeoutFailOpen() bool {
 	return c.Plugins.SMTP.TimeoutPolicy != "tempfail"
+}
+
+// PluginsSMTPRestartBackoff returns the delay between daemon plugin respawn attempts.
+func (c *Config) PluginsSMTPRestartBackoff() time.Duration {
+	ms := c.Plugins.SMTP.RestartBackoffMs
+	if ms <= 0 {
+		ms = 1000
+	}
+	return time.Duration(ms) * time.Millisecond
 }
 
 // SMTPListen returns the inbound SMTP bind address.

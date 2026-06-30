@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/BeaverMail/beaver/internal/pluginhost"
 	"github.com/BeaverMail/beaver/internal/pluginhost/daemon"
@@ -82,6 +83,74 @@ func TestManagerRejectActionFromPlugin(t *testing.T) {
 		t.Fatalf("action %q", action)
 	}
 	_ = m.Stop()
+}
+
+func TestManagerRestartAfterCrash(t *testing.T) {
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "beaver-plugin-crashfilter")
+	if err := installBuiltPlugin(t, exe, "internal/pluginhost/testdata/crashdaemonplugin"); err != nil {
+		t.Fatal(err)
+	}
+
+	reg, err := pluginhost.LoadRegistry(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := daemon.NewManager(slog.Default(), daemon.Config{
+		SocketDir:      filepath.Join(t.TempDir(), "sockets"),
+		RestartBackoff: 20 * time.Millisecond,
+	})
+	if err := m.LoadFromRegistry(reg); err != nil {
+		t.Fatal(err)
+	}
+	ctx := t.Context()
+	if err := m.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer m.Stop()
+
+	f := m.Filter()
+	req := smtp.FilterRequest{ID: "1", Phase: smtp.FilterPhaseMail}
+	action, err := f.Filter(ctx, req)
+	if err != nil || action != smtp.FilterActionAccept {
+		t.Fatalf("first filter: %q %v", action, err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		action, err = f.Filter(ctx, smtp.FilterRequest{ID: "2", Phase: smtp.FilterPhaseMail})
+		if err == nil && action == smtp.FilterActionAccept {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("plugin did not recover after crash")
+}
+
+func TestManagerStopNoRestart(t *testing.T) {
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "beaver-plugin-crashfilter")
+	if err := installBuiltPlugin(t, exe, "internal/pluginhost/testdata/crashdaemonplugin"); err != nil {
+		t.Fatal(err)
+	}
+	reg, err := pluginhost.LoadRegistry(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := daemon.NewManager(slog.Default(), daemon.Config{
+		SocketDir:      filepath.Join(t.TempDir(), "sockets"),
+		RestartBackoff: 10 * time.Millisecond,
+	})
+	if err := m.LoadFromRegistry(reg); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond)
 }
 
 func installBuiltPlugin(t *testing.T, dst, pkg string) error {

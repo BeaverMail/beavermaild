@@ -42,7 +42,7 @@ Beaver creates the socket path, spawns the plugin, and accepts the plugin connec
 
 4. Only after `ready`, Beaver forwards per-message filter requests.
 
-If the plugin exits or the socket closes, `DaemonManager` restarts the process and waits for a new `ready` before resuming traffic.
+If the plugin exits or the socket closes, `DaemonManager` marks the plugin not ready (fail-open skips it), waits `plugins.smtp.restart_backoff_ms`, respawns the child, and waits for a new `ready` line before forwarding filter traffic again. Intentional shutdown via `beaver serve` stop does not respawn plugins.
 
 ## Per-message flow (host -> plugin)
 
@@ -158,7 +158,8 @@ Example config:
     "smtp": {
       "filter_timeout_ms": 10000,
       "timeout_policy": "accept",
-      "socket_dir": "run/plugins"
+      "socket_dir": "run/plugins",
+      "restart_backoff_ms": 1000
     }
   }
 }
@@ -173,7 +174,7 @@ Plugins that need more time should document recommended `timeout_ms` / host conf
 | Write message to `body_path` before `eom` | Host |
 | Delete `body_path` after decision | Host |
 | Wait for `ready` before filtering | Host |
-| Restart plugin on crash; wait for new `ready` | `DaemonManager` |
+| Restart plugin on crash; wait for new `ready` | `DaemonManager` (`restart_backoff_ms`) |
 | Enforce `timeout_ms`; apply timeout policy on expiry | Host |
 | Read/analyze `body_path` | Plugin |
 | Never open the host mail store / deliver mail | Plugin |
@@ -187,4 +188,5 @@ Plugins that need more time should document recommended `timeout_ms` / host conf
 | `timeout_ms` per request + host default + timeout policy + `plugin_timeout` log | yes | yes |
 | Multi-phase hooks (connect/helo/mail/rcpt/data/eom) | yes | yes |
 | Wire into `beaver serve` and SMTP DATA path | yes | yes |
+| In-process plugin restart on crash | yes | yes |
 | `web` capability reverse proxy | draft | no |

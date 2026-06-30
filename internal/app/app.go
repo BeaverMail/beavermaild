@@ -134,9 +134,10 @@ func (a *App) Run(ctx context.Context) error {
 	errCh := make(chan error, 2)
 
 	dm := daemon.NewManager(a.log, daemon.Config{
-		SocketDir: a.cfg.PluginsSMTPSocketDir(),
-		Timeout:   a.cfg.PluginsSMTPFilterTimeout(),
-		FailOpen:  a.cfg.PluginsSMTPTimeoutFailOpen(),
+		SocketDir:      a.cfg.PluginsSMTPSocketDir(),
+		Timeout:        a.cfg.PluginsSMTPFilterTimeout(),
+		FailOpen:       a.cfg.PluginsSMTPTimeoutFailOpen(),
+		RestartBackoff: a.cfg.PluginsSMTPRestartBackoff(),
 	})
 	if reg, err := pluginhost.LoadRegistry(pluginhost.PluginsDirFromConfigPath(a.cfg.ConfigPath())); err != nil {
 		return fmt.Errorf("plugins: %w", err)

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/BeaverMail/beaver/internal/config"
 )
@@ -90,6 +91,12 @@ func TestPluginsSMTPDefaults(t *testing.T) {
 	}
 	if !cfg.PluginsSMTPTimeoutFailOpen() {
 		t.Fatal("expected fail-open default")
+	}
+	if cfg.Plugins.SMTP.RestartBackoffMs != 1000 {
+		t.Fatalf("restart backoff %d", cfg.Plugins.SMTP.RestartBackoffMs)
+	}
+	if cfg.PluginsSMTPRestartBackoff() != 1000*time.Millisecond {
+		t.Fatalf("restart backoff duration %v", cfg.PluginsSMTPRestartBackoff())
 	}
 	wantSocket := filepath.Join(cfg.DataDir, "run", "plugins")
 	if got := cfg.PluginsSMTPSocketDir(); got != wantSocket {

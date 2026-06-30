@@ -28,7 +28,7 @@ type pluginSession struct {
 	exe    string
 	cmd    *exec.Cmd
 	conn   net.Conn
-	mu      sync.Mutex
+	mu     sync.Mutex
 	isReady bool
 }
 
@@ -90,7 +90,7 @@ func (p *pluginSession) filter(ctx context.Context, req smtp.FilterRequest) (str
 		return "", errFilterTimeout
 	case err := <-done:
 		if err != nil {
-			p.markDead()
+			p.markDeadLocked()
 			return "", err
 		}
 		if resp.ID != "" && resp.ID != req.ID {
@@ -103,7 +103,7 @@ func (p *pluginSession) filter(ctx context.Context, req smtp.FilterRequest) (str
 	}
 }
 
-func (p *pluginSession) markDead() {
+func (p *pluginSession) markDeadLocked() {
 	p.isReady = false
 	if p.conn != nil {
 		_ = p.conn.Close()
@@ -111,35 +111,52 @@ func (p *pluginSession) markDead() {
 	}
 }
 
+func (p *pluginSession) waitProcess() error {
+	p.mu.Lock()
+	cmd := p.cmd
+	p.mu.Unlock()
+	if cmd == nil {
+		return fmt.Errorf("daemon: %q no process", p.name)
+	}
+	return cmd.Wait()
+}
+
 func (p *pluginSession) stop() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.markDead()
+	p.markDeadLocked()
 	if p.cmd != nil && p.cmd.Process != nil {
 		_ = p.cmd.Process.Signal(syscall.SIGTERM)
-		_, _ = p.cmd.Process.Wait()
 	}
 	_ = os.Remove(p.socket)
 }
 
-func spawnPluginSession(ctx context.Context, name, exe, socketPath string) (*pluginSession, error) {
-	_ = os.Remove(socketPath)
-	if err := os.MkdirAll(filepath.Dir(socketPath), 0o755); err != nil {
-		return nil, err
+// connectSession spawns the plugin and completes the ready handshake. Caller must hold p.mu.
+func (p *pluginSession) connectSession(ctx context.Context) error {
+	if p.cmd != nil && p.cmd.Process != nil {
+		_ = p.cmd.Process.Kill()
+		_ = p.cmd.Wait()
+		p.cmd = nil
 	}
-	ln, err := net.Listen("unix", socketPath)
+	p.markDeadLocked()
+
+	_ = os.Remove(p.socket)
+	if err := os.MkdirAll(filepath.Dir(p.socket), 0o755); err != nil {
+		return err
+	}
+	ln, err := net.Listen("unix", p.socket)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer ln.Close()
 
-	cmd := exec.CommandContext(ctx, exe)
+	cmd := exec.CommandContext(ctx, p.exe)
 	cmd.Env = append(os.Environ(),
 		plugin.EnvPluginMode+"="+plugin.PluginModeDaemon,
-		"BEAVER_SMTP_SOCKET="+socketPath,
+		"BEAVER_SMTP_SOCKET="+p.socket,
 	)
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("daemon: start %q: %w", name, err)
+		return fmt.Errorf("daemon: start %q: %w", p.name, err)
 	}
 
 	acceptCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -154,12 +171,12 @@ func spawnPluginSession(ctx context.Context, name, exe, socketPath string) (*plu
 	case <-acceptCtx.Done():
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
-		return nil, fmt.Errorf("daemon: %q ready timeout", name)
+		return fmt.Errorf("daemon: %q ready timeout", p.name)
 	case err := <-acceptDone:
 		if err != nil {
 			_ = cmd.Process.Kill()
 			_ = cmd.Wait()
-			return nil, err
+			return err
 		}
 	}
 
@@ -168,28 +185,44 @@ func spawnPluginSession(ctx context.Context, name, exe, socketPath string) (*plu
 		_ = conn.Close()
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
-		return nil, fmt.Errorf("daemon: %q no ready line", name)
+		return fmt.Errorf("daemon: %q no ready line", p.name)
 	}
 	var ready ReadyLine
 	if err := json.Unmarshal(sc.Bytes(), &ready); err != nil {
 		_ = conn.Close()
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
-		return nil, fmt.Errorf("daemon: %q parse ready: %w", name, err)
+		return fmt.Errorf("daemon: %q parse ready: %w", p.name, err)
 	}
 	if ready.Status != "ready" {
 		_ = conn.Close()
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
-		return nil, fmt.Errorf("daemon: %q status %q", name, ready.Status)
+		return fmt.Errorf("daemon: %q status %q", p.name, ready.Status)
 	}
 
-	return &pluginSession{
+	p.cmd = cmd
+	p.conn = conn
+	p.isReady = true
+	return nil
+}
+
+func (p *pluginSession) reconnect(ctx context.Context) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.connectSession(ctx)
+}
+
+func spawnPluginSession(ctx context.Context, name, exe, socketPath string) (*pluginSession, error) {
+	p := &pluginSession{
 		name:   name,
 		socket: socketPath,
 		exe:    exe,
-		cmd:    cmd,
-		conn:   conn,
-		isReady: true,
-	}, nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if err := p.connectSession(ctx); err != nil {
+		return nil, err
+	}
+	return p, nil
 }
