@@ -32,6 +32,11 @@ type session struct {
 	pipelining  bool
 	dataLimits  DataLimits
 
+	filter          MessageFilter
+	filterTmpDir    string
+	filterTimeoutMs int
+	filterSeq       int
+
 	principal directory.Principal
 
 	mailFrom  string
@@ -57,26 +62,45 @@ type smtpCommand struct {
 	arg string
 }
 
-func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *mail.Inbox, queue *mail.Queue, certs *tlsload.Certs, secure, tlsRequired, vrfyEnabled, submission bool, limits DataLimits) *session {
+func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *mail.Inbox, queue *mail.Queue, certs *tlsload.Certs, secure, tlsRequired, vrfyEnabled, submission bool, limits DataLimits, filter MessageFilter, filterTmpDir string, filterTimeoutMs int) *session {
+	if filter == nil {
+		filter = NopFilter{}
+	}
+	if filterTimeoutMs <= 0 {
+		filterTimeoutMs = 10000
+	}
 	return &session{
-		log:         log,
-		conn:        conn,
-		r:           bufio.NewReader(conn),
-		dir:         dir,
-		inbox:       inbox,
-		queue:       queue,
-		tls:         certs,
-		secure:      secure,
-		tlsRequired: tlsRequired,
-		vrfyEnabled: vrfyEnabled,
-		submission:  submission,
-		dataLimits:  limits.withDefaults(),
+		log:             log,
+		conn:            conn,
+		r:               bufio.NewReader(conn),
+		dir:             dir,
+		inbox:           inbox,
+		queue:           queue,
+		tls:             certs,
+		secure:          secure,
+		tlsRequired:     tlsRequired,
+		vrfyEnabled:     vrfyEnabled,
+		submission:      submission,
+		dataLimits:      limits.withDefaults(),
+		filter:          filter,
+		filterTmpDir:    filterTmpDir,
+		filterTimeoutMs: filterTimeoutMs,
 	}
 }
 
 func (s *session) run(ctx context.Context) error {
 	if err := s.writef("220 localhost ESMTP BeaverMail"); err != nil {
 		return err
+	}
+	if action, err := s.runFilter(ctx, FilterPhaseConnect, nil, ""); err != nil {
+		return err
+	} else if action != FilterActionAccept {
+		reply, _ := s.replyFilterAction(action)
+		if reply == "" {
+			reply = replyConnectionRejected
+		}
+		_ = s.writef(reply)
+		return nil
 	}
 	for {
 		cmds, err := s.readCommandBatch()
@@ -134,9 +158,15 @@ func (s *session) dispatch(ctx context.Context, cmd, arg string, mailBlocked boo
 	switch cmd {
 	case "EHLO":
 		s.pipelining = true
+		if err := s.filterHelo(ctx); err != nil {
+			return false, false, err
+		}
 		return false, false, s.writeEHLO(true)
 	case "HELO":
 		s.pipelining = false
+		if err := s.filterHelo(ctx); err != nil {
+			return false, false, err
+		}
 		return false, false, s.writeEHLO(false)
 	case "STARTTLS":
 		return false, false, s.cmdStartTLS()
@@ -228,6 +258,15 @@ func (s *session) handleMail(ctx context.Context, arg string) (blockMail bool, e
 		s.mailBody = body
 	}
 	s.mailUTF8 = mailParams.SMTPUTF8 || addressNeedsUTF8(addr)
+	if action, err := s.runFilter(ctx, FilterPhaseMail, nil, ""); err != nil {
+		return true, err
+	} else if action != FilterActionAccept {
+		reply, _ := s.replyFilterAction(action)
+		if reply == "" {
+			reply = replyFilterReject
+		}
+		return true, s.writef(reply)
+	}
 	return false, s.writef(replyOK)
 }
 
@@ -268,6 +307,15 @@ func (s *session) handleRcpt(ctx context.Context, arg string, mailBlocked bool) 
 				notify:  rcptParams.Notify,
 				orcpt:   rcptParams.Orcpt,
 			})
+			if action, err := s.runFilter(ctx, FilterPhaseRcpt, []string{normalizeEnvelopeAddress(addr)}, ""); err != nil {
+				return err
+			} else if action != FilterActionAccept {
+				reply, _ := s.replyFilterAction(action)
+				if reply == "" {
+					reply = replyFilterReject
+				}
+				return s.writef(reply)
+			}
 			return s.writef(replyOK)
 		}
 		return err
@@ -288,6 +336,15 @@ func (s *session) handleRcpt(ctx context.Context, arg string, mailBlocked bool) 
 		notify:    rcptParams.Notify,
 		orcpt:     rcptParams.Orcpt,
 	})
+	if action, err := s.runFilter(ctx, FilterPhaseRcpt, []string{normalizeEnvelopeAddress(addr)}, ""); err != nil {
+		return err
+	} else if action != FilterActionAccept {
+		reply, _ := s.replyFilterAction(action)
+		if reply == "" {
+			reply = replyFilterReject
+		}
+		return s.writef(reply)
+	}
 	return s.writef(replyOK)
 }
 
@@ -297,6 +354,15 @@ func (s *session) handleDATA(ctx context.Context) error {
 	}
 	if len(s.rcpt) == 0 {
 		return s.writef(replyBadSequence)
+	}
+	if action, err := s.runFilter(ctx, FilterPhaseData, s.rcptAddresses(), ""); err != nil {
+		return err
+	} else if action != FilterActionAccept {
+		reply, _ := s.replyFilterAction(action)
+		if reply == "" {
+			reply = replyFilterReject
+		}
+		return s.writef(reply)
 	}
 	if err := s.writef(replyDataStart); err != nil {
 		return err
@@ -310,7 +376,23 @@ func (s *session) handleDATA(ctx context.Context) error {
 		s.reset()
 		return nil
 	}
-	return s.finishDelivery(ctx, raw)
+	return s.deliverAfterFilter(ctx, raw)
+}
+
+// filterHelo runs the helo-phase plugin filter before the EHLO/HELO response.
+func (s *session) filterHelo(ctx context.Context) error {
+	action, err := s.runFilter(ctx, FilterPhaseHelo, nil, "")
+	if err != nil {
+		return err
+	}
+	if action == FilterActionAccept {
+		return nil
+	}
+	reply, _ := s.replyFilterAction(action)
+	if reply == "" {
+		reply = replyFilterReject
+	}
+	return s.writef(reply)
 }
 
 func (s *session) writeEHLO(extended bool) error {
@@ -568,7 +650,7 @@ func (s *session) cmdBDAT(ctx context.Context, arg string) error {
 	if !last {
 		return nil
 	}
-	if err := s.finishDelivery(ctx, s.bdatBuf); err != nil {
+	if err := s.deliverAfterFilter(ctx, s.bdatBuf); err != nil {
 		return err
 	}
 	return nil

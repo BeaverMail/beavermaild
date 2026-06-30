@@ -76,6 +76,35 @@ func TestSMTPRelayEnv(t *testing.T) {
 	}
 }
 
+func TestPluginsSMTPDefaults(t *testing.T) {
+	t.Parallel()
+	cfg := config.Default(t.TempDir())
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Plugins.SMTP.FilterTimeoutMs != 10000 {
+		t.Fatalf("timeout %d", cfg.Plugins.SMTP.FilterTimeoutMs)
+	}
+	if cfg.Plugins.SMTP.TimeoutPolicy != "accept" {
+		t.Fatalf("policy %q", cfg.Plugins.SMTP.TimeoutPolicy)
+	}
+	if !cfg.PluginsSMTPTimeoutFailOpen() {
+		t.Fatal("expected fail-open default")
+	}
+	wantSocket := filepath.Join(cfg.DataDir, "run", "plugins")
+	if got := cfg.PluginsSMTPSocketDir(); got != wantSocket {
+		t.Fatalf("socket dir %q want %q", got, wantSocket)
+	}
+}
+
+func TestPluginsSMTPTimeoutPolicyValidation(t *testing.T) {
+	cfg := config.Default(t.TempDir())
+	cfg.Plugins.SMTP.TimeoutPolicy = "drop"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected validation error")
+	}
+}
+
 func TestDefaultConfigPathSystem(t *testing.T) {
 	t.Setenv("BEAVER_CONFIG", "")
 	got := config.DefaultConfigPath()

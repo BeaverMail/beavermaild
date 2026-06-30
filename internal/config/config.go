@@ -27,14 +27,27 @@ func DefaultConfigPath() string {
 
 // Config is the on-disk bootstrap configuration (JSON).
 type Config struct {
-	DataDir  string      `json:"data_dir"`
-	LogLevel string      `json:"log_level"`
-	Secrets  Secrets     `json:"secrets"`
-	TLS      TLSConfig   `json:"tls"`
-	SMTP     SMTPConfig  `json:"smtp"`
-	IMAP     IMAPConfig  `json:"imap"`
-	Queue    QueueConfig `json:"queue"`
-	Quota    QuotaConfig `json:"quota"`
+	DataDir  string        `json:"data_dir"`
+	LogLevel string        `json:"log_level"`
+	Secrets  Secrets       `json:"secrets"`
+	TLS      TLSConfig     `json:"tls"`
+	SMTP     SMTPConfig    `json:"smtp"`
+	IMAP     IMAPConfig    `json:"imap"`
+	Queue    QueueConfig   `json:"queue"`
+	Quota    QuotaConfig   `json:"quota"`
+	Plugins  PluginsConfig `json:"plugins"`
+}
+
+// PluginsConfig holds plugin host settings.
+type PluginsConfig struct {
+	SMTP PluginsSMTPConfig `json:"smtp"`
+}
+
+// PluginsSMTPConfig holds SMTP filter plugin settings for beaver serve.
+type PluginsSMTPConfig struct {
+	FilterTimeoutMs int    `json:"filter_timeout_ms"`
+	TimeoutPolicy   string `json:"timeout_policy"` // accept (fail-open) or tempfail
+	SocketDir       string `json:"socket_dir"`
 }
 
 // TLSConfig holds PEM paths or ACME hostnames for server TLS.
@@ -176,7 +189,44 @@ func (c *Config) Validate() error {
 	if c.Queue.RunDelay == "" {
 		c.Queue.RunDelay = "1s"
 	}
+	if c.Plugins.SMTP.FilterTimeoutMs <= 0 {
+		c.Plugins.SMTP.FilterTimeoutMs = 10000
+	}
+	if c.Plugins.SMTP.TimeoutPolicy == "" {
+		c.Plugins.SMTP.TimeoutPolicy = "accept"
+	}
+	switch c.Plugins.SMTP.TimeoutPolicy {
+	case "accept", "tempfail":
+	default:
+		return fmt.Errorf("config: plugins.smtp.timeout_policy must be accept or tempfail")
+	}
 	return nil
+}
+
+// PluginsSMTPSocketDir returns the Unix socket directory for SMTP filter plugins.
+func (c *Config) PluginsSMTPSocketDir() string {
+	dir := strings.TrimSpace(c.Plugins.SMTP.SocketDir)
+	if dir == "" {
+		return filepath.Join(c.DataDir, "run", "plugins")
+	}
+	if !filepath.IsAbs(dir) {
+		return filepath.Join(c.DataDir, dir)
+	}
+	return dir
+}
+
+// PluginsSMTPFilterTimeout returns the default filter request timeout.
+func (c *Config) PluginsSMTPFilterTimeout() time.Duration {
+	ms := c.Plugins.SMTP.FilterTimeoutMs
+	if ms <= 0 {
+		ms = 10000
+	}
+	return time.Duration(ms) * time.Millisecond
+}
+
+// PluginsSMTPTimeoutFailOpen reports whether plugin timeouts accept mail (fail-open).
+func (c *Config) PluginsSMTPTimeoutFailOpen() bool {
+	return c.Plugins.SMTP.TimeoutPolicy != "tempfail"
 }
 
 // SMTPListen returns the inbound SMTP bind address.

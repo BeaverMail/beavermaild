@@ -5,11 +5,15 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"path/filepath"
+	"time"
 
 	"github.com/BeaverMail/beaver/internal/config"
 	"github.com/BeaverMail/beaver/internal/directory"
 	"github.com/BeaverMail/beaver/internal/imap"
 	"github.com/BeaverMail/beaver/internal/mail"
+	"github.com/BeaverMail/beaver/internal/pluginhost"
+	"github.com/BeaverMail/beaver/internal/pluginhost/daemon"
 	"github.com/BeaverMail/beaver/internal/smtp"
 	"github.com/BeaverMail/beaver/internal/storage"
 	"github.com/BeaverMail/beaver/internal/storage/blob"
@@ -28,6 +32,7 @@ type App struct {
 	queue *mail.Queue
 	smtp  *smtp.Server
 	imap  *imap.Server
+	daemon *daemon.Manager
 }
 
 // Open connects storage using cfg and returns an App.
@@ -61,10 +66,13 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 		inbox: inbox,
 		queue: queue,
 		smtp: smtp.NewServer(log, cfg.SMTPListen(), dir, inbox, queue, cfg.SMTPSubmissionListen(), cfg.SMTPSubmissionTLSListen(), smtp.Options{
-			Certs:       certs,
-			TLSRequired: tlsOpts.required,
-			VRFYEnabled: cfg.SMTPVRFYEnabled(),
-			DataLimits:  smtp.DataLimits{MaxMessageBytes: cfg.SMTPMaxMessageBytes()},
+			Certs:           certs,
+			TLSRequired:     tlsOpts.required,
+			VRFYEnabled:     cfg.SMTPVRFYEnabled(),
+			DataLimits:      smtp.DataLimits{MaxMessageBytes: cfg.SMTPMaxMessageBytes()},
+			Filter:          smtp.NopFilter{},
+			FilterTmpDir:    filepath.Join(cfg.DataDir, "tmp"),
+			FilterTimeoutMs: int(cfg.PluginsSMTPFilterTimeout() / time.Millisecond),
 		}),
 		imap: imap.NewServer(log, cfg.IMAPListen(), dir, inbox, imap.Options{
 			Certs:       certs,
@@ -75,7 +83,7 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 }
 
 type tlsRuntime struct {
-	required     bool
+	required      bool
 	imapTLSListen string
 }
 
@@ -124,6 +132,23 @@ func (a *App) Run(ctx context.Context) error {
 	}
 
 	errCh := make(chan error, 2)
+
+	dm := daemon.NewManager(a.log, daemon.Config{
+		SocketDir: a.cfg.PluginsSMTPSocketDir(),
+		Timeout:   a.cfg.PluginsSMTPFilterTimeout(),
+		FailOpen:  a.cfg.PluginsSMTPTimeoutFailOpen(),
+	})
+	if reg, err := pluginhost.LoadRegistry(pluginhost.PluginsDirFromConfigPath(a.cfg.ConfigPath())); err != nil {
+		return fmt.Errorf("plugins: %w", err)
+	} else if err := dm.LoadFromRegistry(reg); err != nil {
+		return fmt.Errorf("plugins: %w", err)
+	} else if err := dm.Start(ctx); err != nil {
+		return fmt.Errorf("plugins: %w", err)
+	} else {
+		a.daemon = dm
+		a.smtp.SetFilter(dm.Filter())
+	}
+
 	go func() { errCh <- a.smtp.Serve(ctx) }()
 	go func() { errCh <- a.imap.Serve(ctx) }()
 	go mail.NewWorker(a.log, a.queue, a.inbox, a.dir, newRemoteDeliverer(a.cfg), policy).Run(ctx)
@@ -155,8 +180,12 @@ func (a *App) Run(ctx context.Context) error {
 	}
 }
 
-// Close releases storage handles.
+// Close releases storage handles and stops plugin daemons.
 func (a *App) Close() error {
+	if a.daemon != nil {
+		_ = a.daemon.Stop()
+		a.daemon = nil
+	}
 	if a.store != nil {
 		return a.store.Close()
 	}

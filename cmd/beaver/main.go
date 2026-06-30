@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -21,9 +20,12 @@ import (
 	"github.com/BeaverMail/beaver/internal/directory"
 	"github.com/BeaverMail/beaver/internal/log"
 	"github.com/BeaverMail/beaver/internal/mail"
+	"github.com/BeaverMail/beaver/internal/pluginhost"
+	plugincli "github.com/BeaverMail/beaver/internal/pluginhost/cli"
 	"github.com/BeaverMail/beaver/internal/storage"
 	"github.com/BeaverMail/beaver/internal/storage/blob"
 	"github.com/BeaverMail/beaver/internal/storage/sqlite"
+	"github.com/BeaverMail/beaver/plugin"
 )
 
 const version = "0.0.0-dev"
@@ -63,10 +65,18 @@ func run(args []string) int {
 		return runDomain(args[1:])
 	case "account":
 		return runAccount(args[1:])
+	case "plugins":
+		return runPlugins(args[1:])
 	case "help", "-h", "--help":
 		usage()
 		return cli.ExitOK
 	default:
+		if code, ok := plugincli.TryDispatch(context.Background(), plugincli.DispatchOptions{
+			Args:          args,
+			BeaverVersion: version,
+		}); ok {
+			return code
+		}
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", args[0])
 		usage()
 		return cli.ExitUsage
@@ -661,6 +671,67 @@ type accountFolderJSON struct {
 	Messages uint32 `json:"messages"`
 }
 
+func runPlugins(args []string) int {
+	if len(args) == 0 {
+		pluginsUsage()
+		return cli.ExitUsage
+	}
+	switch args[0] {
+	case "list":
+		return runPluginsList(args[1:])
+	default:
+		pluginsUsage()
+		return cli.ExitUsage
+	}
+}
+
+func runPluginsList(args []string) int {
+	fs := flag.NewFlagSet("plugins list", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	configPath := configFlag(fs)
+	if err := fs.Parse(args); err != nil {
+		return cli.ExitUsage
+	}
+
+	pluginsDir := pluginhost.PluginsDirFromConfigPath(*configPath)
+	reg, err := pluginhost.LoadRegistry(pluginsDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "plugins list: %v\n", err)
+		return cli.ExitError
+	}
+	for _, e := range reg.List() {
+		exe, err := reg.ResolveExe(e)
+		status := "ok"
+		if err != nil {
+			status = err.Error()
+		}
+		fmt.Fprintf(os.Stderr, "command=%s exe=%s capabilities=%s cli_flags=%s status=%s api_version=%d\n",
+			strings.Join(e.Command, " "), e.Exe, strings.Join(e.Capabilities, ","), formatCliFlags(e.CliFlags), status, plugin.APIVersion)
+		_ = exe
+	}
+	if len(reg.List()) == 0 {
+		fmt.Fprintf(os.Stderr, "no plugins in %s\n", pluginsDir)
+	}
+	return cli.ExitOK
+}
+
+// formatCliFlags lists descriptor flag names for plugins list output.
+func formatCliFlags(flags []plugin.CliFlag) string {
+	if len(flags) == 0 {
+		return "-"
+	}
+	names := make([]string, len(flags))
+	for i, f := range flags {
+		names[i] = f.Flag
+	}
+	return strings.Join(names, ",")
+}
+
+func pluginsUsage() {
+	fmt.Fprintln(os.Stderr, "usage:")
+	fmt.Fprintln(os.Stderr, "  beaver plugins list [-c path]")
+}
+
 type domainJSON struct {
 	ID       uint32 `json:"id"`
 	Name     string `json:"name"`
@@ -728,4 +799,23 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  beaver domain delete [-c path] <name>")
 	fmt.Fprintln(os.Stderr, "  beaver account create [-c path] -domain name -local part -password pw")
 	fmt.Fprintln(os.Stderr, "  beaver account info [-c path] -email addr [--json]")
+	fmt.Fprintln(os.Stderr, "  beaver plugins list [-c path]")
+	printPluginUsageLines()
+}
+
+// printPluginUsageLines lists installed CLI plugin commands (same paths as plugins list).
+func printPluginUsageLines() {
+	reg, err := pluginhost.LoadRegistry(pluginhost.PluginsDirFromConfigPath(config.DefaultConfigPath()))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "  beaver <plugin-command> ...  (plugins: error loading registry)")
+		return
+	}
+	entries := reg.CLIEntries()
+	if len(entries) == 0 {
+		fmt.Fprintln(os.Stderr, "  (no plugins installed)")
+		return
+	}
+	for _, e := range entries {
+		fmt.Fprintf(os.Stderr, "  beaver %s ...\n", strings.Join(e.Command, " "))
+	}
 }
