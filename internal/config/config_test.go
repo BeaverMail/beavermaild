@@ -76,6 +76,23 @@ func TestSMTPRelayEnv(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigPathSystem(t *testing.T) {
+	t.Setenv("BEAVER_CONFIG", "")
+	got := config.DefaultConfigPath()
+	if got != config.SystemConfigPath {
+		t.Fatalf("got %q want %q", got, config.SystemConfigPath)
+	}
+}
+
+func TestDefaultConfigPathEnv(t *testing.T) {
+	t.Setenv("BEAVER_CONFIG", "/tmp/beaver-test/config.json")
+	got := config.DefaultConfigPath()
+	want := "/tmp/beaver-test/config.json"
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
+
 func TestSMTPVRFYEnv(t *testing.T) {
 	cfg := config.Default(t.TempDir())
 	t.Setenv("BEAVER_SMTP_VRFY_ENABLED", "true")

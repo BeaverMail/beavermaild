@@ -28,6 +28,11 @@ import (
 
 const version = "0.0.0-dev"
 
+// configFlag registers -c with DefaultConfigPath (BEAVER_CONFIG or /etc/beavermail/config.json).
+func configFlag(fs *flag.FlagSet) *string {
+	return fs.String("c", config.DefaultConfigPath(), "config file path")
+}
+
 func main() {
 	os.Exit(run(os.Args[1:]))
 }
@@ -88,7 +93,7 @@ func runInit(args []string) int {
 func runServe(args []string) int {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	configPath := fs.String("config", filepath.Join(config.DefaultDataDir, "config.json"), "config file path")
+	configPath := configFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return cli.ExitUsage
 	}
@@ -119,7 +124,7 @@ func runServe(args []string) int {
 func runSeed(args []string) int {
 	fs := flag.NewFlagSet("seed", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	configPath := fs.String("config", filepath.Join(config.DefaultDataDir, "config.json"), "config file path")
+	configPath := configFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return cli.ExitUsage
 	}
@@ -150,13 +155,13 @@ func runSeed(args []string) int {
 func runAuth(args []string) int {
 	fs := flag.NewFlagSet("auth", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	configPath := fs.String("config", filepath.Join(config.DefaultDataDir, "config.json"), "config file path")
+	configPath := configFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return cli.ExitUsage
 	}
 	rest := fs.Args()
 	if len(rest) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: beaver auth [-config path] email password")
+		fmt.Fprintln(os.Stderr, "usage: beaver auth [-c path] email password")
 		return cli.ExitUsage
 	}
 
@@ -186,7 +191,7 @@ func runAuth(args []string) int {
 func runSend(args []string) int {
 	fs := flag.NewFlagSet("send", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	configPath := fs.String("config", filepath.Join(config.DefaultDataDir, "config.json"), "config file path")
+	configPath := configFlag(fs)
 	from := fs.String("from", "sender@example.com", "MAIL FROM address")
 	to := fs.String("to", "", "recipient address")
 	if err := fs.Parse(args); err != nil {
@@ -194,7 +199,7 @@ func runSend(args []string) int {
 	}
 	body := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if *to == "" || body == "" {
-		fmt.Fprintln(os.Stderr, "usage: beaver send [-config path] -from addr -to addr message...")
+		fmt.Fprintln(os.Stderr, "usage: beaver send [-c path] -from addr -to addr message...")
 		return cli.ExitUsage
 	}
 
@@ -240,14 +245,14 @@ func runQueue(args []string) int {
 func runQueueList(args []string) int {
 	fs := flag.NewFlagSet("queue list", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	configPath := fs.String("config", filepath.Join(config.DefaultDataDir, "config.json"), "config file path")
+	configPath := configFlag(fs)
 	all := fs.Bool("all", false, "include entries with no pending recipients")
 	asJSON := fs.Bool("json", false, "emit JSON on stdout")
 	if err := fs.Parse(args); err != nil {
 		return cli.ExitUsage
 	}
 	if len(fs.Args()) != 0 {
-		fmt.Fprintln(os.Stderr, "usage: beaver queue list [-config path] [--all] [--json]")
+		fmt.Fprintln(os.Stderr, "usage: beaver queue list [-c path] [--all] [--json]")
 		return cli.ExitUsage
 	}
 
@@ -346,7 +351,7 @@ func queueEntryJSON(e mail.QueueEntry) queueJSON {
 
 func queueUsage() {
 	fmt.Fprintln(os.Stderr, "usage:")
-	fmt.Fprintln(os.Stderr, "  beaver queue list [-config path] [--all] [--json]")
+	fmt.Fprintln(os.Stderr, "  beaver queue list [-c path] [--all] [--json]")
 }
 
 func runDomain(args []string) int {
@@ -370,12 +375,12 @@ func runDomain(args []string) int {
 func runDomainAdd(args []string) int {
 	fs := flag.NewFlagSet("domain add", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	configPath := fs.String("config", filepath.Join(config.DefaultDataDir, "config.json"), "config file path")
+	configPath := configFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return cli.ExitUsage
 	}
 	if len(fs.Args()) != 1 {
-		fmt.Fprintln(os.Stderr, "usage: beaver domain add [-config path] <name>")
+		fmt.Fprintln(os.Stderr, "usage: beaver domain add [-c path] <name>")
 		return cli.ExitUsage
 	}
 
@@ -409,13 +414,13 @@ func runDomainAdd(args []string) int {
 func runDomainList(args []string) int {
 	fs := flag.NewFlagSet("domain list", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	configPath := fs.String("config", filepath.Join(config.DefaultDataDir, "config.json"), "config file path")
+	configPath := configFlag(fs)
 	asJSON := fs.Bool("json", false, "emit JSON on stdout")
 	if err := fs.Parse(args); err != nil {
 		return cli.ExitUsage
 	}
 	if len(fs.Args()) != 0 {
-		fmt.Fprintln(os.Stderr, "usage: beaver domain list [-config path] [--json]")
+		fmt.Fprintln(os.Stderr, "usage: beaver domain list [-c path] [--json]")
 		return cli.ExitUsage
 	}
 
@@ -460,12 +465,12 @@ func runDomainList(args []string) int {
 func runDomainDelete(args []string) int {
 	fs := flag.NewFlagSet("domain delete", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	configPath := fs.String("config", filepath.Join(config.DefaultDataDir, "config.json"), "config file path")
+	configPath := configFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return cli.ExitUsage
 	}
 	if len(fs.Args()) != 1 {
-		fmt.Fprintln(os.Stderr, "usage: beaver domain delete [-config path] <name>")
+		fmt.Fprintln(os.Stderr, "usage: beaver domain delete [-c path] <name>")
 		return cli.ExitUsage
 	}
 
@@ -512,7 +517,7 @@ func runAccount(args []string) int {
 func runAccountCreate(args []string) int {
 	fs := flag.NewFlagSet("account create", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	configPath := fs.String("config", filepath.Join(config.DefaultDataDir, "config.json"), "config file path")
+	configPath := configFlag(fs)
 	domainName := fs.String("domain", "", "mail domain name")
 	localPart := fs.String("local", "", "mailbox local part")
 	password := fs.String("password", "", "account password")
@@ -564,7 +569,7 @@ func runAccountCreate(args []string) int {
 func runAccountInfo(args []string) int {
 	fs := flag.NewFlagSet("account info", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	configPath := fs.String("config", filepath.Join(config.DefaultDataDir, "config.json"), "config file path")
+	configPath := configFlag(fs)
 	email := fs.String("email", "", "account email address")
 	asJSON := fs.Bool("json", false, "emit JSON on stdout")
 	if err := fs.Parse(args); err != nil {
@@ -690,9 +695,9 @@ func openStore(ctx context.Context, cfg *config.Config) (storage.Store, func(), 
 
 func domainUsage() {
 	fmt.Fprintln(os.Stderr, "usage:")
-	fmt.Fprintln(os.Stderr, "  beaver domain add [-config path] <name>")
-	fmt.Fprintln(os.Stderr, "  beaver domain list [-config path] [--json]")
-	fmt.Fprintln(os.Stderr, "  beaver domain delete [-config path] <name>")
+	fmt.Fprintln(os.Stderr, "  beaver domain add [-c path] <name>")
+	fmt.Fprintln(os.Stderr, "  beaver domain list [-c path] [--json]")
+	fmt.Fprintln(os.Stderr, "  beaver domain delete [-c path] <name>")
 }
 
 func accountUsage() {
@@ -702,26 +707,25 @@ func accountUsage() {
 }
 
 func accountCreateUsage() {
-	fmt.Fprintln(os.Stderr, "  beaver account create [-config path] -domain name -local part -password pw")
+	fmt.Fprintln(os.Stderr, "  beaver account create [-c path] -domain name -local part -password pw")
 }
 
 func accountInfoUsage() {
-	fmt.Fprintln(os.Stderr, "  beaver account info [-config path] -email addr [--json]")
+	fmt.Fprintln(os.Stderr, "  beaver account info [-c path] -email addr [--json]")
 }
 
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage:")
 	fmt.Fprintln(os.Stderr, "  beaver version")
 	fmt.Fprintln(os.Stderr, "  beaver init [-data-dir data]")
-	fmt.Fprintln(os.Stderr, "  beaver serve [-config data/config.json]")
-	fmt.Fprintln(os.Stderr, "  beaver seed [-config data/config.json]")
-	fmt.Fprintln(os.Stderr, "  beaver auth [-config path] email password")
-	fmt.Fprintln(os.Stderr, "  beaver send [-config path] -from addr -to addr message...")
-	fmt.Fprintln(os.Stderr, "  beaver queue list [-config path] [--all] [--json]")
-	fmt.Fprintln(os.Stderr, "  beaver domain add [-config path] <name>")
-	fmt.Fprintln(os.Stderr, "  beaver domain list [-config path] [--json]")
-	fmt.Fprintln(os.Stderr, "  beaver domain delete [-config path] <name>")
-	fmt.Fprintln(os.Stderr, "  beaver account create [-config path] -domain name -local part -password pw")
-	fmt.Fprintln(os.Stderr, "  beaver account info [-config path] -email addr [--json]")
-	fmt.Fprintln(os.Stderr, "  beaver plugins list [-config path]")
+	fmt.Fprintln(os.Stderr, "  beaver serve [-c path]")
+	fmt.Fprintln(os.Stderr, "  beaver seed [-c path]")
+	fmt.Fprintln(os.Stderr, "  beaver auth [-c path] email password")
+	fmt.Fprintln(os.Stderr, "  beaver send [-c path] -from addr -to addr message...")
+	fmt.Fprintln(os.Stderr, "  beaver queue list [-c path] [--all] [--json]")
+	fmt.Fprintln(os.Stderr, "  beaver domain add [-c path] <name>")
+	fmt.Fprintln(os.Stderr, "  beaver domain list [-c path] [--json]")
+	fmt.Fprintln(os.Stderr, "  beaver domain delete [-c path] <name>")
+	fmt.Fprintln(os.Stderr, "  beaver account create [-c path] -domain name -local part -password pw")
+	fmt.Fprintln(os.Stderr, "  beaver account info [-c path] -email addr [--json]")
 }

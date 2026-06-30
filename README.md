@@ -8,14 +8,19 @@ Complete mail and collaboration server in Go. One deploy for SMTP, IMAP, POP3, J
 
 ## Build
 
+Default config path is `/etc/beavermail/config.json`. For local development, point at the tree created by `init`:
+
 ```bash
 go build -o beaver ./cmd/beaver
 ./beaver version
 ./beaver init
+export BEAVER_CONFIG=data/config.json
 ./beaver seed
-./beaver auth -config .data/config.json alice@localhost beaver
+./beaver auth alice@localhost beaver
 ./beaver serve
 ```
+
+Or pass `-c` per command: `./beaver -c data/config.json seed`
 
 Inbound SMTP listens on `127.0.0.1:1025` by default (`smtp.listen` in config.json, or `BEAVER_SMTP_LISTEN`). After `seed`, deliver a test message:
 
@@ -38,7 +43,7 @@ printf 'a1 LOGIN alice@localhost beaver\r\na2 SELECT INBOX\r\na3 FETCH 1 BODY[]\
 Outbound mail uses a queue drained by `beaver serve` (local recipients go to INBOX; set `smtp.relay` or `BEAVER_SMTP_RELAY` for remote). Enqueue manually:
 
 ```bash
-./beaver send -config .data/config.json -from sender@example.com -to alice@localhost hello via queue
+./beaver send -from sender@example.com -to alice@localhost hello via queue
 ```
 
 Queue retry uses a fixed interval table (`queue.retry_intervals`): `2m, 5m, 10m, 15m, 30m, 1h, 2h, 24h, 3d` by default; `max_lifetime` 3d; worker poll `run_delay` 1s. Override in `config.json`:

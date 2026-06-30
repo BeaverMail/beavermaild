@@ -14,6 +14,17 @@ import (
 // DefaultDataDir is the relative data root when not overridden.
 const DefaultDataDir = "data"
 
+// SystemConfigPath is the default bootstrap config on installed systems (FHS).
+const SystemConfigPath = "/etc/beavermail/config.json"
+
+// DefaultConfigPath returns BEAVER_CONFIG when set, otherwise SystemConfigPath.
+func DefaultConfigPath() string {
+	if v := os.Getenv("BEAVER_CONFIG"); v != "" {
+		return v
+	}
+	return SystemConfigPath
+}
+
 // Config is the on-disk bootstrap configuration (JSON).
 type Config struct {
 	DataDir  string      `json:"data_dir"`
