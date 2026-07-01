@@ -23,6 +23,7 @@ type CliRequest struct {
 	Op            string          `json:"op"`
 	AccountEmail  string          `json:"account_email"`
 	DryRun        bool            `json:"dry_run"`
+	Verbose       bool            `json:"verbose,omitempty"`
 	Params        json.RawMessage `json:"params,omitempty"`
 }
 
@@ -50,19 +51,27 @@ const (
 	CliOpError = "error"
 )
 
+// SkipBreakdown counts skipped messages by dedup reason for one CLI job.
+type SkipBreakdown struct {
+	DuplicateInAccount uint32
+	DuplicateInBatch   uint32
+}
+
 // MailboxCounts holds per-mailbox ingest totals for one CLI job.
 type MailboxCounts struct {
-	Imported uint32
-	Skipped  uint32
-	Errors   uint32
+	Imported      uint32
+	Skipped       uint32
+	Errors        uint32
+	SkipBreakdown SkipBreakdown
 }
 
 // JobResult summarizes a completed CLI job (host-side counts).
 type JobResult struct {
-	Imported  uint32
-	Skipped   uint32
-	Errors    uint32
-	ByMailbox map[string]MailboxCounts
+	Imported      uint32
+	Skipped       uint32
+	Errors        uint32
+	SkipBreakdown SkipBreakdown
+	ByMailbox     map[string]MailboxCounts
 }
 
 // ReadCliRequest decodes the request JSON line from r (typically stdin).

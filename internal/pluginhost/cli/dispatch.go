@@ -109,6 +109,7 @@ func runPluginCommand(ctx context.Context, opts DispatchOptions, entry pluginhos
 		BeaverVersion: opts.BeaverVersion,
 		Entry:         entry,
 		ClearRecent:   parsed.clearRecent,
+		Verbose:       parsed.verbose,
 		Request: plugin.CliRequest{
 			AccountEmail: parsed.account,
 			DryRun:       parsed.dryRun,
@@ -119,9 +120,42 @@ func runPluginCommand(ctx context.Context, opts DispatchOptions, entry pluginhos
 		fmt.Fprintf(os.Stderr, "plugin %s: %v\n", strings.Join(cmd, " "), err)
 		return cli.ExitError, true
 	}
-	fmt.Fprintf(os.Stderr, "imported=%d skipped=%d errors=%d\n", res.Imported, res.Skipped, res.Errors)
+	fmt.Fprintln(os.Stderr, formatJobTotalsLine(res))
 	printMailboxTotals(res.ByMailbox)
 	return cli.ExitOK, true
+}
+
+// formatJobTotalsLine renders account-level ingest totals with optional skip breakdown.
+func formatJobTotalsLine(res plugin.JobResult) string {
+	line := fmt.Sprintf("imported=%d skipped=%d errors=%d", res.Imported, res.Skipped, res.Errors)
+	if res.Skipped > 0 {
+		line += formatSkipBreakdown(res.SkipBreakdown)
+	}
+	return line
+}
+
+// formatSkipBreakdown renders non-zero skip reason counts.
+func formatSkipBreakdown(b plugin.SkipBreakdown) string {
+	var parts []string
+	if b.DuplicateInAccount > 0 {
+		parts = append(parts, fmt.Sprintf("duplicate_in_account=%d", b.DuplicateInAccount))
+	}
+	if b.DuplicateInBatch > 0 {
+		parts = append(parts, fmt.Sprintf("duplicate_in_batch=%d", b.DuplicateInBatch))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return " (" + strings.Join(parts, " ") + ")"
+}
+
+// formatMailboxTotalsLine renders per-mailbox ingest totals with optional skip breakdown.
+func formatMailboxTotalsLine(name string, c plugin.MailboxCounts) string {
+	line := fmt.Sprintf("  %s: imported=%d skipped=%d errors=%d", name, c.Imported, c.Skipped, c.Errors)
+	if c.Skipped > 0 {
+		line += formatSkipBreakdown(c.SkipBreakdown)
+	}
+	return line
 }
 
 func printMailboxTotals(byMailbox map[string]plugin.MailboxCounts) {
@@ -134,8 +168,7 @@ func printMailboxTotals(byMailbox map[string]plugin.MailboxCounts) {
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		c := byMailbox[name]
-		fmt.Fprintf(os.Stderr, "  %s: imported=%d skipped=%d errors=%d\n", name, c.Imported, c.Skipped, c.Errors)
+		fmt.Fprintln(os.Stderr, formatMailboxTotalsLine(name, byMailbox[name]))
 	}
 }
 
@@ -169,6 +202,7 @@ type pluginFlags struct {
 	account     string
 	dryRun      bool
 	clearRecent bool
+	verbose     bool
 	params      map[string]string
 }
 
@@ -184,6 +218,7 @@ func parsePluginFlags(args []string, defaultConfig string, cliFlags []plugin.Cli
 	fs.StringVar(&out.account, "account", "", "destination account email (mail ingest plugins)")
 	fs.BoolVar(&out.dryRun, "dry-run", false, "simulate without writing messages")
 	fs.BoolVar(&out.clearRecent, "clear-recent", true, "clear \\Recent after ingest")
+	fs.BoolVar(&out.verbose, "verbose", false, "extra stderr detail from plugin and host")
 	for _, f := range cliFlags {
 		if f.Key == "" || f.Flag == "" {
 			return pluginFlags{}, fmt.Errorf("invalid cli_flags entry (need key and flag)")
@@ -251,7 +286,7 @@ func isHelpRequest(args []string) bool {
 }
 
 func printPluginUsage(entry pluginhost.Entry) {
-	fmt.Fprintf(os.Stderr, "usage: beaver %s [-c path] -account email [-dry-run] [-clear-recent]",
+	fmt.Fprintf(os.Stderr, "usage: beaver %s [-c path] -account email [-dry-run] [-clear-recent] [-verbose]",
 		strings.Join(entry.Command, " "))
 	for _, f := range entry.CliFlags {
 		req := ""

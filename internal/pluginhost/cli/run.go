@@ -23,6 +23,7 @@ type RunOptions struct {
 	Entry         pluginhost.Entry
 	Request       plugin.CliRequest
 	ClearRecent   bool
+	Verbose       bool
 }
 
 // Run opens the mail stack, spawns the plugin, ingests JSONL from stdout.
@@ -41,7 +42,7 @@ func Run(ctx context.Context, opts RunOptions) (plugin.JobResult, error) {
 	if err := mail.EnsureMailboxes(ctx, accountID); err != nil {
 		return plugin.JobResult{}, err
 	}
-	known, err := mail.AccountHashIndex(ctx, accountID)
+	preloaded, err := mail.AccountHashIndex(ctx, accountID)
 	if err != nil {
 		return plugin.JobResult{}, err
 	}
@@ -60,6 +61,7 @@ func Run(ctx context.Context, opts RunOptions) (plugin.JobResult, error) {
 	req.APIVersion = plugin.APIVersion
 	req.BeaverVersion = opts.BeaverVersion
 	req.Op = opts.Entry.Op()
+	req.Verbose = opts.Verbose
 	reqLine, err := json.Marshal(req)
 	if err != nil {
 		return plugin.JobResult{}, err
@@ -86,7 +88,7 @@ func Run(ctx context.Context, opts RunOptions) (plugin.JobResult, error) {
 	}
 	_ = stdin.Close()
 
-	ing := NewIngester(mail, accountID, req.DryRun, known)
+	ing := NewIngester(mail, accountID, req.DryRun, preloaded, IngesterOptions{Verbose: opts.Verbose})
 	if err := readEvents(ctx, stdout, ing); err != nil {
 		_ = cmd.Wait()
 		return plugin.JobResult{}, err

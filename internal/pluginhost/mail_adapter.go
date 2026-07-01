@@ -53,21 +53,25 @@ func (h *HostMail) ClearRecent(ctx context.Context, accountID, mailboxID uint32)
 	return err
 }
 
-// AccountHashIndex returns Blake3 hex hashes for all messages in the account.
-func (h *HostMail) AccountHashIndex(ctx context.Context, accountID uint32) (map[string]struct{}, error) {
+// AccountHashIndex maps Blake3 hex hash to the first IMAP mailbox that holds the message.
+func (h *HostMail) AccountHashIndex(ctx context.Context, accountID uint32) (map[string]string, error) {
 	boxes, err := h.stack.Inbox.ListMailboxes(ctx, accountID)
 	if err != nil {
 		return nil, err
 	}
-	known := make(map[string]struct{})
+	known := make(map[string]string)
 	for _, b := range boxes {
 		msgs, err := h.stack.Inbox.List(ctx, accountID, b.ID)
 		if err != nil {
 			return nil, err
 		}
 		for _, m := range msgs {
-			if m.Meta.HasBlob() {
-				known[hex.EncodeToString(m.Meta.BlobHash[:])] = struct{}{}
+			if !m.Meta.HasBlob() {
+				continue
+			}
+			hash := hex.EncodeToString(m.Meta.BlobHash[:])
+			if _, ok := known[hash]; !ok {
+				known[hash] = b.Name
 			}
 		}
 	}
