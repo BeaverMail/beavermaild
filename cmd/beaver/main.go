@@ -262,7 +262,7 @@ func runQueueList(args []string) int {
 		return cli.ExitUsage
 	}
 	if len(fs.Args()) != 0 {
-		fmt.Fprintln(os.Stderr, "usage: beaver queue list [-c path] [--all] [--json]")
+		fmt.Fprintln(os.Stderr, "usage: beaver queue list [-c path] [-all] [-json]")
 		return cli.ExitUsage
 	}
 
@@ -361,7 +361,7 @@ func queueEntryJSON(e mail.QueueEntry) queueJSON {
 
 func queueUsage() {
 	fmt.Fprintln(os.Stderr, "usage:")
-	fmt.Fprintln(os.Stderr, "  beaver queue list [-c path] [--all] [--json]")
+	fmt.Fprintln(os.Stderr, "  beaver queue list [-c path] [-all] [-json]")
 }
 
 func runDomain(args []string) int {
@@ -430,7 +430,7 @@ func runDomainList(args []string) int {
 		return cli.ExitUsage
 	}
 	if len(fs.Args()) != 0 {
-		fmt.Fprintln(os.Stderr, "usage: beaver domain list [-c path] [--json]")
+		fmt.Fprintln(os.Stderr, "usage: beaver domain list [-c path] [-json]")
 		return cli.ExitUsage
 	}
 
@@ -518,6 +518,8 @@ func runAccount(args []string) int {
 		return runAccountCreate(args[1:])
 	case "info":
 		return runAccountInfo(args[1:])
+	case "list":
+		return runAccountList(args[1:])
 	case "delete":
 		return runAccountDelete(args[1:])
 	default:
@@ -660,6 +662,69 @@ func runAccountInfo(args []string) int {
 	return cli.ExitOK
 }
 
+func runAccountList(args []string) int {
+	fs := flag.NewFlagSet("account list", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	configPath := configFlag(fs)
+	domainName := fs.String("domain", "", "mail domain name")
+	asJSON := fs.Bool("json", false, "emit JSON on stdout")
+	if err := fs.Parse(args); err != nil {
+		return cli.ExitUsage
+	}
+	if len(fs.Args()) != 0 || *domainName == "" {
+		accountListUsage()
+		return cli.ExitUsage
+	}
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "account list: load config: %v\n", err)
+		return cli.ExitError
+	}
+
+	ctx := context.Background()
+	dir, closeStore, err := openDirectory(ctx, cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "account list: %v\n", err)
+		return cli.ExitError
+	}
+	defer closeStore()
+
+	accounts, dom, err := dir.ListAccounts(ctx, *domainName)
+	if err != nil {
+		if errors.Is(err, directory.ErrNotFound) {
+			fmt.Fprintf(os.Stderr, "account list: domain not found\n")
+		} else {
+			fmt.Fprintf(os.Stderr, "account list: %v\n", err)
+		}
+		return cli.ExitError
+	}
+	if *asJSON {
+		rows := make([]accountListJSON, len(accounts))
+		for i, acc := range accounts {
+			rows[i] = accountListJSON{
+				AccountID: acc.ID,
+				Email:     acc.LocalPart + "@" + dom.Name,
+				DomainID:  dom.ID,
+				Active:    acc.Active,
+			}
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(rows); err != nil {
+			fmt.Fprintf(os.Stderr, "account list: %v\n", err)
+			return cli.ExitError
+		}
+		return cli.ExitOK
+	}
+	for _, acc := range accounts {
+		email := acc.LocalPart + "@" + dom.Name
+		fmt.Fprintf(os.Stderr, "account_id=%d email=%s domain_id=%d active=%t\n",
+			acc.ID, email, dom.ID, acc.Active)
+	}
+	return cli.ExitOK
+}
+
 func runAccountDelete(args []string) int {
 	fs := flag.NewFlagSet("account delete", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
@@ -699,6 +764,13 @@ func runAccountDelete(args []string) int {
 	fmt.Fprintf(os.Stderr, "deleted account_id=%d email=%s messages_removed=%d blobs_removed=%d\n",
 		res.Account.ID, res.Email, res.MessagesRemoved, res.BlobsRemoved)
 	return cli.ExitOK
+}
+
+type accountListJSON struct {
+	AccountID uint32 `json:"account_id"`
+	Email     string `json:"email"`
+	DomainID  uint32 `json:"domain_id"`
+	Active    bool   `json:"active"`
 }
 
 type accountInfoJSON struct {
@@ -810,13 +882,14 @@ func openStore(ctx context.Context, cfg *config.Config) (storage.Store, func(), 
 func domainUsage() {
 	fmt.Fprintln(os.Stderr, "usage:")
 	fmt.Fprintln(os.Stderr, "  beaver domain add [-c path] <name>")
-	fmt.Fprintln(os.Stderr, "  beaver domain list [-c path] [--json]")
+	fmt.Fprintln(os.Stderr, "  beaver domain list [-c path] [-json]")
 	fmt.Fprintln(os.Stderr, "  beaver domain delete [-c path] <name>")
 }
 
 func accountUsage() {
 	fmt.Fprintln(os.Stderr, "usage:")
 	accountCreateUsage()
+	accountListUsage()
 	accountInfoUsage()
 	accountDeleteUsage()
 }
@@ -825,8 +898,12 @@ func accountCreateUsage() {
 	fmt.Fprintln(os.Stderr, "  beaver account create [-c path] -domain name -local part -password pw")
 }
 
+func accountListUsage() {
+	fmt.Fprintln(os.Stderr, "  beaver account list [-c path] -domain name [-json]")
+}
+
 func accountInfoUsage() {
-	fmt.Fprintln(os.Stderr, "  beaver account info [-c path] -email addr [--json]")
+	fmt.Fprintln(os.Stderr, "  beaver account info [-c path] -email addr [-json]")
 }
 
 func accountDeleteUsage() {
@@ -841,12 +918,13 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  beaver seed [-c path]")
 	fmt.Fprintln(os.Stderr, "  beaver auth [-c path] email password")
 	fmt.Fprintln(os.Stderr, "  beaver send [-c path] -from addr -to addr message...")
-	fmt.Fprintln(os.Stderr, "  beaver queue list [-c path] [--all] [--json]")
+	fmt.Fprintln(os.Stderr, "  beaver queue list [-c path] [-all] [-json]")
 	fmt.Fprintln(os.Stderr, "  beaver domain add [-c path] <name>")
-	fmt.Fprintln(os.Stderr, "  beaver domain list [-c path] [--json]")
+	fmt.Fprintln(os.Stderr, "  beaver domain list [-c path] [-json]")
 	fmt.Fprintln(os.Stderr, "  beaver domain delete [-c path] <name>")
 	fmt.Fprintln(os.Stderr, "  beaver account create [-c path] -domain name -local part -password pw")
-	fmt.Fprintln(os.Stderr, "  beaver account info [-c path] -email addr [--json]")
+	fmt.Fprintln(os.Stderr, "  beaver account list [-c path] -domain name [-json]")
+	fmt.Fprintln(os.Stderr, "  beaver account info [-c path] -email addr [-json]")
 	fmt.Fprintln(os.Stderr, "  beaver account delete [-c path] -email addr")
 	fmt.Fprintln(os.Stderr, "  beaver plugins list [-c path]")
 	printPluginUsageLines()

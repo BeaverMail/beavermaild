@@ -63,28 +63,6 @@ func (d *Local) DeleteAccount(ctx context.Context, email string, blobs *blob.FS)
 	return d.deleteAccount(ctx, acc, dom.Name, blobs)
 }
 
-func (d *Local) accountsForDomain(ctx context.Context, domainID uint32) ([]storage.Account, error) {
-	from := storage.AppendKey(nil, storage.SubspaceLookup, systemAccountID, 0, 0, []byte("acc/"))
-	to := storage.AppendKey(nil, storage.SubspaceLookup, systemAccountID, 0, 0, []byte("acc/\xff"))
-
-	var out []storage.Account
-	err := d.store.Iterate(ctx, from, to, func(_, v []byte) error {
-		var id uint32
-		if err := storage.UnmarshalPersist(v, &id); err != nil {
-			return err
-		}
-		acc, err := d.getAccount(ctx, id)
-		if err != nil {
-			return err
-		}
-		if acc.DomainID == domainID {
-			out = append(out, acc)
-		}
-		return nil
-	})
-	return out, err
-}
-
 func (d *Local) deleteAccount(ctx context.Context, acc storage.Account, domName string, blobs *blob.FS) (DeleteAccountResult, error) {
 	purge, err := purgeAccountMail(ctx, d.store, blobs, acc.ID)
 	if err != nil {
