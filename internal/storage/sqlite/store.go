@@ -22,7 +22,7 @@ var _ storage.Store = (*Store)(nil)
 
 // Open opens path, configures pragmas, migrates, and returns a Store.
 func Open(ctx context.Context, path string) (*Store, error) {
-	db, err := sql.Open(DriverName, path)
+	db, err := sql.Open(DriverName, dsn(path))
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +92,12 @@ func (s *Store) Commit(ctx context.Context, batch *storage.Batch) error {
 	if len(ops) == 0 {
 		return nil
 	}
+	return retryBusy(func() error {
+		return s.commitOnce(ctx, batch, ops)
+	})
+}
 
+func (s *Store) commitOnce(ctx context.Context, batch *storage.Batch, ops []storage.BatchOp) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err

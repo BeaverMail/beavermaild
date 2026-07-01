@@ -8,11 +8,6 @@ import (
 	"github.com/BeaverMail/beaver/internal/storage/blob"
 )
 
-const (
-	queueAccountID     uint32 = 0
-	queueMsgCollection byte   = 1
-)
-
 // purgeAccountResult reports KV and blob cleanup for one account.
 type purgeAccountResult struct {
 	messagesRemoved uint32
@@ -29,7 +24,7 @@ func purgeAccountMail(ctx context.Context, store storage.Store, blobs *blob.FS, 
 	if err := deleteMailKVForAccount(ctx, store, accountID); err != nil {
 		return purgeAccountResult{}, err
 	}
-	stillReferenced, err := referencedBlobHashes(ctx, store)
+	stillReferenced, err := blob.ReferencedHashes(ctx, store)
 	if err != nil {
 		return purgeAccountResult{}, err
 	}
@@ -98,46 +93,4 @@ func deleteMailKVForAccount(ctx context.Context, store storage.Store, accountID 
 		return nil
 	}
 	return store.Commit(ctx, batch)
-}
-
-// referencedBlobHashes scans all mail emails and queue messages for blob hashes still in use.
-func referencedBlobHashes(ctx context.Context, store storage.Store) (map[[storage.Blake3DigestLen]byte]struct{}, error) {
-	refs := make(map[[storage.Blake3DigestLen]byte]struct{})
-
-	from := storage.AppendKeyPrefix(nil, storage.SubspaceMail, 0, 0, byte(storage.CollectionEmail), 6)
-	to := storage.AppendKey(nil, storage.SubspaceMail, ^uint32(0), ^uint32(0), byte(storage.CollectionEmail), nil)
-	err := store.Iterate(ctx, from, to, func(k, v []byte) error {
-		parts, err := storage.DecodeKey(k)
-		if err != nil {
-			return err
-		}
-		if parts.Collection != byte(storage.CollectionEmail) || len(parts.Suffix) > 0 {
-			return nil
-		}
-		var meta storage.EmailMeta
-		if err := storage.UnmarshalPersist(v, &meta); err != nil {
-			return err
-		}
-		if meta.HasBlob() {
-			refs[meta.BlobHash] = struct{}{}
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	from = storage.AppendKeyPrefix(nil, storage.SubspaceQueue, queueAccountID, 0, queueMsgCollection, 6)
-	to = storage.AppendKey(nil, storage.SubspaceQueue, queueAccountID, ^uint32(0), queueMsgCollection, nil)
-	err = store.Iterate(ctx, from, to, func(_, v []byte) error {
-		var msg storage.QueueMessage
-		if err := storage.UnmarshalPersist(v, &msg); err != nil {
-			return err
-		}
-		if msg.HasBlob() {
-			refs[msg.BlobHash] = struct{}{}
-		}
-		return nil
-	})
-	return refs, err
 }
