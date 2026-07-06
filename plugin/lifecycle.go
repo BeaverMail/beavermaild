@@ -11,6 +11,8 @@ const (
 	PluginModeDaemon = "daemon"
 	// PluginModeMetadata is the EnvPluginMode value for host descriptor probes.
 	PluginModeMetadata = "metadata"
+	// EnvDataDir is the BeaverMail data root passed to daemon plugins.
+	EnvDataDir = "BEAVER_DATA_DIR"
 )
 
 // IsDaemonProcess reports whether the current process was started in daemon mode.

@@ -1,0 +1,50 @@
+{
+  "enabled": true,
+  "skip_authenticated": false,
+  "hard_reject": {
+    "rbl_on_connect": true,
+    "static_on_connect": true
+  },
+  "rbl": {
+    "enabled": false,
+    "zones": ["zen.spamhaus.org"],
+    "timeout_ms": 500,
+    "on_dns_fail": "accept",
+    "cache_ttl_listed_sec": 3600,
+    "cache_ttl_miss_sec": 86400
+  },
+  "static": {
+    "deny_client_ip": ["deny-ip.txt"],
+    "deny_mail_from": ["deny-from.txt"],
+    "deny_rcpt_to": []
+  },
+  "lists": {
+    "spam_traps": ["spam-traps.txt"],
+    "trusted_domains": ["trusted-domains.txt"],
+    "url_redirectors": ["url-redirectors.txt"]
+  },
+  "rules": [
+    {"scope": "body", "match": "(?i)click here to claim", "tag": "BODY_PHISH"}
+  ],
+  "content": {
+    "deny_subject_regex": ["(?i)viagra"],
+    "max_header_bytes": 65536
+  },
+  "scores": {
+    "RBL_ZEN": 3.0,
+    "SPF_FAIL": 5.0,
+    "SPF_SOFTFAIL": 2.0,
+    "DKIM_REJECT": 3.0,
+    "DMARC_POLICY_REJECT": 8.0,
+    "DMARC_POLICY_QUARANTINE": 4.0,
+    "SUBJECT_BAD": 5.0
+  },
+  "thresholds": {
+    "reject": 10.0,
+    "discard": 15.0,
+    "spam": 5.0
+  },
+  "tag_actions": {
+    "IP_BLOCKED": "reject"
+  }
+}

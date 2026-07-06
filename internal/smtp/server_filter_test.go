@@ -22,14 +22,14 @@ type phaseFilter struct {
 	action string
 }
 
-func (f phaseFilter) Filter(_ context.Context, req smtp.FilterRequest) (string, error) {
+func (f phaseFilter) Filter(_ context.Context, req smtp.FilterRequest) (smtp.FilterOutcome, error) {
 	if req.Phase == f.phase {
 		if f.action == "" {
-			return smtp.FilterActionReject, nil
+			return smtp.FilterOutcome{Action: smtp.FilterActionReject}, nil
 		}
-		return f.action, nil
+		return smtp.FilterOutcome{Action: f.action}, nil
 	}
-	return smtp.FilterActionAccept, nil
+	return smtp.FilterOutcome{Action: smtp.FilterActionAccept}, nil
 }
 
 func TestSMTPFilterRejectAtEom(t *testing.T) {

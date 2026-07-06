@@ -12,6 +12,7 @@ import (
 	"github.com/BeaverMail/beaver/internal/directory"
 	"github.com/BeaverMail/beaver/internal/imap"
 	"github.com/BeaverMail/beaver/internal/mail"
+	"github.com/BeaverMail/beaver/internal/mailauth"
 	"github.com/BeaverMail/beaver/internal/pluginhost"
 	"github.com/BeaverMail/beaver/internal/pluginhost/daemon"
 	"github.com/BeaverMail/beaver/internal/smtp"
@@ -56,6 +57,16 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 		return nil, err
 	}
 	tlsOpts := tlsOptions(cfg, certs)
+	var mailAuth *mailauth.Verifier
+	if cfg.MailAuth.Enabled {
+		mailAuth = mailauth.New(mailauth.Config{
+			Enabled:      true,
+			DNSTimeout:   cfg.MailAuthDNSTimeout(),
+			SPFEnabled:   cfg.MailAuth.SPF.Enabled,
+			DKIMEnabled:  cfg.MailAuth.DKIM.Enabled,
+			DMARCEnabled: cfg.MailAuth.DMARC.Enabled,
+		})
+	}
 
 	return &App{
 		log:   log,
@@ -73,6 +84,7 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 			Filter:          smtp.NopFilter{},
 			FilterTmpDir:    filepath.Join(cfg.DataDir, "tmp"),
 			FilterTimeoutMs: int(cfg.PluginsSMTPFilterTimeout() / time.Millisecond),
+			MailAuth:        mailAuth,
 		}),
 		imap: imap.NewServer(log, cfg.IMAPListen(), dir, inbox, imap.Options{
 			Certs:       certs,
@@ -135,6 +147,7 @@ func (a *App) Run(ctx context.Context) error {
 
 	dm := daemon.NewManager(a.log, daemon.Config{
 		SocketDir:      a.cfg.PluginsSMTPSocketDir(),
+		DataDir:        a.cfg.DataDir,
 		Timeout:        a.cfg.PluginsSMTPFilterTimeout(),
 		FailOpen:       a.cfg.PluginsSMTPTimeoutFailOpen(),
 		RestartBackoff: a.cfg.PluginsSMTPRestartBackoff(),

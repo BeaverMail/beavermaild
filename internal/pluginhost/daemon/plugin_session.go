@@ -23,12 +23,13 @@ import (
 var errFilterTimeout = errors.New("daemon: filter timeout")
 
 type pluginSession struct {
-	name   string
-	socket string
-	exe    string
-	cmd    *exec.Cmd
-	conn   net.Conn
-	mu     sync.Mutex
+	name    string
+	socket  string
+	exe     string
+	dataDir string
+	cmd     *exec.Cmd
+	conn    net.Conn
+	mu      sync.Mutex
 	isReady bool
 }
 
@@ -38,11 +39,11 @@ func (p *pluginSession) ready() bool {
 	return p.isReady && p.conn != nil
 }
 
-func (p *pluginSession) filter(ctx context.Context, req smtp.FilterRequest) (string, error) {
+func (p *pluginSession) filter(ctx context.Context, req smtp.FilterRequest) (smtp.FilterOutcome, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.conn == nil || !p.isReady {
-		return smtp.FilterActionAccept, nil
+		return smtp.FilterOutcome{Action: smtp.FilterActionAccept}, nil
 	}
 	timeout := time.Duration(req.TimeoutMs) * time.Millisecond
 	if timeout <= 0 {
@@ -51,17 +52,9 @@ func (p *pluginSession) filter(ctx context.Context, req smtp.FilterRequest) (str
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	reqLine, err := json.Marshal(FilterRequest{
-		ID:        req.ID,
-		Phase:     req.Phase,
-		From:      req.From,
-		To:        req.To,
-		ClientIP:  req.ClientIP,
-		BodyPath:  req.BodyPath,
-		TimeoutMs: req.TimeoutMs,
-	})
+	reqLine, err := json.Marshal(encodeFilterRequest(req))
 	if err != nil {
-		return "", err
+		return smtp.FilterOutcome{}, err
 	}
 	done := make(chan error, 1)
 	var resp FilterResponse
@@ -87,19 +80,19 @@ func (p *pluginSession) filter(ctx context.Context, req smtp.FilterRequest) (str
 	}()
 	select {
 	case <-ctx.Done():
-		return "", errFilterTimeout
+		return smtp.FilterOutcome{}, errFilterTimeout
 	case err := <-done:
 		if err != nil {
 			p.markDeadLocked()
-			return "", err
+			return smtp.FilterOutcome{}, err
 		}
 		if resp.ID != "" && resp.ID != req.ID {
-			return "", fmt.Errorf("daemon: response id mismatch")
+			return smtp.FilterOutcome{}, fmt.Errorf("daemon: response id mismatch")
 		}
 		if resp.Action == "" {
-			return "", fmt.Errorf("daemon: empty action")
+			return smtp.FilterOutcome{}, fmt.Errorf("daemon: empty action")
 		}
-		return resp.Action, nil
+		return decodeFilterOutcome(resp), nil
 	}
 }
 
@@ -151,10 +144,14 @@ func (p *pluginSession) connectSession(ctx context.Context) error {
 	defer ln.Close()
 
 	cmd := exec.CommandContext(ctx, p.exe)
-	cmd.Env = append(os.Environ(),
-		plugin.EnvPluginMode+"="+plugin.PluginModeDaemon,
-		"BEAVER_SMTP_SOCKET="+p.socket,
-	)
+	env := []string{
+		plugin.EnvPluginMode + "=" + plugin.PluginModeDaemon,
+		"BEAVER_SMTP_SOCKET=" + p.socket,
+	}
+	if p.dataDir != "" {
+		env = append(env, plugin.EnvDataDir+"="+p.dataDir)
+	}
+	cmd.Env = append(os.Environ(), env...)
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("daemon: start %q: %w", p.name, err)
 	}
@@ -213,11 +210,12 @@ func (p *pluginSession) reconnect(ctx context.Context) error {
 	return p.connectSession(ctx)
 }
 
-func spawnPluginSession(ctx context.Context, name, exe, socketPath string) (*pluginSession, error) {
+func spawnPluginSession(ctx context.Context, name, exe, socketPath, dataDir string) (*pluginSession, error) {
 	p := &pluginSession{
-		name:   name,
-		socket: socketPath,
-		exe:    exe,
+		name:    name,
+		socket:  socketPath,
+		exe:     exe,
+		dataDir: dataDir,
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()

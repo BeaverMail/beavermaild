@@ -42,14 +42,14 @@ func TestManagerLoadFromRegistrySMTP(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := m.Filter()
-	action, err := f.Filter(t.Context(), smtp.FilterRequest{
+	out, err := f.Filter(t.Context(), smtp.FilterRequest{
 		ID: "1", Phase: smtp.FilterPhaseEom, From: "a@b", To: []string{"c@d"}, ClientIP: "127.0.0.1",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if action != smtp.FilterActionAccept {
-		t.Fatalf("action %q", action)
+	if out.Action != smtp.FilterActionAccept {
+		t.Fatalf("action %q", out.Action)
 	}
 	if err := m.Stop(); err != nil {
 		t.Fatal(err)
@@ -75,12 +75,12 @@ func TestManagerRejectActionFromPlugin(t *testing.T) {
 	if err := m.Start(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	action, err := m.Filter().Filter(t.Context(), smtp.FilterRequest{ID: "1", Phase: smtp.FilterPhaseMail})
+	out, err := m.Filter().Filter(t.Context(), smtp.FilterRequest{ID: "1", Phase: smtp.FilterPhaseMail})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if action != smtp.FilterActionReject {
-		t.Fatalf("action %q", action)
+	if out.Action != smtp.FilterActionReject {
+		t.Fatalf("action %q", out.Action)
 	}
 	_ = m.Stop()
 }
@@ -111,15 +111,15 @@ func TestManagerRestartAfterCrash(t *testing.T) {
 
 	f := m.Filter()
 	req := smtp.FilterRequest{ID: "1", Phase: smtp.FilterPhaseMail}
-	action, err := f.Filter(ctx, req)
-	if err != nil || action != smtp.FilterActionAccept {
-		t.Fatalf("first filter: %q %v", action, err)
+	out, err := f.Filter(ctx, req)
+	if err != nil || out.Action != smtp.FilterActionAccept {
+		t.Fatalf("first filter: %+v %v", out, err)
 	}
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		action, err = f.Filter(ctx, smtp.FilterRequest{ID: "2", Phase: smtp.FilterPhaseMail})
-		if err == nil && action == smtp.FilterActionAccept {
+		out, err = f.Filter(ctx, smtp.FilterRequest{ID: "2", Phase: smtp.FilterPhaseMail})
+		if err == nil && out.Action == smtp.FilterActionAccept {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)

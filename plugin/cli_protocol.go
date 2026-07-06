@@ -46,9 +46,10 @@ type CliEvent struct {
 }
 
 const (
-	CliOpBatch = "batch"
-	CliOpDone  = "done"
-	CliOpError = "error"
+	CliOpBatch  = "batch"
+	CliOpDone   = "done"
+	CliOpError  = "error"
+	CliOpReport = "report" // scan/report line; host prints Message to stdout
 )
 
 // SkipBreakdown counts skipped messages by dedup reason for one CLI job.

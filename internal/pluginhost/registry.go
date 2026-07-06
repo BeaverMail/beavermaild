@@ -15,10 +15,12 @@ import (
 
 // Entry describes one installed plugin discovered from a binary metadata probe.
 type Entry struct {
-	Name         string           `json:"name"`
-	Command      []string         `json:"command"`
-	Exe          string           `json:"exe"`
-	CliFlags     []plugin.CliFlag `json:"cli_flags,omitempty"`
+	Name             string                 `json:"name"`
+	Command          []string               `json:"command"`
+	Exe              string                 `json:"exe"`
+	CliFlags         []plugin.CliFlag       `json:"cli_flags,omitempty"`
+	CliSubcommands   []plugin.CliSubcommand `json:"cli_subcommands,omitempty"`
+	CliKind          string                 `json:"cli_kind,omitempty"`
 	// Capabilities: cli = ephemeral CLI jobs; smtp/web = persistent daemon under beaver serve (see docs/plugins.md).
 	Capabilities []string `json:"capabilities"`
 }
@@ -90,6 +92,12 @@ func mergeDescriptor(base Entry, desc plugin.Descriptor) Entry {
 	if len(desc.Capabilities) > 0 {
 		base.Capabilities = normalizeCapabilities(desc.Capabilities)
 	}
+	if desc.CliKind != "" {
+		base.CliKind = desc.CliKind
+	}
+	if len(desc.CliSubcommands) > 0 {
+		base.CliSubcommands = desc.CliSubcommands
+	}
 	return base
 }
 
@@ -156,6 +164,18 @@ func (e Entry) Op() string {
 
 // Find returns the CLI-capable entry for a command path like filter/reload.
 func (r *Registry) Find(command []string) (Entry, bool) {
+	if e, ok := r.findExact(command); ok {
+		return e, true
+	}
+	if len(command) >= 2 {
+		if parent, ok := r.findExact(command[:1]); ok && (parent.CliKind == plugin.CliKindAdmin || parent.HasSubcommands()) {
+			return parent, true
+		}
+	}
+	return Entry{}, false
+}
+
+func (r *Registry) findExact(command []string) (Entry, bool) {
 	key := strings.Join(command, "/")
 	for _, e := range r.entries {
 		if strings.Join(e.Command, "/") == key && e.HasCapability(plugin.CapCLI) {

@@ -20,6 +20,7 @@ import (
 type Manager struct {
 	log            *slog.Logger
 	socketDir      string
+	dataDir        string
 	timeout        time.Duration
 	failOpen       bool
 	restartBackoff time.Duration
@@ -36,6 +37,7 @@ type Manager struct {
 // Config holds daemon manager runtime settings.
 type Config struct {
 	SocketDir      string
+	DataDir        string
 	Timeout        time.Duration
 	FailOpen       bool
 	RestartBackoff time.Duration
@@ -52,6 +54,7 @@ func NewManager(log *slog.Logger, cfg Config) *Manager {
 	return &Manager{
 		log:            log,
 		socketDir:      cfg.SocketDir,
+		dataDir:        cfg.DataDir,
 		timeout:        cfg.Timeout,
 		failOpen:       cfg.FailOpen,
 		restartBackoff: cfg.RestartBackoff,
@@ -96,7 +99,7 @@ func (m *Manager) Start(ctx context.Context) error {
 			return err
 		}
 		socketPath := filepath.Join(m.socketDir, e.Name+".sock")
-		sess, err := spawnPluginSession(m.ctx, e.Name, exe, socketPath)
+		sess, err := spawnPluginSession(m.ctx, e.Name, exe, socketPath, m.dataDir)
 		if err != nil {
 			for _, s := range sessions {
 				s.stop()

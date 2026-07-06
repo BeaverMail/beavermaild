@@ -28,7 +28,7 @@ func TestParsePluginFlags(t *testing.T) {
 		"--account", "alice@example.com",
 		"--param", "list=/etc/filters",
 		"--dry-run",
-	}, "/data/config.json", nil)
+	}, "/data/config.json", nil, plugin.CliProfileIngest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +43,7 @@ func TestParsePluginFlagsDescriptorCLI(t *testing.T) {
 		"--srcdir", "/var/data/src",
 	}, "/data/config.json", []plugin.CliFlag{
 		{Key: "srcdir", Flag: "srcdir", Required: true},
-	})
+	}, plugin.CliProfileIngest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestParsePluginFlagsDescriptorCLIRequired(t *testing.T) {
 		"--account", "alice@example.com",
 	}, "/data/config.json", []plugin.CliFlag{
 		{Key: "srcdir", Flag: "srcdir", Required: true},
-	})
+	}, plugin.CliProfileIngest)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -77,8 +77,18 @@ func TestPluginFlagHintScanOnly(t *testing.T) {
 	}
 }
 
+func TestParsePluginFlagsAdminSkipsAccount(t *testing.T) {
+	p, err := parsePluginFlags([]string{"-c", "/data/config.json"}, "/data/config.json", nil, plugin.CliProfileJob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.account != "" {
+		t.Fatalf("account=%q", p.account)
+	}
+}
+
 func TestParsePluginFlagsRequiresAccount(t *testing.T) {
-	_, err := parsePluginFlags([]string{"--param", "list=/x"}, "/data/config.json", nil)
+	_, err := parsePluginFlags([]string{"--param", "list=/x"}, "/data/config.json", nil, plugin.CliProfileIngest)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -107,6 +117,32 @@ func TestFindCLIByPrefix(t *testing.T) {
 	}
 	if got := reg.FindCLIByPrefix([]string{"nope"}); len(got) != 0 {
 		t.Fatalf("nope prefix: %+v", got)
+	}
+}
+
+func TestTryDispatchAdminPluginBarePrefixShowsUsage(t *testing.T) {
+	root := t.TempDir()
+	dataDir := filepath.Join(root, "data")
+	pluginsDir := filepath.Join(dataDir, "plugins")
+	if err := os.MkdirAll(pluginsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := filepath.Join(dataDir, "config.json")
+	if err := os.WriteFile(cfgPath, []byte(`{"data_dir":"data"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BEAVER_CONFIG", cfgPath)
+	if err := installPlugin(t, pluginsDir, "beaver-plugin-filter-admin", "internal/pluginhost/testdata/adminfilterplugin"); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+
+	code, ok := TryDispatch(t.Context(), DispatchOptions{Args: []string{"filter"}})
+	if !ok {
+		t.Fatal("expected filter bare prefix to dispatch to usage")
+	}
+	if code != cli.ExitUsage {
+		t.Fatalf("code=%d want usage", code)
 	}
 }
 

@@ -1,0 +1,3 @@
+# Domains to skip DNSBL / heavy URL checks (one per line or @suffix).
+# example.com
+# google.com

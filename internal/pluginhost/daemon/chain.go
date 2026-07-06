@@ -12,7 +12,7 @@ import (
 
 type filterPeer interface {
 	ready() bool
-	filter(ctx context.Context, req smtp.FilterRequest) (string, error)
+	filter(ctx context.Context, req smtp.FilterRequest) (smtp.FilterOutcome, error)
 }
 
 // Chain implements smtp.MessageFilter across spawned SMTP daemon plugins.
@@ -33,13 +33,14 @@ func NewChain(log *slog.Logger, plugins []*pluginSession, timeout time.Duration,
 }
 
 // Filter asks each ready plugin in order; first non-accept action wins.
-func (c *Chain) Filter(ctx context.Context, req smtp.FilterRequest) (string, error) {
+func (c *Chain) Filter(ctx context.Context, req smtp.FilterRequest) (smtp.FilterOutcome, error) {
 	if len(c.plugins) == 0 {
-		return smtp.FilterActionAccept, nil
+		return smtp.FilterOutcome{Action: smtp.FilterActionAccept}, nil
 	}
 	if req.TimeoutMs <= 0 {
 		req.TimeoutMs = int(c.timeout / time.Millisecond)
 	}
+	var last smtp.FilterOutcome
 	for _, p := range c.plugins {
 		if !p.ready() {
 			continue
@@ -49,7 +50,7 @@ func (c *Chain) Filter(ctx context.Context, req smtp.FilterRequest) (string, err
 			timeout = c.timeout
 		}
 		filterCtx, cancel := context.WithTimeout(ctx, timeout)
-		action, err := p.filter(filterCtx, req)
+		out, err := p.filter(filterCtx, req)
 		cancel()
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, errFilterTimeout) {
@@ -61,17 +62,21 @@ func (c *Chain) Filter(ctx context.Context, req smtp.FilterRequest) (string, err
 				if c.failOpen {
 					continue
 				}
-				return smtp.FilterActionTempfail, nil
+				return smtp.FilterOutcome{Action: smtp.FilterActionTempfail}, nil
 			}
 			c.log.Warn("plugin_filter_error", slog.Any("err", err))
 			if c.failOpen {
 				continue
 			}
-			return smtp.FilterActionTempfail, nil
+			return smtp.FilterOutcome{Action: smtp.FilterActionTempfail}, nil
 		}
-		if action != smtp.FilterActionAccept {
-			return action, nil
+		last = out
+		if out.Action != smtp.FilterActionAccept {
+			return out, nil
 		}
 	}
-	return smtp.FilterActionAccept, nil
+	if last.Action == "" {
+		last.Action = smtp.FilterActionAccept
+	}
+	return last, nil
 }

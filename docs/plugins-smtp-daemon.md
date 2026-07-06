@@ -1,4 +1,6 @@
-# SMTP daemon plugin protocol (draft v2.1)
+# SMTP daemon plugin protocol (v2.2)
+
+Semantic details for antispam and mail-auth: [`.specs/antispam.md`](../.specs/antispam.md).
 
 Persistent plugins with `smtp` capability are started by `beaver serve`. The **same executable** may also expose `cli` and be spawned on demand for operator commands; see [plugins.md](plugins.md) (Capabilities).
 
@@ -21,6 +23,7 @@ Implementation: `internal/pluginhost/daemon/`.
 |----------|---------|
 | `BEAVER_PLUGIN_MODE` | `daemon` |
 | `BEAVER_SMTP_SOCKET` | Unix socket path, e.g. `<data_dir>/run/antispam.sock` |
+| `BEAVER_DATA_DIR` | Data root; plugins read policy from subdirs (e.g. `antispam/`) |
 
 ## Connection and ready handshake
 
@@ -87,6 +90,18 @@ Common fields:
 | `body_path` | `eom` | Absolute path to full RFC 5322 message on disk |
 | `timeout_ms` | no | Per-request override; host default if omitted |
 
+### v2.2 additions
+
+| Field | Phases | Type | Notes |
+|-------|--------|------|-------|
+| `listener` | connect+ | `inbound` or `submission` | Which SMTP listener accepted the connection |
+| `tls` | connect+ | bool | TLS active (including after STARTTLS) |
+| `authenticated` | mail+ | bool | SMTP AUTH completed |
+| `ehlo_domain` | helo+ | string | Client EHLO/HELO name |
+| `auth` | mail+ / eom | object | Host mail-auth results (`spf_ehlo`, `spf_mail_from`, `dkim`, `dmarc`, `dmarc_policy`) |
+
+Response v2.2 optional fields: `score` (float), `tags` (string array), `headers` (map appended on accept).
+
 ### `body_path` (same pattern as CLI `raw_path`)
 
 **Host behavior:**
@@ -100,7 +115,7 @@ Common fields:
 
 **Why not inline body in JSON:** avoids RAM blow-up and base64 overhead on large mail. Same rationale as CLI `raw_path`.
 
-**Not in v2.1:** `data_stream` (chunked body over the socket). Possible later; `body_path` is the default and recommended path.
+**Not in v2.2:** `data_stream` (chunked body over the socket). Possible later; `body_path` is the default and recommended path.
 
 Example `rcpt` (no body):
 

@@ -13,6 +13,7 @@ import (
 
 	"github.com/BeaverMail/beaver/internal/directory"
 	"github.com/BeaverMail/beaver/internal/mail"
+	"github.com/BeaverMail/beaver/internal/mailauth"
 	"github.com/BeaverMail/beaver/internal/tlsload"
 )
 
@@ -36,6 +37,12 @@ type session struct {
 	filterTmpDir    string
 	filterTimeoutMs int
 	filterSeq       int
+	mailAuth        *mailauth.Verifier
+	heloDomain      string
+	authState       mailauth.SessionState
+	iprevPTR        string
+	iprevResult     string
+	iprevDone       bool
 
 	principal directory.Principal
 
@@ -62,7 +69,7 @@ type smtpCommand struct {
 	arg string
 }
 
-func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *mail.Inbox, queue *mail.Queue, certs *tlsload.Certs, secure, tlsRequired, vrfyEnabled, submission bool, limits DataLimits, filter MessageFilter, filterTmpDir string, filterTimeoutMs int) *session {
+func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *mail.Inbox, queue *mail.Queue, certs *tlsload.Certs, secure, tlsRequired, vrfyEnabled, submission bool, limits DataLimits, filter MessageFilter, filterTmpDir string, filterTimeoutMs int, mailAuth *mailauth.Verifier) *session {
 	if filter == nil {
 		filter = NopFilter{}
 	}
@@ -85,6 +92,7 @@ func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *ma
 		filter:          filter,
 		filterTmpDir:    filterTmpDir,
 		filterTimeoutMs: filterTimeoutMs,
+		mailAuth:        mailAuth,
 	}
 }
 
@@ -92,10 +100,11 @@ func (s *session) run(ctx context.Context) error {
 	if err := s.writef("220 localhost ESMTP BeaverMail"); err != nil {
 		return err
 	}
-	if action, err := s.runFilter(ctx, FilterPhaseConnect, nil, ""); err != nil {
+	s.ensureIPRev(ctx)
+	if out, err := s.runFilter(ctx, FilterPhaseConnect, nil, ""); err != nil {
 		return err
-	} else if action != FilterActionAccept {
-		reply, _ := s.replyFilterAction(action)
+	} else if out.Action != FilterActionAccept {
+		reply, _ := s.replyFilterAction(out.Action)
 		if reply == "" {
 			reply = replyConnectionRejected
 		}
@@ -157,16 +166,20 @@ func pipelineContinues(cmd string) bool {
 func (s *session) dispatch(ctx context.Context, cmd, arg string, mailBlocked bool) (stop, blockMail bool, err error) {
 	switch cmd {
 	case "EHLO":
+		s.heloDomain = strings.TrimSpace(arg)
 		s.pipelining = true
 		if err := s.filterHelo(ctx); err != nil {
 			return false, false, err
 		}
+		s.checkSPFEhlo(ctx)
 		return false, false, s.writeEHLO(true)
 	case "HELO":
+		s.heloDomain = strings.TrimSpace(arg)
 		s.pipelining = false
 		if err := s.filterHelo(ctx); err != nil {
 			return false, false, err
 		}
+		s.checkSPFEhlo(ctx)
 		return false, false, s.writeEHLO(false)
 	case "STARTTLS":
 		return false, false, s.cmdStartTLS()
@@ -258,15 +271,16 @@ func (s *session) handleMail(ctx context.Context, arg string) (blockMail bool, e
 		s.mailBody = body
 	}
 	s.mailUTF8 = mailParams.SMTPUTF8 || addressNeedsUTF8(addr)
-	if action, err := s.runFilter(ctx, FilterPhaseMail, nil, ""); err != nil {
+	if out, err := s.runFilter(ctx, FilterPhaseMail, nil, ""); err != nil {
 		return true, err
-	} else if action != FilterActionAccept {
-		reply, _ := s.replyFilterAction(action)
+	} else if out.Action != FilterActionAccept {
+		reply, _ := s.replyFilterAction(out.Action)
 		if reply == "" {
 			reply = replyFilterReject
 		}
 		return true, s.writef(reply)
 	}
+	s.checkSPFMailFrom(ctx)
 	return false, s.writef(replyOK)
 }
 
@@ -307,10 +321,10 @@ func (s *session) handleRcpt(ctx context.Context, arg string, mailBlocked bool) 
 				notify:  rcptParams.Notify,
 				orcpt:   rcptParams.Orcpt,
 			})
-			if action, err := s.runFilter(ctx, FilterPhaseRcpt, []string{normalizeEnvelopeAddress(addr)}, ""); err != nil {
+			if out, err := s.runFilter(ctx, FilterPhaseRcpt, []string{normalizeEnvelopeAddress(addr)}, ""); err != nil {
 				return err
-			} else if action != FilterActionAccept {
-				reply, _ := s.replyFilterAction(action)
+			} else if out.Action != FilterActionAccept {
+				reply, _ := s.replyFilterAction(out.Action)
 				if reply == "" {
 					reply = replyFilterReject
 				}
@@ -336,10 +350,10 @@ func (s *session) handleRcpt(ctx context.Context, arg string, mailBlocked bool) 
 		notify:    rcptParams.Notify,
 		orcpt:     rcptParams.Orcpt,
 	})
-	if action, err := s.runFilter(ctx, FilterPhaseRcpt, []string{normalizeEnvelopeAddress(addr)}, ""); err != nil {
+	if out, err := s.runFilter(ctx, FilterPhaseRcpt, []string{normalizeEnvelopeAddress(addr)}, ""); err != nil {
 		return err
-	} else if action != FilterActionAccept {
-		reply, _ := s.replyFilterAction(action)
+	} else if out.Action != FilterActionAccept {
+		reply, _ := s.replyFilterAction(out.Action)
 		if reply == "" {
 			reply = replyFilterReject
 		}
@@ -355,10 +369,10 @@ func (s *session) handleDATA(ctx context.Context) error {
 	if len(s.rcpt) == 0 {
 		return s.writef(replyBadSequence)
 	}
-	if action, err := s.runFilter(ctx, FilterPhaseData, s.rcptAddresses(), ""); err != nil {
+	if out, err := s.runFilter(ctx, FilterPhaseData, s.rcptAddresses(), ""); err != nil {
 		return err
-	} else if action != FilterActionAccept {
-		reply, _ := s.replyFilterAction(action)
+	} else if out.Action != FilterActionAccept {
+		reply, _ := s.replyFilterAction(out.Action)
 		if reply == "" {
 			reply = replyFilterReject
 		}
@@ -381,14 +395,14 @@ func (s *session) handleDATA(ctx context.Context) error {
 
 // filterHelo runs the helo-phase plugin filter before the EHLO/HELO response.
 func (s *session) filterHelo(ctx context.Context) error {
-	action, err := s.runFilter(ctx, FilterPhaseHelo, nil, "")
+	out, err := s.runFilter(ctx, FilterPhaseHelo, nil, "")
 	if err != nil {
 		return err
 	}
-	if action == FilterActionAccept {
+	if out.Action == FilterActionAccept {
 		return nil
 	}
-	reply, _ := s.replyFilterAction(action)
+	reply, _ := s.replyFilterAction(out.Action)
 	if reply == "" {
 		reply = replyFilterReject
 	}
@@ -572,6 +586,7 @@ func (s *session) reset() {
 	s.rcpt = s.rcpt[:0]
 	s.bdatBuf = s.bdatBuf[:0]
 	s.bdatUsed = false
+	s.authState.SPFMailFrom = ""
 }
 
 // finishDelivery stores the message for local recipients and enqueues remote ones.

@@ -36,6 +36,21 @@ type Config struct {
 	Queue    QueueConfig   `json:"queue"`
 	Quota    QuotaConfig   `json:"quota"`
 	Plugins  PluginsConfig `json:"plugins"`
+	MailAuth MailAuthConfig `json:"mail_auth"`
+}
+
+// MailAuthConfig holds inbound SPF/DKIM/DMARC verification settings.
+type MailAuthConfig struct {
+	Enabled      bool            `json:"enabled"`
+	DNSTimeoutMs int             `json:"dns_timeout_ms"`
+	SPF          MailAuthToggle  `json:"spf"`
+	DKIM         MailAuthToggle  `json:"dkim"`
+	DMARC        MailAuthToggle  `json:"dmarc"`
+}
+
+// MailAuthToggle enables one mail-auth check family.
+type MailAuthToggle struct {
+	Enabled bool `json:"enabled"`
 }
 
 // PluginsConfig holds plugin host settings.
@@ -204,7 +219,20 @@ func (c *Config) Validate() error {
 	default:
 		return fmt.Errorf("config: plugins.smtp.timeout_policy must be accept or tempfail")
 	}
+	c.normalizeMailAuth()
 	return nil
+}
+
+// normalizeMailAuth enables SPF/DKIM/DMARC when mail_auth.enabled and no sub-toggle is set.
+func (c *Config) normalizeMailAuth() {
+	if !c.MailAuth.Enabled {
+		return
+	}
+	if !c.MailAuth.SPF.Enabled && !c.MailAuth.DKIM.Enabled && !c.MailAuth.DMARC.Enabled {
+		c.MailAuth.SPF.Enabled = true
+		c.MailAuth.DKIM.Enabled = true
+		c.MailAuth.DMARC.Enabled = true
+	}
 }
 
 // PluginsSMTPSocketDir returns the Unix socket directory for SMTP filter plugins.
@@ -242,7 +270,14 @@ func (c *Config) PluginsSMTPRestartBackoff() time.Duration {
 	return time.Duration(ms) * time.Millisecond
 }
 
-// SMTPListen returns the inbound SMTP bind address.
+// MailAuthDNSTimeout returns the DNS timeout for SPF/DKIM/DMARC lookups.
+func (c *Config) MailAuthDNSTimeout() time.Duration {
+	ms := c.MailAuth.DNSTimeoutMs
+	if ms <= 0 {
+		ms = 5000
+	}
+	return time.Duration(ms) * time.Millisecond
+}
 func (c *Config) SMTPListen() string {
 	if c.SMTP.Listen != "" {
 		return c.SMTP.Listen
