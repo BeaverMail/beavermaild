@@ -15,10 +15,14 @@ func (ib *Inbox) DeleteMessage(ctx context.Context, accountID, emailID uint32) e
 		return err
 	}
 	blobHash := meta.BlobHash
+	mailboxID := meta.MailboxID
 	hasBlob := meta.HasBlob()
 	batch := storage.NewBatch().WithAccount(accountID)
 	suffix := storage.DocumentSuffix(storage.CollectionEmail, emailID, nil)
 	if err := batch.Delete(storage.SubspaceMail, suffix); err != nil {
+		return err
+	}
+	if err := ib.queueMailboxIndexRemove(batch, mailboxID, emailID); err != nil {
 		return err
 	}
 	if err := ib.store.Commit(ctx, batch); err != nil {

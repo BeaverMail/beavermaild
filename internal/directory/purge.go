@@ -72,10 +72,17 @@ func collectAccountBlobHashes(ctx context.Context, store storage.Store, accountI
 	return hashes, msgCount, err
 }
 
-// deleteMailKVForAccount removes all SubspaceMail keys for accountID.
+// deleteMailKVForAccount removes all SubspaceMail and mailbox index keys for accountID.
 func deleteMailKVForAccount(ctx context.Context, store storage.Store, accountID uint32) error {
-	from := storage.AppendKeyPrefix(nil, storage.SubspaceMail, accountID, 0, 0, 5)
-	to := storage.AppendKey(nil, storage.SubspaceMail, accountID, ^uint32(0), 0xff, nil)
+	if err := deleteSubspaceKeysForAccount(ctx, store, accountID, storage.SubspaceMail); err != nil {
+		return err
+	}
+	return deleteSubspaceKeysForAccount(ctx, store, accountID, storage.SubspaceIndex)
+}
+
+func deleteSubspaceKeysForAccount(ctx context.Context, store storage.Store, accountID uint32, subspace byte) error {
+	from := storage.AppendKeyPrefix(nil, subspace, accountID, 0, 0, 5)
+	to := storage.AppendKey(nil, subspace, accountID, ^uint32(0), 0xff, nil)
 
 	batch := storage.NewBatch().WithAccount(accountID)
 	err := store.Iterate(ctx, from, to, func(k, _ []byte) error {

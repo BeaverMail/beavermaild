@@ -3,7 +3,6 @@ package mail
 
 import (
 	"context"
-	"sort"
 
 	"github.com/BeaverMail/beaver/internal/storage"
 )
@@ -16,33 +15,16 @@ type Message struct {
 
 // List returns messages in mailboxID for accountID, sorted by UID ascending.
 func (ib *Inbox) List(ctx context.Context, accountID, mailboxID uint32) ([]Message, error) {
-	from := storage.AppendKeyPrefix(nil, storage.SubspaceMail, accountID, 0, byte(storage.CollectionEmail), 6)
-	to := storage.AppendKey(nil, storage.SubspaceMail, accountID, ^uint32(0), byte(storage.CollectionEmail), nil)
-
-	var out []Message
-	err := ib.store.Iterate(ctx, from, to, func(k, v []byte) error {
-		parts, err := storage.DecodeKey(k)
-		if err != nil {
-			return err
-		}
-		if parts.Collection != byte(storage.CollectionEmail) || len(parts.Suffix) > 0 {
-			return nil
-		}
-		var meta storage.EmailMeta
-		if err := storage.UnmarshalPersist(v, &meta); err != nil {
-			return err
-		}
-		if meta.MailboxID != mailboxID {
-			return nil
-		}
-		out = append(out, Message{UID: parts.DocumentID, Meta: meta})
-		return nil
-	})
+	ready, err := ib.mailboxIndexReady(ctx, accountID, mailboxID)
 	if err != nil {
 		return nil, err
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].UID < out[j].UID })
-	return out, nil
+	if !ready {
+		if err := ib.backfillMailboxIndex(ctx, accountID, mailboxID); err != nil {
+			return nil, err
+		}
+	}
+	return ib.listFromMailboxIndex(ctx, accountID, mailboxID)
 }
 
 // LoadRaw returns the RFC 5322 bytes for meta (blob hash required).

@@ -71,6 +71,12 @@ func (ib *Inbox) Deliver(ctx context.Context, accountID uint32, raw []byte) (uin
 	if err := batch.Set(storage.SubspaceMail, suffix, wire); err != nil {
 		return 0, err
 	}
+	if err := ib.queueMailboxIndexAdd(batch, InboxMailboxID, emailID); err != nil {
+		return 0, err
+	}
+	if err := ib.queueMailboxIndexReady(batch, InboxMailboxID); err != nil {
+		return 0, err
+	}
 	if err := ib.store.Commit(ctx, batch); err != nil {
 		return 0, err
 	}

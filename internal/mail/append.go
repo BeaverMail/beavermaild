@@ -65,6 +65,12 @@ func (ib *Inbox) Append(ctx context.Context, accountID, mailboxID uint32, raw []
 	if err := batch.Set(storage.SubspaceMail, suffix, wire); err != nil {
 		return 0, err
 	}
+	if err := ib.queueMailboxIndexAdd(batch, mailboxID, emailID); err != nil {
+		return 0, err
+	}
+	if err := ib.queueMailboxIndexReady(batch, mailboxID); err != nil {
+		return 0, err
+	}
 	if err := ib.store.Commit(ctx, batch); err != nil {
 		return 0, err
 	}

@@ -20,6 +20,8 @@ const (
 	CollectionContactCard Collection = 12
 	CollectionFileNode Collection = 13
 	CollectionCalendarEventNotification Collection = 14
+	// CollectionMailboxEmailIndex maps mailbox membership in SubspaceIndex (suffix = email id).
+	CollectionMailboxEmailIndex Collection = 15
 )
 
 // DocumentSuffix builds a batch suffix from collection, document id, and optional tail.

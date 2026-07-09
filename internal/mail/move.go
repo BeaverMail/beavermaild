@@ -32,6 +32,7 @@ func (ib *Inbox) MoveMessages(ctx context.Context, accountID uint32, emailIDs []
 		if err != nil {
 			return err
 		}
+		srcMailbox := meta.MailboxID
 		meta.MailboxID = destMailboxID
 		meta.Flags &^= FlagRecent
 		modSeq, err := ib.allocateModSeq(ctx, accountID, destMailboxID)
@@ -45,6 +46,15 @@ func (ib *Inbox) MoveMessages(ctx context.Context, accountID uint32, emailIDs []
 		}
 		suffix := storage.DocumentSuffix(storage.CollectionEmail, id, nil)
 		if err := batch.Set(storage.SubspaceMail, suffix, wire); err != nil {
+			return err
+		}
+		if err := ib.queueMailboxIndexRemove(batch, srcMailbox, id); err != nil {
+			return err
+		}
+		if err := ib.queueMailboxIndexAdd(batch, destMailboxID, id); err != nil {
+			return err
+		}
+		if err := ib.queueMailboxIndexReady(batch, destMailboxID); err != nil {
 			return err
 		}
 	}
@@ -95,6 +105,12 @@ func (ib *Inbox) CopyMessages(ctx context.Context, accountID uint32, emailIDs []
 		}
 		suffix := storage.DocumentSuffix(storage.CollectionEmail, newID, nil)
 		if err := batch.Set(storage.SubspaceMail, suffix, wire); err != nil {
+			return nil, err
+		}
+		if err := ib.queueMailboxIndexAdd(batch, destMailboxID, newID); err != nil {
+			return nil, err
+		}
+		if err := ib.queueMailboxIndexReady(batch, destMailboxID); err != nil {
 			return nil, err
 		}
 		newIDs = append(newIDs, newID)
