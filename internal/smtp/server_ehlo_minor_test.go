@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,7 +18,7 @@ import (
 	"github.com/BeaverMail/beaver/internal/storage/sqlite"
 )
 
-func TestSMTPEHLOMinorExtensions(t *testing.T) {
+func TestSMTPEHLONoStubExtensions(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -50,34 +51,26 @@ func TestSMTPEHLOMinorExtensions(t *testing.T) {
 	read := bufio.NewReader(conn)
 	expect(t, read, "220")
 	send(t, conn, "EHLO test")
-	seen := make(map[string]bool)
+	forbidden := []string{
+		"250-BINARYMIME",
+		"250-REQUIRETLS",
+		"250-FUTURERELEASE",
+		"250-DELIVER BY",
+		"250-MT-PRIORITY",
+		"250-NO-SOLICITING",
+	}
 	for {
 		line, err := read.ReadString('\n')
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, want := range []string{
-			"250-FUTURERELEASE",
-			"250-DELIVER BY",
-			"250-MT-PRIORITY",
-			"250-NO-SOLICITING",
-		} {
-			if len(line) >= len(want) && line[:len(want)] == want {
-				seen[want] = true
+		for _, bad := range forbidden {
+			if len(line) >= len(bad) && line[:len(bad)] == bad {
+				t.Fatalf("unexpected EHLO line %q", strings.TrimSpace(line))
 			}
 		}
 		if len(line) >= 7 && line[:7] == "250 2.0" {
 			break
-		}
-	}
-	for _, want := range []string{
-		"250-FUTURERELEASE",
-		"250-DELIVER BY",
-		"250-MT-PRIORITY",
-		"250-NO-SOLICITING",
-	} {
-		if !seen[want] {
-			t.Fatalf("missing EHLO %s", want)
 		}
 	}
 }

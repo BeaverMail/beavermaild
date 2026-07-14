@@ -21,7 +21,7 @@ func TestDeliverMXPermanentStops(t *testing.T) {
 	})
 	t.Cleanup(func() { first.close(); second.close() })
 
-	err := deliverMX(context.Background(), []string{first.addr, second.addr}, "a@b.c", "x@y.z", []byte("hi\r\n"))
+	err := deliverMX(context.Background(), []string{first.addr, second.addr}, "a@b.c", "x@y.z", []byte("hi\r\n"), ClientOptions{})
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -42,7 +42,7 @@ func TestDeliverMX421TriesNext(t *testing.T) {
 	second := startMockMX(t, mxScript{})
 	t.Cleanup(func() { first.close(); second.close() })
 
-	err := deliverMX(context.Background(), []string{first.addr, second.addr}, "a@b.c", "x@y.z", []byte("hi\r\n"))
+	err := deliverMX(context.Background(), []string{first.addr, second.addr}, "a@b.c", "x@y.z", []byte("hi\r\n"), ClientOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func TestDeliverMXDialFailTriesNext(t *testing.T) {
 	second := startMockMX(t, mxScript{})
 	t.Cleanup(second.close)
 
-	err := deliverMX(context.Background(), []string{"127.0.0.1:1", second.addr}, "a@b.c", "x@y.z", []byte("hi\r\n"))
+	err := deliverMX(context.Background(), []string{"127.0.0.1:1", second.addr}, "a@b.c", "x@y.z", []byte("hi\r\n"), ClientOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -10,6 +10,7 @@ import (
 type RemoteConfig struct {
 	Relay        string
 	RelayOptions ClientOptions
+	MXOptions    ClientOptions // TLS verify policy for direct MX delivery
 }
 
 // DeliverRemote submits mail using relay when set, otherwise MX lookup on rcptTo domain.
@@ -25,11 +26,14 @@ func DeliverRemote(ctx context.Context, cfg RemoteConfig, mailFrom, rcptTo strin
 	if err != nil {
 		return err
 	}
-	return deliverMX(ctx, hosts, mailFrom, rcptTo, data)
+	return deliverMX(ctx, hosts, mailFrom, rcptTo, data, cfg.MXOptions)
 }
 
-func deliverMX(ctx context.Context, hosts []string, mailFrom, rcptTo string, data []byte) error {
-	mxOpts := ClientOptions{OpportunisticSTARTTLS: true}
+func deliverMX(ctx context.Context, hosts []string, mailFrom, rcptTo string, data []byte, opts ClientOptions) error {
+	mxOpts := ClientOptions{
+		OpportunisticSTARTTLS: true,
+		TLSInsecureSkipVerify: opts.TLSInsecureSkipVerify,
+	}
 	var last error
 	for _, host := range hosts {
 		err := Send(ctx, host, mailFrom, rcptTo, data, mxOpts)

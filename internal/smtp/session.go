@@ -417,16 +417,10 @@ func (s *session) writeEHLO(extended bool) error {
 		"250-localhost",
 		"250-ENHANCEDSTATUSCODES",
 		"250-8BITMIME",
-		"250-BINARYMIME",
 		"250-SMTPUTF8",
 		"250-CHUNKING",
 		"250-DSN",
-		"250-REQUIRETLS",
 		"250-PIPELINING",
-		"250-FUTURERELEASE",
-		"250-DELIVER BY",
-		"250-MT-PRIORITY",
-		"250-NO-SOLICITING",
 		fmt.Sprintf("250-SIZE %d", s.dataLimits.MaxMessageBytes),
 	}
 	if s.vrfyEnabled {

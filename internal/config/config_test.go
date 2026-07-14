@@ -77,6 +77,15 @@ func TestSMTPRelayEnv(t *testing.T) {
 	}
 }
 
+func TestSMTPOutboundTLSInsecureEnv(t *testing.T) {
+	cfg := config.Default(t.TempDir())
+	t.Setenv("BEAVER_SMTP_OUTBOUND_TLS_INSECURE", "true")
+	cfg.ApplyEnv()
+	if !cfg.SMTPOutboundTLSInsecureSkip() {
+		t.Fatal("expected outbound TLS insecure skip")
+	}
+}
+
 func TestPluginsSMTPDefaults(t *testing.T) {
 	t.Parallel()
 	cfg := config.Default(t.TempDir())

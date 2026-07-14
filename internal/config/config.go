@@ -83,9 +83,10 @@ type SMTPConfig struct {
 	SubmissionTLSListen string `json:"submission_tls_listen"`
 	Relay               string `json:"relay"`
 	RelayStartTLS       bool   `json:"relay_starttls"`
-	RelayUser           string `json:"relay_user"`
-	RelayPassword       string `json:"relay_password"`
-	MaxMessageBytes     int    `json:"max_message_bytes"`
+	RelayUser                 string `json:"relay_user"`
+	RelayPassword             string `json:"relay_password"`
+	OutboundTLSInsecureSkip   bool   `json:"outbound_tls_insecure_skip_verify"` // dev/self-signed relay or MX; default verify
+	MaxMessageBytes           int    `json:"max_message_bytes"`
 	VRFYEnabled         bool   `json:"vrfy_enabled"` // off by default (RFC 5321: user enumeration risk)
 }
 
@@ -173,6 +174,9 @@ func (c *Config) ApplyEnv() {
 	}
 	if v := os.Getenv("BEAVER_SMTP_RELAY_STARTTLS"); v == "1" || strings.EqualFold(v, "true") {
 		c.SMTP.RelayStartTLS = true
+	}
+	if v := os.Getenv("BEAVER_SMTP_OUTBOUND_TLS_INSECURE"); v == "1" || strings.EqualFold(v, "true") {
+		c.SMTP.OutboundTLSInsecureSkip = true
 	}
 	if v := os.Getenv("BEAVER_SMTP_VRFY_ENABLED"); v == "1" || strings.EqualFold(v, "true") {
 		c.SMTP.VRFYEnabled = true
@@ -303,6 +307,11 @@ func (c *Config) SMTPRelayPassword() string {
 // SMTPRelayStartTLS reports whether outbound relay uses STARTTLS when offered.
 func (c *Config) SMTPRelayStartTLS() bool {
 	return c.SMTP.RelayStartTLS
+}
+
+// SMTPOutboundTLSInsecureSkip reports whether outbound relay/MX skips TLS cert verify.
+func (c *Config) SMTPOutboundTLSInsecureSkip() bool {
+	return c.SMTP.OutboundTLSInsecureSkip
 }
 
 // SMTPMaxMessageBytes returns the inbound DATA size cap (0 lets smtp use its default).

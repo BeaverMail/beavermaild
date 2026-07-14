@@ -280,9 +280,10 @@ func TestClientRelaySTARTTLSAuth(t *testing.T) {
 
 	ctx := context.Background()
 	err = smtp.Send(ctx, ln.Addr().String(), "sender@example.com", "rcpt@example.com", []byte("relay\r\n"), smtp.ClientOptions{
-		STARTTLS: true,
-		User:     "relayuser",
-		Password: "relaypass",
+		STARTTLS:              true,
+		TLSInsecureSkipVerify: true,
+		User:                  "relayuser",
+		Password:              "relaypass",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -345,6 +346,7 @@ func TestClientOpportunisticSTARTTLS(t *testing.T) {
 	ctx := context.Background()
 	err = smtp.Send(ctx, ln.Addr().String(), "sender@example.com", "rcpt@example.com", []byte("tls\r\n"), smtp.ClientOptions{
 		OpportunisticSTARTTLS: true,
+		TLSInsecureSkipVerify: true,
 	})
 	if err != nil {
 		t.Fatal(err)

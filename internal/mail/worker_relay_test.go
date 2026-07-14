@@ -130,9 +130,10 @@ func TestWorkerDeliversRemoteRelaySTARTTLS(t *testing.T) {
 	remote := relayRemote{cfg: smtp.RemoteConfig{
 		Relay: ln.Addr().String(),
 		RelayOptions: smtp.ClientOptions{
-			STARTTLS: true,
-			User:     "relayuser",
-			Password: "relaypass",
+			STARTTLS:              true,
+			TLSInsecureSkipVerify: true,
+			User:                  "relayuser",
+			Password:              "relaypass",
 		},
 	}}
 	w := mail.NewWorker(log.New("error"), queue, mail.NewInbox(store, blobs), dir, remote, mail.TestQueuePolicy())

@@ -15,10 +15,11 @@ import (
 
 const clientTimeout = 30 * time.Second
 
-// ClientOptions configures STARTTLS, AUTH, and MX opportunistic TLS for outbound Send.
+// ClientOptions configures STARTTLS, AUTH, TLS verify, and MX opportunistic TLS for outbound Send.
 type ClientOptions struct {
 	STARTTLS              bool // relay: upgrade when configured
 	OpportunisticSTARTTLS bool // MX: upgrade when EHLO offers STARTTLS
+	TLSInsecureSkipVerify bool // skip server cert verification (dev/self-signed relay only)
 	User                  string
 	Password              string
 }
@@ -51,7 +52,7 @@ func Send(ctx context.Context, addr, mailFrom, rcptTo string, data []byte, opts 
 		return err
 	}
 	if wantSTARTTLS(opts) && caps.StartTLS {
-		conn, err = startTLS(conn, r, host)
+		conn, err = startTLS(conn, r, host, opts.TLSInsecureSkipVerify)
 		if err != nil {
 			return err
 		}
@@ -193,14 +194,14 @@ func writeLine(conn net.Conn, line string) error {
 	return err
 }
 
-func startTLS(conn net.Conn, r *bufio.Reader, host string) (net.Conn, error) {
+func startTLS(conn net.Conn, r *bufio.Reader, host string, insecureSkipVerify bool) (net.Conn, error) {
 	if err := cmd(conn, r, "STARTTLS", 220); err != nil {
 		return nil, err
 	}
 	tlsConn := tls.Client(conn, &tls.Config{
 		ServerName:         host,
 		MinVersion:         tls.VersionTLS12,
-		InsecureSkipVerify: true, // ponytail: relay/MX cert policy later
+		InsecureSkipVerify: insecureSkipVerify,
 	})
 	if err := tlsConn.Handshake(); err != nil {
 		return nil, fmt.Errorf("smtp client starttls: %w", err)
