@@ -69,7 +69,7 @@ func TestDeleteMessageKeepsSharedBlobAfterCopy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := inbox.CopyMessages(ctx, acc.ID, []uint32{id}, mail.SentMailboxID); err != nil {
+	if _, _, err := inbox.CopyMessages(ctx, acc.ID, []uint32{id}, mail.SentMailboxID); err != nil {
 		t.Fatal(err)
 	}
 	sent, err := inbox.List(ctx, acc.ID, mail.SentMailboxID)
@@ -177,8 +177,7 @@ func TestAppendMailboxMessagesLoadsOnlyNewUIDs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	id1, err := inbox.Deliver(ctx, acc.ID, []byte("a"))
-	if err != nil {
+	if _, err := inbox.Deliver(ctx, acc.ID, []byte("a")); err != nil {
 		t.Fatal(err)
 	}
 	cached, err := inbox.List(ctx, acc.ID, mail.InboxMailboxID)
@@ -194,7 +193,7 @@ func TestAppendMailboxMessagesLoadsOnlyNewUIDs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(merged) != 2 || merged[0].UID != id1 || merged[1].UID != id2 {
+	if len(merged) != 2 || merged[0].UID != 1 || merged[1].UID != 2 {
 		t.Fatalf("merged %+v", merged)
 	}
 }

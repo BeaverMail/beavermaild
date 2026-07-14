@@ -47,7 +47,7 @@ func (ib *Inbox) backfillMailboxIndex(ctx context.Context, accountID, mailboxID 
 	}
 	batch := storage.NewBatch().WithAccount(accountID)
 	for _, m := range msgs {
-		if err := ib.queueMailboxIndexAdd(batch, mailboxID, m.UID); err != nil {
+		if err := ib.queueMailboxIndexAdd(batch, mailboxID, m.EmailID); err != nil {
 			return err
 		}
 	}
@@ -78,14 +78,14 @@ func (ib *Inbox) listFromMailboxIndex(ctx context.Context, accountID, mailboxID 
 		if meta.MailboxID != mailboxID {
 			continue
 		}
-		out = append(out, Message{UID: emailID, Meta: meta})
+		out = append(out, messageFromMeta(emailID, meta))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].UID < out[j].UID })
 	return out, nil
 }
 
-// ListMailboxIndexUIDs returns sorted email ids indexed for mailboxID.
-func (ib *Inbox) ListMailboxIndexUIDs(ctx context.Context, accountID, mailboxID uint32) ([]uint32, error) {
+// ListMailboxIndexEmailIDs returns sorted email document ids indexed for mailboxID.
+func (ib *Inbox) ListMailboxIndexEmailIDs(ctx context.Context, accountID, mailboxID uint32) ([]uint32, error) {
 	uids, err := ib.collectMailboxIndexUIDs(ctx, accountID, mailboxID)
 	if err != nil {
 		return nil, err
@@ -94,26 +94,30 @@ func (ib *Inbox) ListMailboxIndexUIDs(ctx context.Context, accountID, mailboxID 
 	return uids, nil
 }
 
-// AppendMailboxMessages merges cached messages with batch-loaded newUIDs rows.
-func (ib *Inbox) AppendMailboxMessages(ctx context.Context, accountID, mailboxID uint32, cached []Message, newUIDs []uint32) ([]Message, error) {
-	if len(newUIDs) == 0 {
-		out := append([]Message(nil), cached...)
-		return out, nil
+// ListMailboxIndexUIDs returns sorted email document ids indexed for mailboxID.
+func (ib *Inbox) ListMailboxIndexUIDs(ctx context.Context, accountID, mailboxID uint32) ([]uint32, error) {
+	return ib.ListMailboxIndexEmailIDs(ctx, accountID, mailboxID)
+}
+
+// AppendMailboxMessages merges cached messages with batch-loaded new email ids.
+func (ib *Inbox) AppendMailboxMessages(ctx context.Context, accountID, mailboxID uint32, cached []Message, newEmailIDs []uint32) ([]Message, error) {
+	if len(newEmailIDs) == 0 {
+		return append([]Message(nil), cached...), nil
 	}
-	metas, err := ib.loadEmailMetaBatch(ctx, accountID, newUIDs)
+	metas, err := ib.loadEmailMetaBatch(ctx, accountID, newEmailIDs)
 	if err != nil {
 		return nil, err
 	}
 	out := append([]Message(nil), cached...)
-	for _, uid := range newUIDs {
-		meta, ok := metas[uid]
+	for _, emailID := range newEmailIDs {
+		meta, ok := metas[emailID]
 		if !ok {
 			return nil, storage.ErrNotFound
 		}
 		if meta.MailboxID != mailboxID {
 			continue
 		}
-		out = append(out, Message{UID: uid, Meta: meta})
+		out = append(out, messageFromMeta(emailID, meta))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].UID < out[j].UID })
 	return out, nil
@@ -193,7 +197,7 @@ func (ib *Inbox) listAccountEmailsInMailbox(ctx context.Context, accountID, mail
 		if meta.MailboxID != mailboxID {
 			return nil
 		}
-		out = append(out, Message{UID: parts.DocumentID, Meta: meta})
+		out = append(out, messageFromMeta(parts.DocumentID, meta))
 		return nil
 	})
 	if err != nil {

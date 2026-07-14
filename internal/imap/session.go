@@ -448,7 +448,11 @@ func (s *session) openMailbox(ctx context.Context, tag, name string, examine boo
 	if err != nil {
 		return err
 	}
-	uidNext, unseen, highestMod := mail.MailboxSelectState(msgs, highest)
+	uidNext, err := s.inbox.MailboxUIDNext(ctx, s.principal.AccountID, mbox.ID)
+	if err != nil {
+		return err
+	}
+	_, unseen, highestMod := mail.MailboxSelectState(msgs, highest)
 	mbox.HighestModSeq = highestMod
 	s.messages = msgs
 	s.mbox = mbox
@@ -523,7 +527,7 @@ func (s *session) cmdStore(ctx context.Context, tag, arg string, byUID bool) err
 		if hasUnchanged {
 			unchanged = unchangedSince
 		}
-		applied, meta, err := s.inbox.SetFlagsIfUnchanged(ctx, s.principal.AccountID, msg.UID, set, clear, kwAdd, kwRemove, unchanged)
+		applied, meta, err := s.inbox.SetFlagsIfUnchanged(ctx, s.principal.AccountID, msg.StorageID(), set, clear, kwAdd, kwRemove, unchanged)
 		if err != nil {
 			return err
 		}
@@ -683,11 +687,12 @@ func (s *session) cmdCopy(ctx context.Context, tag, arg string, byUID bool) erro
 		return s.tagged(tag, "BAD COPY syntax")
 	}
 	ids := s.emailIDsFromIndices(s.resolveIndices(set, byUID))
-	newIDs, err := s.inbox.CopyMessages(ctx, s.principal.AccountID, ids, dest.ID)
+	srcUIDs := s.imapUIDsFromIndices(s.resolveIndices(set, byUID))
+	_, destUIDs, err := s.inbox.CopyMessages(ctx, s.principal.AccountID, ids, dest.ID)
 	if err != nil {
 		return err
 	}
-	return s.tagged(tag, fmt.Sprintf("OK [%s] COPY completed", formatCopyUID(dest.UIDValidity, ids, newIDs)))
+	return s.tagged(tag, fmt.Sprintf("OK [%s] COPY completed", formatCopyUID(dest.UIDValidity, srcUIDs, destUIDs)))
 }
 
 func (s *session) cmdMove(ctx context.Context, tag, arg string, byUID bool) error {
@@ -716,7 +721,9 @@ func (s *session) cmdMove(ctx context.Context, tag, arg string, byUID bool) erro
 		return s.tagged(tag, "BAD MOVE syntax")
 	}
 	ids := s.emailIDsFromIndices(s.resolveIndices(set, byUID))
-	if err := s.inbox.MoveMessages(ctx, s.principal.AccountID, ids, dest.ID); err != nil {
+	srcUIDs := s.imapUIDsFromIndices(s.resolveIndices(set, byUID))
+	destUIDs, err := s.inbox.MoveMessages(ctx, s.principal.AccountID, ids, dest.ID)
+	if err != nil {
 		return err
 	}
 	msgs, err := s.inbox.List(ctx, s.principal.AccountID, s.mbox.ID)
@@ -724,7 +731,7 @@ func (s *session) cmdMove(ctx context.Context, tag, arg string, byUID bool) erro
 		return err
 	}
 	s.messages = msgs
-	return s.tagged(tag, fmt.Sprintf("OK [%s] MOVE completed", formatCopyUID(dest.UIDValidity, ids, ids)))
+	return s.tagged(tag, fmt.Sprintf("OK [%s] MOVE completed", formatCopyUID(dest.UIDValidity, srcUIDs, destUIDs)))
 }
 
 func (s *session) emailIDsFromIndices(indices []int) []uint32 {
@@ -733,9 +740,20 @@ func (s *session) emailIDsFromIndices(indices []int) []uint32 {
 		if idx < 0 || idx >= len(s.messages) {
 			continue
 		}
-		ids = append(ids, s.messages[idx].UID)
+		ids = append(ids, s.messages[idx].StorageID())
 	}
 	return ids
+}
+
+func (s *session) imapUIDsFromIndices(indices []int) []uint32 {
+	uids := make([]uint32, 0, len(indices))
+	for _, idx := range indices {
+		if idx < 0 || idx >= len(s.messages) {
+			continue
+		}
+		uids = append(uids, s.messages[idx].UID)
+	}
+	return uids
 }
 
 func (s *session) resolveIndices(set seqSet, byUID bool) []int {

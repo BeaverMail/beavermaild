@@ -91,7 +91,7 @@ func TestMailboxIndexMoveUpdatesMembership(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := inbox.MoveMessages(ctx, acc.ID, []uint32{id}, mail.TrashMailboxID); err != nil {
+	if _, err := inbox.MoveMessages(ctx, acc.ID, []uint32{id}, mail.TrashMailboxID); err != nil {
 		t.Fatal(err)
 	}
 	inboxMsgs, err := inbox.List(ctx, acc.ID, mail.InboxMailboxID)
@@ -102,7 +102,7 @@ func TestMailboxIndexMoveUpdatesMembership(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(inboxMsgs) != 0 || len(trashMsgs) != 1 || trashMsgs[0].UID != id {
+	if len(inboxMsgs) != 0 || len(trashMsgs) != 1 || trashMsgs[0].UID != 1 {
 		t.Fatalf("inbox=%d trash=%+v", len(inboxMsgs), trashMsgs)
 	}
 	idxKey := storage.AppendMailboxIndexKey(nil, acc.ID, mail.InboxMailboxID, id)

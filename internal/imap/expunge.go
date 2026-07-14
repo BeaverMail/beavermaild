@@ -65,7 +65,7 @@ func (s *session) expungeMarkedDeleted(ctx context.Context, uidFilter map[uint32
 					continue
 				}
 			}
-			if err := s.inbox.DeleteMessage(ctx, s.principal.AccountID, m.UID); err != nil {
+			if err := s.inbox.DeleteMessage(ctx, s.principal.AccountID, m.StorageID()); err != nil {
 				return err
 			}
 			if err := s.untagged(fmt.Sprintf("%d EXPUNGE", i+1)); err != nil {

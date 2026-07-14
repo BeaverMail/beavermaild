@@ -33,6 +33,7 @@ func TestStatusIndexOnlyFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	_ = id1
 	if _, err := inbox.Deliver(ctx, acc.ID, []byte("b")); err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +42,7 @@ func TestStatusIndexOnlyFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.Messages != 2 || st.UIDNext != id1+2 || st.UIDValidity == 0 {
+	if st.Messages != 2 || st.UIDNext != 3 || st.UIDValidity == 0 {
 		t.Fatalf("index status %+v id1=%d", st, id1)
 	}
 }

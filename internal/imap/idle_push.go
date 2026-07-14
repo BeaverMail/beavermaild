@@ -20,29 +20,29 @@ func (s *session) pushIdleMailboxChanges(ctx context.Context) error {
 		return nil
 	}
 
-	freshUIDs, err := s.inbox.ListMailboxIndexUIDs(ctx, s.principal.AccountID, s.mbox.ID)
+	freshEmailIDs, err := s.inbox.ListMailboxIndexEmailIDs(ctx, s.principal.AccountID, s.mbox.ID)
 	if err != nil {
 		return err
 	}
-	freshSet := make(map[uint32]struct{}, len(freshUIDs))
-	for _, uid := range freshUIDs {
-		freshSet[uid] = struct{}{}
+	freshSet := make(map[uint32]struct{}, len(freshEmailIDs))
+	for _, id := range freshEmailIDs {
+		freshSet[id] = struct{}{}
 	}
 
-	var newUIDs []uint32
-	for _, uid := range freshUIDs {
-		if !sessionHasUID(s.messages, uid) {
-			newUIDs = append(newUIDs, uid)
+	var newEmailIDs []uint32
+	for _, id := range freshEmailIDs {
+		if !sessionHasEmailID(s.messages, id) {
+			newEmailIDs = append(newEmailIDs, id)
 		}
 	}
-	expunged := sessionHasMissingUID(s.messages, freshSet)
+	expunged := sessionHasMissingEmailID(s.messages, freshSet)
 
 	var fresh []mail.Message
 	switch {
-	case len(newUIDs) > 0 && !expunged:
-		fresh, err = s.inbox.AppendMailboxMessages(ctx, s.principal.AccountID, s.mbox.ID, s.messages, newUIDs)
-	case expunged && len(newUIDs) == 0:
-		fresh = filterMessagesByUIDSet(s.messages, freshSet)
+	case len(newEmailIDs) > 0 && !expunged:
+		fresh, err = s.inbox.AppendMailboxMessages(ctx, s.principal.AccountID, s.mbox.ID, s.messages, newEmailIDs)
+	case expunged && len(newEmailIDs) == 0:
+		fresh = filterMessagesByEmailIDSet(s.messages, freshSet)
 	default:
 		fresh, err = s.inbox.List(ctx, s.principal.AccountID, s.mbox.ID)
 	}
@@ -100,28 +100,28 @@ func (s *session) applyIdleMailboxDiff(fresh []mail.Message, highestMod uint64) 
 	return nil
 }
 
-func sessionHasUID(msgs []mail.Message, uid uint32) bool {
+func sessionHasEmailID(msgs []mail.Message, emailID uint32) bool {
 	for _, m := range msgs {
-		if m.UID == uid {
+		if m.StorageID() == emailID {
 			return true
 		}
 	}
 	return false
 }
 
-func sessionHasMissingUID(msgs []mail.Message, freshSet map[uint32]struct{}) bool {
+func sessionHasMissingEmailID(msgs []mail.Message, freshSet map[uint32]struct{}) bool {
 	for _, m := range msgs {
-		if _, ok := freshSet[m.UID]; !ok {
+		if _, ok := freshSet[m.StorageID()]; !ok {
 			return true
 		}
 	}
 	return false
 }
 
-func filterMessagesByUIDSet(msgs []mail.Message, uids map[uint32]struct{}) []mail.Message {
-	out := make([]mail.Message, 0, len(uids))
+func filterMessagesByEmailIDSet(msgs []mail.Message, ids map[uint32]struct{}) []mail.Message {
+	out := make([]mail.Message, 0, len(ids))
 	for _, m := range msgs {
-		if _, ok := uids[m.UID]; ok {
+		if _, ok := ids[m.StorageID()]; ok {
 			out = append(out, m)
 		}
 	}

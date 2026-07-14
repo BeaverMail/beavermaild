@@ -33,7 +33,7 @@ func TestMoveAndCopyMessages(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := inbox.MoveMessages(ctx, acc.ID, []uint32{id}, mail.TrashMailboxID); err != nil {
+	if _, err := inbox.MoveMessages(ctx, acc.ID, []uint32{id}, mail.TrashMailboxID); err != nil {
 		t.Fatal(err)
 	}
 	inboxMsgs, err := inbox.List(ctx, acc.ID, mail.InboxMailboxID)
@@ -49,7 +49,7 @@ func TestMoveAndCopyMessages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := inbox.CopyMessages(ctx, acc.ID, []uint32{id2}, mail.SentMailboxID); err != nil {
+	if _, _, err := inbox.CopyMessages(ctx, acc.ID, []uint32{id2}, mail.SentMailboxID); err != nil {
 		t.Fatal(err)
 	}
 	sent, err := inbox.List(ctx, acc.ID, mail.SentMailboxID)

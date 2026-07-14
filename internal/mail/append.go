@@ -38,6 +38,11 @@ func (ib *Inbox) Append(ctx context.Context, accountID, mailboxID uint32, raw []
 		return 0, err
 	}
 
+	imapUID, err := ib.allocateIMAPUID(ctx, accountID, mailboxID)
+	if err != nil {
+		return 0, err
+	}
+
 	modSeq, err := ib.allocateModSeq(ctx, accountID, mailboxID)
 	if err != nil {
 		return 0, err
@@ -53,6 +58,7 @@ func (ib *Inbox) Append(ctx context.Context, accountID, mailboxID uint32, raw []
 		Size:       uint32(len(raw)),
 		Flags:      flags | FlagRecent,
 		ModSeq:     modSeq,
+		IMAPUID:    imapUID,
 		BlobHash:   hash,
 	}
 	wire, err := storage.MarshalPersist(nil, 1, meta)

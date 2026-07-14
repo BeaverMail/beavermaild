@@ -32,7 +32,7 @@ func TestStillReferencedAfterCopy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := inbox.CopyMessages(ctx, acc.ID, []uint32{id}, mail.SentMailboxID); err != nil {
+	if _, _, err := inbox.CopyMessages(ctx, acc.ID, []uint32{id}, mail.SentMailboxID); err != nil {
 		t.Fatal(err)
 	}
 	msgs, err := inbox.List(ctx, acc.ID, mail.InboxMailboxID)

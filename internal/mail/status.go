@@ -4,6 +4,8 @@ package mail
 import (
 	"context"
 	"strings"
+
+	"github.com/BeaverMail/beaver/internal/storage"
 )
 
 // MailboxStatus holds IMAP STATUS counters for one folder.
@@ -18,14 +20,17 @@ type MailboxStatus struct {
 // Status returns requested STATUS fields for mailboxID.
 // When fields omit UNSEEN and RECENT, only the mailbox index is scanned (no meta load).
 func (ib *Inbox) Status(ctx context.Context, accountID, mailboxID uint32, fields []string) (MailboxStatus, error) {
+	if err := ib.ensureIMAPUIDBackfill(ctx, accountID, mailboxID); err != nil {
+		return MailboxStatus{}, err
+	}
 	mbox, err := ib.mailboxRecord(ctx, accountID, mailboxID)
 	if err != nil {
 		return MailboxStatus{}, err
 	}
 	if statusNeedFlagCounts(fields) {
-		return ib.statusFromMessages(ctx, accountID, mailboxID, mbox.UIDValidity)
+		return ib.statusFromMessages(ctx, accountID, mailboxID, mbox)
 	}
-	return ib.statusFromIndex(ctx, accountID, mailboxID, mbox.UIDValidity)
+	return ib.statusFromIndex(ctx, accountID, mailboxID, mbox)
 }
 
 func statusNeedFlagCounts(fields []string) bool {
@@ -38,29 +43,28 @@ func statusNeedFlagCounts(fields []string) bool {
 	return false
 }
 
-func (ib *Inbox) statusFromIndex(ctx context.Context, accountID, mailboxID, uidValidity uint32) (MailboxStatus, error) {
-	uids, err := ib.ListMailboxIndexUIDs(ctx, accountID, mailboxID)
+func (ib *Inbox) statusFromIndex(ctx context.Context, accountID, mailboxID uint32, mbox storage.Mailbox) (MailboxStatus, error) {
+	emailIDs, err := ib.ListMailboxIndexEmailIDs(ctx, accountID, mailboxID)
 	if err != nil {
 		return MailboxStatus{}, err
 	}
-	st := MailboxStatus{
-		Messages:    uint32(len(uids)),
-		UIDNext:     1,
-		UIDValidity: uidValidity,
+	uidNext := mbox.UIDNext
+	if uidNext == 0 {
+		uidNext = 1
 	}
-	if len(uids) > 0 {
-		st.UIDNext = uids[len(uids)-1] + 1
-	}
-	return st, nil
+	return MailboxStatus{
+		Messages:    uint32(len(emailIDs)),
+		UIDNext:     uidNext,
+		UIDValidity: mbox.UIDValidity,
+	}, nil
 }
 
-func (ib *Inbox) statusFromMessages(ctx context.Context, accountID, mailboxID, uidValidity uint32) (MailboxStatus, error) {
+func (ib *Inbox) statusFromMessages(ctx context.Context, accountID, mailboxID uint32, mbox storage.Mailbox) (MailboxStatus, error) {
 	msgs, err := ib.List(ctx, accountID, mailboxID)
 	if err != nil {
 		return MailboxStatus{}, err
 	}
 	var unseen, recent uint32
-	var uidNext uint32 = 1
 	for _, m := range msgs {
 		if m.Meta.Flags&FlagRecent != 0 {
 			recent++
@@ -68,15 +72,16 @@ func (ib *Inbox) statusFromMessages(ctx context.Context, accountID, mailboxID, u
 		if m.Meta.Flags&FlagSeen == 0 {
 			unseen++
 		}
-		if m.UID >= uidNext {
-			uidNext = m.UID + 1
-		}
+	}
+	uidNext := mbox.UIDNext
+	if uidNext == 0 {
+		uidNext = 1
 	}
 	return MailboxStatus{
 		Messages:    uint32(len(msgs)),
 		Recent:      recent,
 		Unseen:      unseen,
 		UIDNext:     uidNext,
-		UIDValidity: uidValidity,
+		UIDValidity: mbox.UIDValidity,
 	}, nil
 }

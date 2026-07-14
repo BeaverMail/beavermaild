@@ -18,56 +18,66 @@ var ErrSystemMailbox = errors.New("mail: system mailbox")
 // ErrMailboxNotEmpty is returned when DELETE targets a non-empty folder.
 var ErrMailboxNotEmpty = errors.New("mail: mailbox not empty")
 
-// MoveMessages updates MailboxID for each emailID into destMailboxID.
-func (ib *Inbox) MoveMessages(ctx context.Context, accountID uint32, emailIDs []uint32, destMailboxID uint32) error {
-	if len(emailIDs) == 0 {
-		return nil
-	}
-	if _, err := ib.mailboxRecord(ctx, accountID, destMailboxID); err != nil {
-		return err
-	}
-	batch := storage.NewBatch().WithAccount(accountID)
-	for _, id := range emailIDs {
-		meta, err := ib.GetMeta(ctx, accountID, id)
-		if err != nil {
-			return err
-		}
-		srcMailbox := meta.MailboxID
-		meta.MailboxID = destMailboxID
-		meta.Flags &^= FlagRecent
-		modSeq, err := ib.allocateModSeq(ctx, accountID, destMailboxID)
-		if err != nil {
-			return err
-		}
-		meta.ModSeq = modSeq
-		wire, err := storage.MarshalPersist(nil, 1, meta)
-		if err != nil {
-			return err
-		}
-		suffix := storage.DocumentSuffix(storage.CollectionEmail, id, nil)
-		if err := batch.Set(storage.SubspaceMail, suffix, wire); err != nil {
-			return err
-		}
-		if err := ib.queueMailboxIndexRemove(batch, srcMailbox, id); err != nil {
-			return err
-		}
-		if err := ib.queueMailboxIndexAdd(batch, destMailboxID, id); err != nil {
-			return err
-		}
-		if err := ib.queueMailboxIndexReady(batch, destMailboxID); err != nil {
-			return err
-		}
-	}
-	return ib.store.Commit(ctx, batch)
-}
-
-// CopyMessages duplicates messages into destMailboxID (shared blob hash).
-func (ib *Inbox) CopyMessages(ctx context.Context, accountID uint32, emailIDs []uint32, destMailboxID uint32) ([]uint32, error) {
+// MoveMessages updates MailboxID for each emailID into destMailboxID and assigns new IMAP UIDs.
+func (ib *Inbox) MoveMessages(ctx context.Context, accountID uint32, emailIDs []uint32, destMailboxID uint32) ([]uint32, error) {
 	if len(emailIDs) == 0 {
 		return nil, nil
 	}
 	if _, err := ib.mailboxRecord(ctx, accountID, destMailboxID); err != nil {
 		return nil, err
+	}
+	batch := storage.NewBatch().WithAccount(accountID)
+	destUIDs := make([]uint32, 0, len(emailIDs))
+	for _, id := range emailIDs {
+		meta, err := ib.GetMeta(ctx, accountID, id)
+		if err != nil {
+			return nil, err
+		}
+		srcMailbox := meta.MailboxID
+		imapUID, err := ib.allocateIMAPUID(ctx, accountID, destMailboxID)
+		if err != nil {
+			return nil, err
+		}
+		meta.MailboxID = destMailboxID
+		meta.IMAPUID = imapUID
+		meta.Flags &^= FlagRecent
+		modSeq, err := ib.allocateModSeq(ctx, accountID, destMailboxID)
+		if err != nil {
+			return nil, err
+		}
+		meta.ModSeq = modSeq
+		wire, err := storage.MarshalPersist(nil, 1, meta)
+		if err != nil {
+			return nil, err
+		}
+		suffix := storage.DocumentSuffix(storage.CollectionEmail, id, nil)
+		if err := batch.Set(storage.SubspaceMail, suffix, wire); err != nil {
+			return nil, err
+		}
+		if err := ib.queueMailboxIndexRemove(batch, srcMailbox, id); err != nil {
+			return nil, err
+		}
+		if err := ib.queueMailboxIndexAdd(batch, destMailboxID, id); err != nil {
+			return nil, err
+		}
+		if err := ib.queueMailboxIndexReady(batch, destMailboxID); err != nil {
+			return nil, err
+		}
+		destUIDs = append(destUIDs, imapUID)
+	}
+	if err := ib.store.Commit(ctx, batch); err != nil {
+		return nil, err
+	}
+	return destUIDs, nil
+}
+
+// CopyMessages duplicates messages into destMailboxID (shared blob hash).
+func (ib *Inbox) CopyMessages(ctx context.Context, accountID uint32, emailIDs []uint32, destMailboxID uint32) ([]uint32, []uint32, error) {
+	if len(emailIDs) == 0 {
+		return nil, nil, nil
+	}
+	if _, err := ib.mailboxRecord(ctx, accountID, destMailboxID); err != nil {
+		return nil, nil, err
 	}
 	var addBytes uint64
 	var addMsgs uint32
@@ -75,53 +85,59 @@ func (ib *Inbox) CopyMessages(ctx context.Context, accountID uint32, emailIDs []
 	for _, srcID := range emailIDs {
 		meta, err := ib.GetMeta(ctx, accountID, srcID)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		metas = append(metas, meta)
 		addBytes += uint64(meta.Size)
 		addMsgs++
 	}
 	if err := ib.checkQuota(ctx, accountID, addBytes, addMsgs); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	var newIDs []uint32
+	var newIDs, newIMAPUIDs []uint32
 	batch := storage.NewBatch().WithAccount(accountID)
 	for i := range emailIDs {
 		meta := metas[i]
 		newID, err := ib.nextEmailID(ctx, accountID)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
+		}
+		imapUID, err := ib.allocateIMAPUID(ctx, accountID, destMailboxID)
+		if err != nil {
+			return nil, nil, err
 		}
 		meta.MailboxID = destMailboxID
+		meta.IMAPUID = imapUID
 		meta.Flags &^= FlagRecent
 		modSeq, err := ib.allocateModSeq(ctx, accountID, destMailboxID)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		meta.ModSeq = modSeq
 		wire, err := storage.MarshalPersist(nil, 1, meta)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		suffix := storage.DocumentSuffix(storage.CollectionEmail, newID, nil)
 		if err := batch.Set(storage.SubspaceMail, suffix, wire); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if err := ib.queueMailboxIndexAdd(batch, destMailboxID, newID); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if err := ib.queueMailboxIndexReady(batch, destMailboxID); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		newIDs = append(newIDs, newID)
+		newIMAPUIDs = append(newIMAPUIDs, imapUID)
 	}
 	if err := ib.store.Commit(ctx, batch); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := ib.addQuotaUsage(ctx, accountID, addBytes, addMsgs); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return newIDs, nil
+	return newIDs, newIMAPUIDs, nil
 }
 
 func (ib *Inbox) mailboxRecord(ctx context.Context, accountID, mailboxID uint32) (storage.Mailbox, error) {

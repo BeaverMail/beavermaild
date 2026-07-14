@@ -3,18 +3,37 @@ package mail
 
 import (
 	"context"
+	"errors"
 
 	"github.com/BeaverMail/beaver/internal/storage"
 )
 
-// Message is one email in a mailbox (UID equals the email document id).
+// Message is one email in a mailbox. UID is the IMAP UID; EmailID is the storage document id.
 type Message struct {
-	UID  uint32
-	Meta storage.EmailMeta
+	EmailID uint32
+	UID     uint32
+	Meta    storage.EmailMeta
 }
 
-// List returns messages in mailboxID for accountID, sorted by UID ascending.
+// StorageID returns the email document id (EmailID, or UID when unset in tests).
+func (m Message) StorageID() uint32 {
+	if m.EmailID != 0 {
+		return m.EmailID
+	}
+	return m.UID
+}
+
+// List returns messages in mailboxID for accountID, sorted by IMAP UID ascending.
 func (ib *Inbox) List(ctx context.Context, accountID, mailboxID uint32) ([]Message, error) {
+	if _, err := ib.mailboxRecord(ctx, accountID, mailboxID); err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if err := ib.ensureIMAPUIDBackfill(ctx, accountID, mailboxID); err != nil {
+		return nil, err
+	}
 	ready, err := ib.mailboxIndexReady(ctx, accountID, mailboxID)
 	if err != nil {
 		return nil, err
@@ -65,7 +84,7 @@ func (ib *Inbox) ClearRecentFlags(ctx context.Context, accountID, mailboxID uint
 		if err != nil {
 			return 0, err
 		}
-		suffix := storage.DocumentSuffix(storage.CollectionEmail, m.UID, nil)
+		suffix := storage.DocumentSuffix(storage.CollectionEmail, m.EmailID, nil)
 		if err := batch.Set(storage.SubspaceMail, suffix, wire); err != nil {
 			return 0, err
 		}

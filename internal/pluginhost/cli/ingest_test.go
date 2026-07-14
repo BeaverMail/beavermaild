@@ -68,7 +68,7 @@ func TestIngesterDuplicateInBatch(t *testing.T) {
 
 	msgs := []plugin.BatchMessage{
 		{IMAPName: "INBOX", RawB64: "aGVsbG8=", BlobHashHex: hash},
-		{IMAPName: "INBOX/2007 IN", RawB64: "aGVsbG8=", BlobHashHex: hash},
+		{IMAPName: "Sent", RawB64: "aGVsbG8=", BlobHashHex: hash},
 	}
 	if err := ing.applyBatch(context.Background(), msgs); err != nil {
 		t.Fatal(err)
@@ -81,9 +81,9 @@ func TestIngesterDuplicateInBatch(t *testing.T) {
 	if res.SkipBreakdown.DuplicateInBatch != 1 || res.SkipBreakdown.DuplicateInAccount != 0 {
 		t.Fatalf("breakdown: %+v", res.SkipBreakdown)
 	}
-	mbox := res.ByMailbox["INBOX/2007 IN"]
+	mbox := res.ByMailbox["Sent"]
 	if mbox.Skipped != 1 || mbox.SkipBreakdown.DuplicateInBatch != 1 {
-		t.Fatalf("INBOX/2007 IN: %+v", mbox)
+		t.Fatalf("Sent: %+v", mbox)
 	}
 	line := skipLog.String()
 	if !strings.Contains(line, "reason=duplicate_in_batch") || !strings.Contains(line, "first_imap=INBOX") {

@@ -55,7 +55,7 @@ func (s *session) purgeDeleted(ctx context.Context) error {
 			i++
 			continue
 		}
-		if err := s.inbox.DeleteMessage(ctx, s.principal.AccountID, m.UID); err != nil {
+		if err := s.inbox.DeleteMessage(ctx, s.principal.AccountID, m.StorageID()); err != nil {
 			return err
 		}
 		s.messages = append(s.messages[:i], s.messages[i+1:]...)

@@ -43,8 +43,11 @@ func TestAppendToDrafts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(msgs) != 1 || msgs[0].UID != id {
-		t.Fatalf("msgs %+v id %d", msgs, id)
+	if len(msgs) != 1 || msgs[0].UID != 1 {
+		t.Fatalf("msgs %+v", msgs)
+	}
+	if msgs[0].EmailID != id {
+		t.Fatalf("email id %d", msgs[0].EmailID)
 	}
 	if msgs[0].Meta.Flags&mail.FlagDraft == 0 {
 		t.Fatalf("flags %#x", msgs[0].Meta.Flags)

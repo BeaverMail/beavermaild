@@ -43,7 +43,7 @@ func (s *session) cmdAppend(ctx context.Context, tag, arg string) error {
 		return err
 	}
 
-	uid, err := s.inbox.Append(ctx, s.principal.AccountID, mbox.ID, raw, flags, internalDate)
+	emailID, err := s.inbox.Append(ctx, s.principal.AccountID, mbox.ID, raw, flags, internalDate)
 	if err != nil {
 		if errors.Is(err, mail.ErrOverQuota) {
 			return s.tagged(tag, "NO [OVERQUOTA] APPEND failed")
@@ -51,18 +51,20 @@ func (s *session) cmdAppend(ctx context.Context, tag, arg string) error {
 		return err
 	}
 
+	meta, err := s.inbox.GetMeta(ctx, s.principal.AccountID, emailID)
+	if err != nil {
+		return err
+	}
+	imapUID := mail.IMAPUID(emailID, meta)
+
 	if s.selected && s.mbox.ID == mbox.ID {
-		meta, err := s.inbox.GetMeta(ctx, s.principal.AccountID, uid)
-		if err != nil {
-			return err
-		}
-		s.messages = append(s.messages, mail.Message{UID: uid, Meta: meta})
+		s.messages = append(s.messages, mail.Message{EmailID: emailID, UID: imapUID, Meta: meta})
 		if err := s.untagged(fmt.Sprintf("%d EXISTS", len(s.messages))); err != nil {
 			return err
 		}
 	}
 
-	return s.tagged(tag, fmt.Sprintf("OK [%s] APPEND completed", formatAppendUID(mbox.UIDValidity, uid)))
+	return s.tagged(tag, fmt.Sprintf("OK [%s] APPEND completed", formatAppendUID(mbox.UIDValidity, imapUID)))
 }
 
 func (s *session) readLiteral(n int) ([]byte, error) {

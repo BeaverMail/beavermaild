@@ -30,8 +30,9 @@ type Mailbox struct {
 	UIDNext       uint32 `msgpack:"un"`
 	UIDValidity   uint32 `msgpack:"uv"`
 	HighestModSeq uint64 `msgpack:"hm,omitempty"`
-	Subscribed  bool `msgpack:"sub,omitempty"`
-	SubSet      bool `msgpack:"ss,omitempty"` // true once SUBSCRIBE/UNSUBSCRIBE touched this folder
+	UIDSeqInit    bool   `msgpack:"ui,omitempty"` // true once per-mailbox IMAP UID backfill completed
+	Subscribed    bool   `msgpack:"sub,omitempty"`
+	SubSet        bool   `msgpack:"ss,omitempty"` // true once SUBSCRIBE/UNSUBSCRIBE touched this folder
 }
 
 // EmailMeta is persisted mail metadata; raw body is inline KV or blob fs (BlobHash).
@@ -43,6 +44,7 @@ type EmailMeta struct {
 	Size       uint32   `msgpack:"sz"`
 	Flags      uint32   `msgpack:"fl"`
 	ModSeq     uint64   `msgpack:"ms,omitempty"`
+	IMAPUID    uint32   `msgpack:"iu,omitempty"` // IMAP UID in MailboxID; 0 until assigned or legacy backfill
 	BlobHash   [32]byte `msgpack:"bh,omitempty"`
 	Keywords   []string `msgpack:"kw,omitempty"` // IMAP custom keywords (non-system flags)
 }

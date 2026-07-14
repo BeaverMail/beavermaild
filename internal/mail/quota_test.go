@@ -52,7 +52,7 @@ func TestQuotaBlocksDeliverAndFreesOnDelete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := inbox.DeleteMessage(ctx, acc.ID, msgs[0].UID); err != nil {
+	if err := inbox.DeleteMessage(ctx, acc.ID, msgs[0].StorageID()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := inbox.Deliver(ctx, acc.ID, []byte("From: a@b\r\n\r\nz\r\n")); err != nil {
