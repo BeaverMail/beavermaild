@@ -137,47 +137,6 @@ func (ib *Inbox) mailboxRecord(ctx context.Context, accountID, mailboxID uint32)
 	return mbox, nil
 }
 
-// MailboxStatus holds IMAP STATUS counters for one folder.
-type MailboxStatus struct {
-	Messages    uint32
-	Recent      uint32
-	Unseen      uint32
-	UIDNext     uint32
-	UIDValidity uint32
-}
-
-// Status returns IMAP STATUS fields for mailboxID.
-func (ib *Inbox) Status(ctx context.Context, accountID, mailboxID uint32) (MailboxStatus, error) {
-	mbox, err := ib.mailboxRecord(ctx, accountID, mailboxID)
-	if err != nil {
-		return MailboxStatus{}, err
-	}
-	msgs, err := ib.List(ctx, accountID, mailboxID)
-	if err != nil {
-		return MailboxStatus{}, err
-	}
-	var unseen, recent uint32
-	var uidNext uint32 = 1
-	for _, m := range msgs {
-		if m.Meta.Flags&FlagRecent != 0 {
-			recent++
-		}
-		if m.Meta.Flags&FlagSeen == 0 {
-			unseen++
-		}
-		if m.UID >= uidNext {
-			uidNext = m.UID + 1
-		}
-	}
-	return MailboxStatus{
-		Messages:    uint32(len(msgs)),
-		Recent:      recent,
-		Unseen:      unseen,
-		UIDNext:     uidNext,
-		UIDValidity: mbox.UIDValidity,
-	}, nil
-}
-
 // CreateMailbox adds a user folder and returns its record.
 func (ib *Inbox) CreateMailbox(ctx context.Context, accountID uint32, name string) (Mailbox, error) {
 	name = stringsTrimMailboxName(name)

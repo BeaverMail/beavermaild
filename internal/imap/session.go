@@ -597,7 +597,7 @@ func (s *session) cmdStatus(ctx context.Context, tag, arg string) error {
 		}
 		return err
 	}
-	st, err := s.inbox.Status(ctx, s.principal.AccountID, mbox.ID)
+	st, err := s.inbox.Status(ctx, s.principal.AccountID, mbox.ID, fields)
 	if err != nil {
 		return err
 	}

@@ -197,7 +197,7 @@ def bench_mailbox(imap, name, do_idle):
     if do_idle and idle_sec > 0:
         rows.append(("IDLE analysis", None, ""))
         rows.append((
-            f"  legacy 1x poll (STATUS=List)",
+            f"  STATUS 1x (MESSAGES UIDNEXT UIDVALIDITY)",
             status_med,
             f"messages={msgs}",
         ))
