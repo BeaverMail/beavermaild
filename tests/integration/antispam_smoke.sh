@@ -46,20 +46,31 @@ sleep 0.2
 
 send_smtp() {
   local subject="$1"
-  printf 'EHLO test\r\nMAIL FROM:<sender@example.com>\r\nRCPT TO:<alice@localhost>\r\nDATA\r\nSubject: %s\r\n\r\nbody\r\n.\r\nQUIT\r\n' "$subject" \
+  printf 'EHLO mail.example.com\r\nMAIL FROM:<sender@example.com>\r\nRCPT TO:<alice@localhost>\r\nDATA\r\nFrom: sender@example.com\r\nTo: alice@localhost\r\nSubject: %s\r\nDate: Thu, 14 Jul 2026 12:00:00 +0000\r\n\r\nbody\r\n.\r\nQUIT\r\n' "$subject" \
     | nc -q 3 127.0.0.1 "$PORT" 2>/dev/null || true
 }
 
-R1="$(send_smtp 'hello inbox')"
-echo "$R1" | grep -q '250'
+# Checks the SMTP reply after DATA (EHLO also emits many 250 lines).
+assert_data_reply() {
+  local out="$1"
+  local expect="$2"
+  local data_reply
+  data_reply=$(echo "$out" | awk '/^354 /{p=1;next} p && /^[0-9]{3} /{print; exit}')
+  echo "$data_reply" | grep -q "^${expect} "
+}
 
-R2="$(send_smtp 'buy viagra now')"
-echo "$R2" | grep -q '250'
+# Default reject threshold is 10; "viagra" in subject scores high enough to 550 at SMTP.
+# Deliver two ham messages first; live reject is tested after lowering the threshold.
+R1="$(send_smtp 'hello inbox')"
+assert_data_reply "$R1" 250
+
+R2="$(send_smtp 'second inbox')"
+assert_data_reply "$R2" 250
 
 echo "== filter scan account (dry-run) =="
 OUT="$("$TMP/beaver" filter scan -c "$BEAVER_CONFIG" -account alice@localhost 2>&1)"
 echo "$OUT"
-echo "$OUT" | grep -q 'INBOX:'
+echo "$OUT" | grep -q $'^INBOX\t'
 echo "$OUT" | grep -q 'scanned=2'
 
 echo "== SMTP reject on new spam =="
@@ -68,25 +79,20 @@ import json, sys
 path = sys.argv[1]
 with open(path) as f:
     cfg = json.load(f)
-cfg["thresholds"]["reject"] = 3.0
+# Ham fixtures score ~5.5 at SMTP eom; viagra subject ~8+. Threshold 6 rejects spam only.
+cfg["thresholds"]["reject"] = 6.0
 with open(path, "w") as f:
     json.dump(cfg, f, indent=2)
 PY
 "$TMP/beaver" filter reload -c "$BEAVER_CONFIG" >/dev/null
 
-send_smtp() {
-  local subject="$1"
-  printf 'EHLO test\r\nMAIL FROM:<sender@example.com>\r\nRCPT TO:<alice@localhost>\r\nDATA\r\nSubject: %s\r\n\r\nbody\r\n.\r\nQUIT\r\n' "$subject" \
-    | nc -q 3 127.0.0.1 "$PORT"
-}
-
 HAM_REPLY="$(send_smtp 'another ham')"
+assert_data_reply "$HAM_REPLY" 250
 echo "$HAM_REPLY"
-echo "$HAM_REPLY" | grep -q '250 '
 
 SPAM_REPLY="$(send_smtp 'buy viagra')"
+assert_data_reply "$SPAM_REPLY" 550
 echo "$SPAM_REPLY"
-echo "$SPAM_REPLY" | grep -q '550 '
 
 kill "$SERVE_PID" 2>/dev/null || true
 wait "$SERVE_PID" 2>/dev/null || true
