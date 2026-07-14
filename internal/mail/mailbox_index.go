@@ -59,7 +59,7 @@ func (ib *Inbox) backfillMailboxIndex(ctx context.Context, accountID, mailboxID 
 
 func (ib *Inbox) listFromMailboxIndex(ctx context.Context, accountID, mailboxID uint32) ([]Message, error) {
 	from, to := storage.MailboxIndexRange(accountID, mailboxID)
-	var out []Message
+	var emailIDs []uint32
 	err := ib.store.Iterate(ctx, from, to, func(k, _ []byte) error {
 		emailID, err := storage.EmailIDFromMailboxIndexKey(k)
 		if err != nil {
@@ -68,18 +68,39 @@ func (ib *Inbox) listFromMailboxIndex(ctx context.Context, accountID, mailboxID 
 		if emailID == storage.MailboxIndexSentinelEmailID {
 			return nil
 		}
-		meta, err := ib.GetMeta(ctx, accountID, emailID)
-		if err != nil {
-			return err
-		}
-		if meta.MailboxID != mailboxID {
-			return nil
-		}
-		out = append(out, Message{UID: emailID, Meta: meta})
+		emailIDs = append(emailIDs, emailID)
 		return nil
 	})
 	if err != nil {
 		return nil, err
+	}
+	if len(emailIDs) == 0 {
+		return nil, nil
+	}
+
+	keys := make([][]byte, len(emailIDs))
+	for i, emailID := range emailIDs {
+		keys[i] = storage.AppendKey(nil, storage.SubspaceMail, accountID, emailID, byte(storage.CollectionEmail), nil)
+	}
+	values, err := ib.store.GetMany(ctx, keys)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]Message, 0, len(emailIDs))
+	for i, emailID := range emailIDs {
+		wire, ok := values[string(keys[i])]
+		if !ok {
+			return nil, storage.ErrNotFound
+		}
+		var meta storage.EmailMeta
+		if err := storage.UnmarshalPersist(wire, &meta); err != nil {
+			return nil, err
+		}
+		if meta.MailboxID != mailboxID {
+			continue
+		}
+		out = append(out, Message{UID: emailID, Meta: meta})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].UID < out[j].UID })
 	return out, nil

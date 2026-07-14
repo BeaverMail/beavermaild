@@ -100,11 +100,12 @@ def parse_status_messages(status_line):
 
 
 def mailbox_messages(imap, name):
-    quoted = imap._quote(name)
-    typ, data = imap._simple_command("STATUS", quoted, '(MESSAGES UIDNEXT UIDVALIDITY)')
+    mbox = "INBOX" if name.upper() == "INBOX" else imap._quote(name)
+    typ, data = imap.status(mbox, "(MESSAGES UIDNEXT UIDVALIDITY)")
     if typ != "OK" or not data:
         return 0
-    return parse_status_messages(data[0].decode())
+    line = data[0].decode() if isinstance(data[0], bytes) else str(data[0])
+    return parse_status_messages(line)
 
 
 def imap_idle(imap, seconds):

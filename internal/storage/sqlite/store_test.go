@@ -36,6 +36,52 @@ func TestStorePutGet(t *testing.T) {
 	}
 }
 
+func TestStoreGetMany(t *testing.T) {
+	t.Parallel()
+
+	store := openStore(t)
+	ctx := context.Background()
+	account := uint32(9)
+
+	for _, doc := range []uint32{1, 2, 4} {
+		batch := storage.NewBatch().WithAccount(account)
+		suffix := storage.BatchSuffix(2, doc, nil)
+		val := []byte{byte(doc)}
+		if err := batch.Set(storage.SubspaceMail, suffix, val); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Commit(ctx, batch); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	keys := [][]byte{
+		storage.AppendKey(nil, storage.SubspaceMail, account, 1, 2, nil),
+		storage.AppendKey(nil, storage.SubspaceMail, account, 2, 2, nil),
+		storage.AppendKey(nil, storage.SubspaceMail, account, 3, 2, nil),
+		storage.AppendKey(nil, storage.SubspaceMail, account, 4, 2, nil),
+	}
+	got, err := store.GetMany(ctx, keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("got %d values want 3", len(got))
+	}
+	if !bytes.Equal(got[string(keys[0])], []byte{1}) {
+		t.Fatalf("doc 1: %q", got[string(keys[0])])
+	}
+	if !bytes.Equal(got[string(keys[1])], []byte{2}) {
+		t.Fatalf("doc 2: %q", got[string(keys[1])])
+	}
+	if _, ok := got[string(keys[2])]; ok {
+		t.Fatal("missing key 3 should be omitted")
+	}
+	if !bytes.Equal(got[string(keys[3])], []byte{4}) {
+		t.Fatalf("doc 4: %q", got[string(keys[3])])
+	}
+}
+
 func TestStoreGetNotFound(t *testing.T) {
 	t.Parallel()
 

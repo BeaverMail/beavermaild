@@ -7,11 +7,15 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/BeaverMail/beaver/internal/storage"
 
 	_ "modernc.org/sqlite"
 )
+
+// getManyChunk caps SQLite bind parameters per IN query.
+const getManyChunk = 500
 
 // Store is a SQLite KV store (one table per subspace).
 type Store struct {
@@ -53,6 +57,61 @@ func (s *Store) Get(ctx context.Context, key []byte) ([]byte, error) {
 		return nil, err
 	}
 	return value, nil
+}
+
+// GetMany returns existing values for keys using chunked WHERE k IN (...).
+func (s *Store) GetMany(ctx context.Context, keys [][]byte) (map[string][]byte, error) {
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	table, err := tableForKey(keys[0])
+	if err != nil {
+		return nil, err
+	}
+	for _, key := range keys[1:] {
+		next, err := tableForKey(key)
+		if err != nil {
+			return nil, err
+		}
+		if next != table {
+			return nil, fmt.Errorf("sqlite getmany: keys span multiple subspaces")
+		}
+	}
+
+	out := make(map[string][]byte, len(keys))
+	for i := 0; i < len(keys); i += getManyChunk {
+		end := i + getManyChunk
+		if end > len(keys) {
+			end = len(keys)
+		}
+		chunk := keys[i:end]
+		placeholders := strings.Repeat("?,", len(chunk))
+		placeholders = placeholders[:len(placeholders)-1]
+		query := fmt.Sprintf("SELECT k, v FROM %s WHERE k IN (%s)", table, placeholders)
+		args := make([]any, len(chunk))
+		for j, key := range chunk {
+			args[j] = key
+		}
+		rows, err := s.db.QueryContext(ctx, query, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var k, v []byte
+			if err := rows.Scan(&k, &v); err != nil {
+				_ = rows.Close()
+				return nil, err
+			}
+			out[string(k)] = v
+		}
+		if err := rows.Close(); err != nil {
+			return nil, err
+		}
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
 // Iterate scans [from, to) in one subspace table and calls fn for each row.

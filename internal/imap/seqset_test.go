@@ -49,4 +49,8 @@ func TestParseStatusArg(t *testing.T) {
 	if !ok || len(fields) != 4 {
 		t.Fatalf("recent fields %v ok=%v", fields, ok)
 	}
+	name, fields, ok = parseStatusArg(`"INBOX/2011 IN" (MESSAGES UIDNEXT UIDVALIDITY)`)
+	if !ok || name != "INBOX/2011 IN" || len(fields) != 3 {
+		t.Fatalf("quoted spaced mailbox: name=%q fields=%v ok=%v", name, fields, ok)
+	}
 }

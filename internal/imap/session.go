@@ -1115,12 +1115,25 @@ func parseIMAPFlagList(s string) (uint32, []string, bool) {
 
 func parseStatusArg(arg string) (name string, fields []string, ok bool) {
 	arg = strings.TrimSpace(arg)
-	i := strings.IndexByte(arg, ' ')
-	if i < 0 {
+	if arg == "" {
 		return "", nil, false
 	}
-	name = parseMailboxName(strings.TrimSpace(arg[:i]))
-	rest := strings.TrimSpace(arg[i+1:])
+	var rest string
+	if arg[0] == '"' {
+		var okQuote bool
+		name, rest, okQuote = parseQuoted(arg)
+		if !okQuote {
+			return "", nil, false
+		}
+	} else {
+		i := strings.IndexByte(arg, ' ')
+		if i < 0 {
+			return "", nil, false
+		}
+		name = parseMailboxName(strings.TrimSpace(arg[:i]))
+		rest = strings.TrimSpace(arg[i+1:])
+	}
+	rest = strings.TrimSpace(rest)
 	if len(rest) < 2 || rest[0] != '(' || rest[len(rest)-1] != ')' {
 		return "", nil, false
 	}
