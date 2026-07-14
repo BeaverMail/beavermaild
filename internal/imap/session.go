@@ -30,11 +30,12 @@ type session struct {
 
 	condstore bool
 
-	principal directory.Principal
-	selected  bool
-	readOnly  bool
-	mbox      mail.Mailbox
-	messages  []mail.Message
+	principal       directory.Principal
+	selected        bool
+	readOnly        bool
+	mbox            mail.Mailbox
+	messages        []mail.Message
+	idleWatchModSeq uint64 // mailbox HighestModSeq at last IDLE sync
 }
 
 func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *mail.Inbox, certs *tlsload.Certs, secure, tlsRequired bool) *session {
@@ -327,6 +328,7 @@ func (s *session) finishAuth(ctx context.Context, tag, user, pass, resp string) 
 	s.principal = p
 	s.selected = false
 	s.messages = nil
+	s.idleWatchModSeq = 0
 	s.condstore = true
 	return s.tagged(tag, resp)
 }
@@ -452,6 +454,7 @@ func (s *session) openMailbox(ctx context.Context, tag, name string, examine boo
 	s.mbox = mbox
 	s.selected = true
 	s.readOnly = examine
+	s.idleWatchModSeq = highestMod
 	if err := s.untagged(mail.IMAPCapabilityFlags); err != nil {
 		return err
 	}
@@ -649,6 +652,7 @@ func (s *session) cmdDelete(ctx context.Context, tag, arg string) error {
 	if s.selected && s.mbox.ID == mbox.ID {
 		s.selected = false
 		s.messages = nil
+		s.idleWatchModSeq = 0
 	}
 	return s.tagged(tag, "OK DELETE completed")
 }
@@ -964,7 +968,7 @@ func parseQuoted(s string) (val, rest string, ok bool) {
 
 type fetchItems struct {
 	uid, flags, size, envelope, bodystructure, internalDate, modseq bool
-	bodySections                                                   []bodySectionFetch
+	bodySections                                                    []bodySectionFetch
 }
 
 func parseFetchArg(arg string) (setStr string, items fetchItems, ok bool) {

@@ -43,6 +43,7 @@ func (s *session) unselect() {
 	s.selected = false
 	s.readOnly = false
 	s.messages = nil
+	s.idleWatchModSeq = 0
 	s.mbox = mail.Mailbox{}
 }
 

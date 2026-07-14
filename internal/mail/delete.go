@@ -17,6 +17,9 @@ func (ib *Inbox) DeleteMessage(ctx context.Context, accountID, emailID uint32) e
 	blobHash := meta.BlobHash
 	mailboxID := meta.MailboxID
 	hasBlob := meta.HasBlob()
+	if _, err := ib.allocateModSeq(ctx, accountID, mailboxID); err != nil {
+		return err
+	}
 	batch := storage.NewBatch().WithAccount(accountID)
 	suffix := storage.DocumentSuffix(storage.CollectionEmail, emailID, nil)
 	if err := batch.Delete(storage.SubspaceMail, suffix); err != nil {

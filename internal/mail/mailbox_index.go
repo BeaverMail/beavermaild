@@ -58,9 +58,80 @@ func (ib *Inbox) backfillMailboxIndex(ctx context.Context, accountID, mailboxID 
 }
 
 func (ib *Inbox) listFromMailboxIndex(ctx context.Context, accountID, mailboxID uint32) ([]Message, error) {
+	emailIDs, err := ib.collectMailboxIndexUIDs(ctx, accountID, mailboxID)
+	if err != nil {
+		return nil, err
+	}
+	if len(emailIDs) == 0 {
+		return nil, nil
+	}
+	metas, err := ib.loadEmailMetaBatch(ctx, accountID, emailIDs)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Message, 0, len(emailIDs))
+	for _, emailID := range emailIDs {
+		meta, ok := metas[emailID]
+		if !ok {
+			return nil, storage.ErrNotFound
+		}
+		if meta.MailboxID != mailboxID {
+			continue
+		}
+		out = append(out, Message{UID: emailID, Meta: meta})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].UID < out[j].UID })
+	return out, nil
+}
+
+// ListMailboxIndexUIDs returns sorted email ids indexed for mailboxID.
+func (ib *Inbox) ListMailboxIndexUIDs(ctx context.Context, accountID, mailboxID uint32) ([]uint32, error) {
+	uids, err := ib.collectMailboxIndexUIDs(ctx, accountID, mailboxID)
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(uids, func(i, j int) bool { return uids[i] < uids[j] })
+	return uids, nil
+}
+
+// AppendMailboxMessages merges cached messages with batch-loaded newUIDs rows.
+func (ib *Inbox) AppendMailboxMessages(ctx context.Context, accountID, mailboxID uint32, cached []Message, newUIDs []uint32) ([]Message, error) {
+	if len(newUIDs) == 0 {
+		out := append([]Message(nil), cached...)
+		return out, nil
+	}
+	metas, err := ib.loadEmailMetaBatch(ctx, accountID, newUIDs)
+	if err != nil {
+		return nil, err
+	}
+	out := append([]Message(nil), cached...)
+	for _, uid := range newUIDs {
+		meta, ok := metas[uid]
+		if !ok {
+			return nil, storage.ErrNotFound
+		}
+		if meta.MailboxID != mailboxID {
+			continue
+		}
+		out = append(out, Message{UID: uid, Meta: meta})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].UID < out[j].UID })
+	return out, nil
+}
+
+func (ib *Inbox) collectMailboxIndexUIDs(ctx context.Context, accountID, mailboxID uint32) ([]uint32, error) {
+	ready, err := ib.mailboxIndexReady(ctx, accountID, mailboxID)
+	if err != nil {
+		return nil, err
+	}
+	if !ready {
+		if err := ib.backfillMailboxIndex(ctx, accountID, mailboxID); err != nil {
+			return nil, err
+		}
+	}
 	from, to := storage.MailboxIndexRange(accountID, mailboxID)
 	var emailIDs []uint32
-	err := ib.store.Iterate(ctx, from, to, func(k, _ []byte) error {
+	err = ib.store.Iterate(ctx, from, to, func(k, _ []byte) error {
 		emailID, err := storage.EmailIDFromMailboxIndexKey(k)
 		if err != nil {
 			return err
@@ -71,13 +142,13 @@ func (ib *Inbox) listFromMailboxIndex(ctx context.Context, accountID, mailboxID 
 		emailIDs = append(emailIDs, emailID)
 		return nil
 	})
-	if err != nil {
-		return nil, err
-	}
+	return emailIDs, err
+}
+
+func (ib *Inbox) loadEmailMetaBatch(ctx context.Context, accountID uint32, emailIDs []uint32) (map[uint32]storage.EmailMeta, error) {
 	if len(emailIDs) == 0 {
 		return nil, nil
 	}
-
 	keys := make([][]byte, len(emailIDs))
 	for i, emailID := range emailIDs {
 		keys[i] = storage.AppendKey(nil, storage.SubspaceMail, accountID, emailID, byte(storage.CollectionEmail), nil)
@@ -86,8 +157,7 @@ func (ib *Inbox) listFromMailboxIndex(ctx context.Context, accountID, mailboxID 
 	if err != nil {
 		return nil, err
 	}
-
-	out := make([]Message, 0, len(emailIDs))
+	out := make(map[uint32]storage.EmailMeta, len(emailIDs))
 	for i, emailID := range emailIDs {
 		wire, ok := values[string(keys[i])]
 		if !ok {
@@ -97,12 +167,8 @@ func (ib *Inbox) listFromMailboxIndex(ctx context.Context, accountID, mailboxID 
 		if err := storage.UnmarshalPersist(wire, &meta); err != nil {
 			return nil, err
 		}
-		if meta.MailboxID != mailboxID {
-			continue
-		}
-		out = append(out, Message{UID: emailID, Meta: meta})
+		out[emailID] = meta
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].UID < out[j].UID })
 	return out, nil
 }
 

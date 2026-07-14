@@ -10,7 +10,9 @@
 # Optional env:
 #   BEAVER_BENCH_MAILBOX_MEDIUM   subfolder for second SELECT/FETCH suite
 #   BEAVER_BENCH_IMAP_STARTTLS=1  use plain IMAP + STARTTLS instead of implicit TLS
-#   BEAVER_BENCH_IDLE_SEC=3       IDLE duration on INBOX (default 3)
+#   BEAVER_BENCH_IDLE_SEC=3       IDLE probe duration budget (default 3)
+#   BEAVER_BENCH_IDLE_POLL_INTERVAL=0.55  seconds per micro-IDLE cycle (>500ms server poll)
+#   BEAVER_BENCH_IDLE_POLL_CYCLES=0  micro-IDLE cycles (0 = derive from IDLE_SEC / interval)
 #   BEAVER_BENCH_FETCH_N=10       FETCH count (default 10)
 #   BEAVER_BENCH_RUNS=1           repetitions per timed operation (median reported)
 #   BEAVER_BENCH_OUTPUT_DIR=.data/bench
@@ -23,6 +25,8 @@ set -euo pipefail
 export BEAVER_BENCH_MAILBOX_MEDIUM="${BEAVER_BENCH_MAILBOX_MEDIUM:-}"
 export BEAVER_BENCH_IMAP_STARTTLS="${BEAVER_BENCH_IMAP_STARTTLS:-0}"
 export BEAVER_BENCH_IDLE_SEC="${BEAVER_BENCH_IDLE_SEC:-3}"
+export BEAVER_BENCH_IDLE_POLL_INTERVAL="${BEAVER_BENCH_IDLE_POLL_INTERVAL:-0.55}"
+export BEAVER_BENCH_IDLE_POLL_CYCLES="${BEAVER_BENCH_IDLE_POLL_CYCLES:-0}"
 export BEAVER_BENCH_FETCH_N="${BEAVER_BENCH_FETCH_N:-10}"
 export BEAVER_BENCH_RUNS="${BEAVER_BENCH_RUNS:-1}"
 export BEAVER_BENCH_OUTPUT_DIR="${BEAVER_BENCH_OUTPUT_DIR:-.data/bench}"
@@ -50,8 +54,15 @@ password = os.environ["BEAVER_BENCH_PASSWORD"]
 medium_override = os.environ.get("BEAVER_BENCH_MAILBOX_MEDIUM", "").strip()
 use_starttls = os.environ.get("BEAVER_BENCH_IMAP_STARTTLS", "0") in ("1", "true", "TRUE", "yes", "YES")
 idle_sec = float(os.environ.get("BEAVER_BENCH_IDLE_SEC", "3"))
+idle_poll_interval = float(os.environ.get("BEAVER_BENCH_IDLE_POLL_INTERVAL", "0.55"))
+idle_poll_cycles_env = int(os.environ.get("BEAVER_BENCH_IDLE_POLL_CYCLES", "0"))
 fetch_n = max(1, int(os.environ.get("BEAVER_BENCH_FETCH_N", "10")))
 runs = max(1, int(os.environ.get("BEAVER_BENCH_RUNS", "1")))
+
+if idle_poll_cycles_env > 0:
+    idle_poll_cycles = idle_poll_cycles_env
+else:
+    idle_poll_cycles = max(1, int(round(idle_sec / idle_poll_interval)))
 
 if ":" in hostport:
     host, port_s = hostport.rsplit(":", 1)
@@ -125,6 +136,35 @@ def imap_idle(imap, seconds):
             break
 
 
+def imap_idle_once(imap, hold_sec):
+    """Run one IDLE cycle; return protocol overhead beyond hold_sec (≈ one server poll)."""
+    t0 = time.perf_counter()
+    tag = imap._new_tag().decode()
+    imap.send(f"{tag} IDLE\r\n".encode())
+    while True:
+        line = imap.readline()
+        if not line:
+            raise RuntimeError("IDLE: connection closed")
+        if line.startswith(b"+ "):
+            break
+    time.sleep(hold_sec)
+    imap.send(b"DONE\r\n")
+    while True:
+        line = imap.readline()
+        if not line:
+            raise RuntimeError("IDLE: connection closed waiting for DONE")
+        if line.startswith(tag.encode()):
+            break
+    return time.perf_counter() - t0 - hold_sec
+
+
+def idle_poll_probe(imap, cycles, hold_sec):
+    overheads = []
+    for _ in range(cycles):
+        overheads.append(imap_idle_once(imap, hold_sec))
+    return overheads
+
+
 def bench_mailbox(imap, name, do_idle):
     rows = []
 
@@ -141,6 +181,7 @@ def bench_mailbox(imap, name, do_idle):
         return mailbox_messages(imap, name)
 
     med, msgs = timed(f"STATUS {name}", status)
+    status_med = med
     rows.append((f"STATUS {name}", med, f"messages={msgs}"))
 
     n = min(fetch_n, max(exists, 1))
@@ -154,11 +195,33 @@ def bench_mailbox(imap, name, do_idle):
     rows.append((f"FETCH {name} 1:{n}", med, ""))
 
     if do_idle and idle_sec > 0:
-        def idle_run():
+        rows.append(("IDLE analysis", None, ""))
+        rows.append((
+            f"  legacy 1x poll (STATUS=List)",
+            status_med,
+            f"messages={msgs}",
+        ))
+
+        def probe():
+            return idle_poll_probe(imap, idle_poll_cycles, idle_poll_interval)
+
+        med, overheads = timed(
+            f"  quiet poll probe {idle_poll_cycles}x{idle_poll_interval:g}s",
+            probe,
+        )
+        oh_med = statistics.median(overheads) * 1000
+        oh_max = max(overheads) * 1000
+        rows.append((
+            f"  quiet poll probe {idle_poll_cycles}x{idle_poll_interval:g}s",
+            med,
+            f"overhead med={oh_med:.1f}ms max={oh_max:.1f}ms",
+        ))
+
+        def idle_wall():
             imap_idle(imap, idle_sec)
 
-        med, _ = timed(f"IDLE {name} {idle_sec:g}s", idle_run)
-        rows.append((f"IDLE {name} {idle_sec:g}s", med, ""))
+        med, _ = timed(f"  IDLE wall {idle_sec:g}s", idle_wall)
+        rows.append((f"  IDLE wall {idle_sec:g}s", med, "client sleep (not poll cost)"))
 
     return rows
 
@@ -169,6 +232,10 @@ lines.append(f"git={git_head}")
 lines.append(f"imap_host={hostport} starttls={use_starttls}")
 lines.append(f"email={email}")
 lines.append(f"runs={runs} fetch_n={fetch_n} idle_sec={idle_sec}")
+lines.append(
+    f"idle_poll={idle_poll_cycles}x{idle_poll_interval:g}s "
+    f"(overhead ≈ server poll + IMAP framing)"
+)
 lines.append("")
 
 imap = connect()
@@ -217,6 +284,9 @@ try:
     lines.append("")
     lines.append(f"INBOX suite: {inbox}")
     for label, med, extra in bench_mailbox(imap, inbox, do_idle=True):
+        if med is None:
+            lines.append(label)
+            continue
         suffix = f"\t{extra}" if extra else ""
         lines.append(f"{label}\t{med:.3f}s{suffix}")
 

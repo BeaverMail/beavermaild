@@ -12,10 +12,48 @@ import (
 
 // pushIdleMailboxChanges compares storage to the session cache and emits untagged updates.
 func (s *session) pushIdleMailboxChanges(ctx context.Context) error {
-	fresh, err := s.inbox.List(ctx, s.principal.AccountID, s.mbox.ID)
+	highest, err := s.inbox.HighestModSeq(ctx, s.principal.AccountID, s.mbox.ID)
 	if err != nil {
 		return err
 	}
+	if highest == s.idleWatchModSeq {
+		return nil
+	}
+
+	freshUIDs, err := s.inbox.ListMailboxIndexUIDs(ctx, s.principal.AccountID, s.mbox.ID)
+	if err != nil {
+		return err
+	}
+	freshSet := make(map[uint32]struct{}, len(freshUIDs))
+	for _, uid := range freshUIDs {
+		freshSet[uid] = struct{}{}
+	}
+
+	var newUIDs []uint32
+	for _, uid := range freshUIDs {
+		if !sessionHasUID(s.messages, uid) {
+			newUIDs = append(newUIDs, uid)
+		}
+	}
+	expunged := sessionHasMissingUID(s.messages, freshSet)
+
+	var fresh []mail.Message
+	switch {
+	case len(newUIDs) > 0 && !expunged:
+		fresh, err = s.inbox.AppendMailboxMessages(ctx, s.principal.AccountID, s.mbox.ID, s.messages, newUIDs)
+	case expunged && len(newUIDs) == 0:
+		fresh = filterMessagesByUIDSet(s.messages, freshSet)
+	default:
+		fresh, err = s.inbox.List(ctx, s.principal.AccountID, s.mbox.ID)
+	}
+	if err != nil {
+		return err
+	}
+	return s.applyIdleMailboxDiff(fresh, highest)
+}
+
+// applyIdleMailboxDiff emits IDLE updates and refreshes the session snapshot.
+func (s *session) applyIdleMailboxDiff(fresh []mail.Message, highestMod uint64) error {
 	oldRecent := countRecentFlags(s.messages)
 	freshByUID := make(map[uint32]mail.Message, len(fresh))
 	for _, m := range fresh {
@@ -58,7 +96,36 @@ func (s *session) pushIdleMailboxChanges(ctx context.Context) error {
 	}
 
 	s.messages = fresh
+	s.idleWatchModSeq = highestMod
 	return nil
+}
+
+func sessionHasUID(msgs []mail.Message, uid uint32) bool {
+	for _, m := range msgs {
+		if m.UID == uid {
+			return true
+		}
+	}
+	return false
+}
+
+func sessionHasMissingUID(msgs []mail.Message, freshSet map[uint32]struct{}) bool {
+	for _, m := range msgs {
+		if _, ok := freshSet[m.UID]; !ok {
+			return true
+		}
+	}
+	return false
+}
+
+func filterMessagesByUIDSet(msgs []mail.Message, uids map[uint32]struct{}) []mail.Message {
+	out := make([]mail.Message, 0, len(uids))
+	for _, m := range msgs {
+		if _, ok := uids[m.UID]; ok {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // emitIdleFetch sends an unsolicited FLAGS (and optional MODSEQ) FETCH during IDLE.

@@ -118,3 +118,83 @@ func TestDeleteMessageRemovesFromList(t *testing.T) {
 		t.Fatalf("msgs %+v", msgs)
 	}
 }
+
+func TestDeleteMessageBumpsHighestModSeq(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, "file:"+t.TempDir()+"/store.sqlite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	dir := directory.NewLocal(store)
+	acc, err := directory.SeedDev(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inbox := mail.NewInbox(store, blob.NewFS(t.TempDir()+"/blobs"))
+	if err := inbox.EnsureMailboxes(ctx, acc.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	id, err := inbox.Deliver(ctx, acc.ID, []byte("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := inbox.HighestModSeq(ctx, acc.ID, mail.InboxMailboxID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := inbox.DeleteMessage(ctx, acc.ID, id); err != nil {
+		t.Fatal(err)
+	}
+	after, err := inbox.HighestModSeq(ctx, acc.ID, mail.InboxMailboxID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after <= before {
+		t.Fatalf("HighestModSeq before=%d after=%d", before, after)
+	}
+}
+
+func TestAppendMailboxMessagesLoadsOnlyNewUIDs(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, "file:"+t.TempDir()+"/store.sqlite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	dir := directory.NewLocal(store)
+	acc, err := directory.SeedDev(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inbox := mail.NewInbox(store, blob.NewFS(t.TempDir()+"/blobs"))
+	if err := inbox.EnsureMailboxes(ctx, acc.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	id1, err := inbox.Deliver(ctx, acc.ID, []byte("a"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cached, err := inbox.List(ctx, acc.ID, mail.InboxMailboxID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id2, err := inbox.Deliver(ctx, acc.ID, []byte("b"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	merged, err := inbox.AppendMailboxMessages(ctx, acc.ID, mail.InboxMailboxID, cached, []uint32{id2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(merged) != 2 || merged[0].UID != id1 || merged[1].UID != id2 {
+		t.Fatalf("merged %+v", merged)
+	}
+}
