@@ -1,6 +1,6 @@
 PLUGINS_DIR ?= .data/plugins
 
-.PHONY: beaver beaver-plugin-antispam plugins test
+.PHONY: beaver beaver-plugin-antispam plugins test integration
 
 beaver:
 	go build -o beaver ./cmd/beaver
@@ -13,3 +13,9 @@ beaver-plugin-antispam:
 
 test:
 	go test ./...
+
+integration:
+	@for s in tests/integration/*.sh; do \
+		echo "== $$s =="; \
+		bash "$$s" || exit 1; \
+	done
