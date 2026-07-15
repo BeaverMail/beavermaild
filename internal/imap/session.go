@@ -13,6 +13,7 @@ import (
 
 	"github.com/BeaverMail/beaver/internal/directory"
 	"github.com/BeaverMail/beaver/internal/mail"
+	"github.com/BeaverMail/beaver/internal/security"
 	"github.com/BeaverMail/beaver/internal/storage"
 	"github.com/BeaverMail/beaver/internal/tlsload"
 )
@@ -31,6 +32,7 @@ type session struct {
 	condstore bool
 
 	principal       directory.Principal
+	authGate        security.AuthGate
 	selected        bool
 	readOnly        bool
 	mbox            mail.Mailbox
@@ -38,7 +40,10 @@ type session struct {
 	idleWatchModSeq uint64 // mailbox HighestModSeq at last IDLE sync
 }
 
-func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *mail.Inbox, certs *tlsload.Certs, secure, tlsRequired bool) *session {
+func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *mail.Inbox, certs *tlsload.Certs, secure, tlsRequired bool, gate security.AuthGate) *session {
+	if gate == nil {
+		gate = security.NopGate{}
+	}
 	return &session{
 		log:         log,
 		conn:        conn,
@@ -48,6 +53,7 @@ func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *ma
 		tls:         certs,
 		secure:      secure,
 		tlsRequired: tlsRequired,
+		authGate:    gate,
 	}
 }
 
@@ -318,13 +324,19 @@ func (s *session) capabilityLine() string {
 
 // finishAuth validates credentials and resets mailbox selection state.
 func (s *session) finishAuth(ctx context.Context, tag, user, pass, resp string) error {
+	ip := security.ClientIP(s.conn)
+	if !s.authGate.AllowAuth(ip, user) {
+		return s.tagged(tag, "NO [LIMIT] Too many login attempts, try again later")
+	}
 	p, err := s.dir.Authenticate(ctx, user, pass)
 	if err != nil {
 		if errors.Is(err, directory.ErrInvalidCredentials) || errors.Is(err, directory.ErrInactive) {
+			s.authGate.RecordAuthFailure(ip, user)
 			return s.tagged(tag, "NO LOGIN failed")
 		}
 		return err
 	}
+	s.authGate.RecordAuthSuccess(ip, user)
 	s.principal = p
 	s.selected = false
 	s.messages = nil

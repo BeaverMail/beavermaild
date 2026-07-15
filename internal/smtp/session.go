@@ -14,6 +14,7 @@ import (
 	"github.com/BeaverMail/beaver/internal/directory"
 	"github.com/BeaverMail/beaver/internal/mail"
 	"github.com/BeaverMail/beaver/internal/mailauth"
+	"github.com/BeaverMail/beaver/internal/security"
 	"github.com/BeaverMail/beaver/internal/tlsload"
 )
 
@@ -45,6 +46,7 @@ type session struct {
 	iprevDone       bool
 
 	principal directory.Principal
+	authGate  security.AuthGate
 
 	mailFrom  string
 	mailRet   mail.RetMode
@@ -69,9 +71,12 @@ type smtpCommand struct {
 	arg string
 }
 
-func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *mail.Inbox, queue *mail.Queue, certs *tlsload.Certs, secure, tlsRequired, vrfyEnabled, submission bool, limits DataLimits, filter MessageFilter, filterTmpDir string, filterTimeoutMs int, mailAuth *mailauth.Verifier) *session {
+func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *mail.Inbox, queue *mail.Queue, certs *tlsload.Certs, secure, tlsRequired, vrfyEnabled, submission bool, limits DataLimits, filter MessageFilter, filterTmpDir string, filterTimeoutMs int, mailAuth *mailauth.Verifier, gate security.AuthGate) *session {
 	if filter == nil {
 		filter = NopFilter{}
+	}
+	if gate == nil {
+		gate = security.NopGate{}
 	}
 	if filterTimeoutMs <= 0 {
 		filterTimeoutMs = 10000
@@ -93,6 +98,7 @@ func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *ma
 		filterTmpDir:    filterTmpDir,
 		filterTimeoutMs: filterTimeoutMs,
 		mailAuth:        mailAuth,
+		authGate:        gate,
 	}
 }
 
@@ -504,13 +510,19 @@ func (s *session) authLogin(ctx context.Context, credLine string) error {
 }
 
 func (s *session) finishAuth(ctx context.Context, user, pass string) error {
+	ip := security.ClientIP(s.conn)
+	if !s.authGate.AllowAuth(ip, user) {
+		return s.writef("454 4.7.0 Too many authentication attempts, try again later")
+	}
 	p, err := s.dir.Authenticate(ctx, user, pass)
 	if err != nil {
 		if errors.Is(err, directory.ErrInvalidCredentials) || errors.Is(err, directory.ErrInactive) {
+			s.authGate.RecordAuthFailure(ip, user)
 			return s.writef("535 5.7.8 Authentication credentials invalid")
 		}
 		return err
 	}
+	s.authGate.RecordAuthSuccess(ip, user)
 	s.principal = p
 	s.reset()
 	return s.writef(replyAuthOK)

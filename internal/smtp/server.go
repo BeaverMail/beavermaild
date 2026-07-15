@@ -10,6 +10,7 @@ import (
 	"github.com/BeaverMail/beaver/internal/directory"
 	"github.com/BeaverMail/beaver/internal/mail"
 	"github.com/BeaverMail/beaver/internal/mailauth"
+	"github.com/BeaverMail/beaver/internal/security"
 	"github.com/BeaverMail/beaver/internal/tlsload"
 )
 
@@ -23,6 +24,7 @@ type Options struct {
 	FilterTmpDir      string
 	FilterTimeoutMs   int
 	MailAuth          *mailauth.Verifier
+	AuthGate          security.AuthGate
 }
 
 // Server accepts inbound SMTP connections.
@@ -42,11 +44,16 @@ type Server struct {
 	filterTmpDir        string
 	filterTimeoutMs     int
 	mailAuth            *mailauth.Verifier
+	authGate            security.AuthGate
 }
 
 // NewServer returns an SMTP server. submissionAddr is optional plain listener (e.g. :587).
 // submissionTLSAddr enables implicit TLS on :465 when certs are configured.
 func NewServer(log *slog.Logger, addr string, dir *directory.Local, inbox *mail.Inbox, queue *mail.Queue, submissionAddr, submissionTLSAddr string, opts Options) *Server {
+	gate := opts.AuthGate
+	if gate == nil {
+		gate = security.NopGate{}
+	}
 	return &Server{
 		log:                 log,
 		inboundAddr:         addr,
@@ -63,6 +70,7 @@ func NewServer(log *slog.Logger, addr string, dir *directory.Local, inbox *mail.
 		filterTmpDir:        opts.FilterTmpDir,
 		filterTimeoutMs:     opts.FilterTimeoutMs,
 		mailAuth:            opts.MailAuth,
+		authGate:            gate,
 	}
 }
 
@@ -158,7 +166,7 @@ func (s *Server) serve(ctx context.Context, slots []listenerSlot) error {
 
 func (s *Server) serveConn(ctx context.Context, conn net.Conn, secure, submission bool) {
 	defer conn.Close()
-	sess := newSession(s.log, conn, s.dir, s.inbox, s.queue, s.certs, secure, s.tlsRequired, s.vrfyEnabled, submission, s.dataLimits, s.filter, s.filterTmpDir, s.filterTimeoutMs, s.mailAuth)
+	sess := newSession(s.log, conn, s.dir, s.inbox, s.queue, s.certs, secure, s.tlsRequired, s.vrfyEnabled, submission, s.dataLimits, s.filter, s.filterTmpDir, s.filterTimeoutMs, s.mailAuth, s.authGate)
 	if err := sess.run(ctx); err != nil && ctx.Err() == nil {
 		s.log.Debug("smtp session", slog.Any("err", err))
 	}

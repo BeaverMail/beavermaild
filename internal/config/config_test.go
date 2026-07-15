@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/BeaverMail/beaver/internal/config"
+	"github.com/BeaverMail/beaver/internal/security"
 )
 
 func TestInitLayoutCreatesConfig(t *testing.T) {
@@ -144,5 +145,26 @@ func TestSMTPVRFYEnv(t *testing.T) {
 	cfg.ApplyEnv()
 	if !cfg.SMTPVRFYEnabled() {
 		t.Fatal("expected vrfy enabled")
+	}
+}
+
+func TestNewAuthGate(t *testing.T) {
+	cfg := config.Default(t.TempDir())
+	if _, ok := cfg.NewAuthGate().(*security.RateLimitGate); !ok {
+		t.Fatalf("default gate type %T", cfg.NewAuthGate())
+	}
+
+	cfg.Auth.RateLimit.Disable = true
+	if _, ok := cfg.NewAuthGate().(security.NopGate); !ok {
+		t.Fatalf("disabled gate type %T", cfg.NewAuthGate())
+	}
+}
+
+func TestNewAuthGateEnvDisable(t *testing.T) {
+	cfg := config.Default(t.TempDir())
+	t.Setenv("BEAVER_AUTH_RATE_LIMIT_DISABLE", "true")
+	cfg.ApplyEnv()
+	if _, ok := cfg.NewAuthGate().(security.NopGate); !ok {
+		t.Fatalf("env disabled gate type %T", cfg.NewAuthGate())
 	}
 }

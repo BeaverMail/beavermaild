@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/BeaverMail/beaver/internal/security"
 )
 
 // DefaultDataDir is the relative data root when not overridden.
@@ -33,6 +35,7 @@ type Config struct {
 	TLS      TLSConfig     `json:"tls"`
 	SMTP     SMTPConfig    `json:"smtp"`
 	IMAP     IMAPConfig    `json:"imap"`
+	Auth     AuthConfig    `json:"auth"`
 	Queue    QueueConfig   `json:"queue"`
 	Quota    QuotaConfig   `json:"quota"`
 	Plugins  PluginsConfig `json:"plugins"`
@@ -94,6 +97,18 @@ type SMTPConfig struct {
 type IMAPConfig struct {
 	Listen    string `json:"listen"`
 	TLSListen string `json:"tls_listen"`
+}
+
+// AuthConfig holds authentication security settings.
+type AuthConfig struct {
+	RateLimit AuthRateLimitConfig `json:"rate_limit"`
+}
+
+// AuthRateLimitConfig limits failed LOGIN/AUTH attempts per client IP.
+type AuthRateLimitConfig struct {
+	Disable     bool   `json:"disable"`      // default off = rate limit enabled
+	MaxAttempts int    `json:"max_attempts"` // default 10
+	Window      string `json:"window"`       // default 15m
 }
 
 // QueueConfig holds outbound queue schedule defaults.
@@ -183,6 +198,9 @@ func (c *Config) ApplyEnv() {
 	}
 	if v := os.Getenv("BEAVER_IMAP_LISTEN"); v != "" {
 		c.IMAP.Listen = v
+	}
+	if v := os.Getenv("BEAVER_AUTH_RATE_LIMIT_DISABLE"); v == "1" || strings.EqualFold(v, "true") {
+		c.Auth.RateLimit.Disable = true
 	}
 	if v := os.Getenv("BEAVER_QUEUE_RUN_DELAY"); v != "" {
 		c.Queue.RunDelay = v
@@ -441,4 +459,22 @@ func (c *Config) QueueTimings() (QueueTimings, error) {
 		MaxLifetime:    life,
 		RunDelay:       run,
 	}, nil
+}
+
+// NewAuthGate builds the process-wide auth rate limit gate from config.
+func (c *Config) NewAuthGate() security.AuthGate {
+	if c.Auth.RateLimit.Disable {
+		return security.NopGate{}
+	}
+	cfg := security.DefaultRateLimitConfig()
+	if n := c.Auth.RateLimit.MaxAttempts; n > 0 {
+		cfg.MaxAttempts = n
+	}
+	if s := strings.TrimSpace(c.Auth.RateLimit.Window); s != "" {
+		d, err := ParseDuration(s)
+		if err == nil && d > 0 {
+			cfg.Window = d
+		}
+	}
+	return security.NewRateLimitGate(cfg)
 }

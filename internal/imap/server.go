@@ -9,6 +9,7 @@ import (
 
 	"github.com/BeaverMail/beaver/internal/directory"
 	"github.com/BeaverMail/beaver/internal/mail"
+	"github.com/BeaverMail/beaver/internal/security"
 	"github.com/BeaverMail/beaver/internal/tlsload"
 )
 
@@ -17,6 +18,7 @@ type Options struct {
 	Certs       *tlsload.Certs
 	TLSListen   string
 	TLSRequired bool
+	AuthGate    security.AuthGate
 }
 
 // Server accepts IMAP connections.
@@ -28,10 +30,15 @@ type Server struct {
 	inbox       *mail.Inbox
 	certs       *tlsload.Certs
 	tlsRequired bool
+	authGate    security.AuthGate
 }
 
 // NewServer returns an IMAP server bound to plainAddr; tlsAddr enables implicit TLS on :993.
 func NewServer(log *slog.Logger, plainAddr string, dir *directory.Local, inbox *mail.Inbox, opts Options) *Server {
+	gate := opts.AuthGate
+	if gate == nil {
+		gate = security.NopGate{}
+	}
 	return &Server{
 		log:         log,
 		plainAddr:   plainAddr,
@@ -40,6 +47,7 @@ func NewServer(log *slog.Logger, plainAddr string, dir *directory.Local, inbox *
 		inbox:       inbox,
 		certs:       opts.Certs,
 		tlsRequired: opts.TLSRequired,
+		authGate:    gate,
 	}
 }
 
@@ -108,7 +116,7 @@ func (s *Server) serve(ctx context.Context, slots []listenerSlot) error {
 
 func (s *Server) serveConn(ctx context.Context, conn net.Conn, secure bool) {
 	defer conn.Close()
-	sess := newSession(s.log, conn, s.dir, s.inbox, s.certs, secure, s.tlsRequired)
+	sess := newSession(s.log, conn, s.dir, s.inbox, s.certs, secure, s.tlsRequired, s.authGate)
 	if err := sess.run(ctx); err != nil && ctx.Err() == nil {
 		s.log.Debug("imap session", slog.Any("err", err))
 	}

@@ -57,6 +57,7 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 		return nil, err
 	}
 	tlsOpts := tlsOptions(cfg, certs)
+	authGate := cfg.NewAuthGate()
 	var mailAuth *mailauth.Verifier
 	if cfg.MailAuth.Enabled {
 		mailAuth = mailauth.New(mailauth.Config{
@@ -85,11 +86,13 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 			FilterTmpDir:    filepath.Join(cfg.DataDir, "tmp"),
 			FilterTimeoutMs: int(cfg.PluginsSMTPFilterTimeout() / time.Millisecond),
 			MailAuth:        mailAuth,
+			AuthGate:        authGate,
 		}),
 		imap: imap.NewServer(log, cfg.IMAPListen(), dir, inbox, imap.Options{
 			Certs:       certs,
 			TLSListen:   tlsOpts.imapTLSListen,
 			TLSRequired: tlsOpts.required,
+			AuthGate:    authGate,
 		}),
 	}, nil
 }
