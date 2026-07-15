@@ -18,6 +18,11 @@ type RemoteDeliverer interface {
 	DeliverRemote(ctx context.Context, mailFrom, rcptTo string, data []byte) error
 }
 
+// OutboundSigner adds DKIM signatures before remote delivery.
+type OutboundSigner interface {
+	Sign(returnPath string, raw []byte) ([]byte, error)
+}
+
 // Worker delivers queued messages locally or via RemoteDeliverer.
 type Worker struct {
 	log    *slog.Logger
@@ -25,11 +30,12 @@ type Worker struct {
 	inbox  *Inbox
 	dir    *directory.Local
 	remote RemoteDeliverer
+	signer OutboundSigner
 	policy QueuePolicy
 }
 
 // NewWorker returns a queue worker. remote may be nil when only local delivery is needed.
-func NewWorker(log *slog.Logger, queue *Queue, inbox *Inbox, dir *directory.Local, remote RemoteDeliverer, policy QueuePolicy) *Worker {
+func NewWorker(log *slog.Logger, queue *Queue, inbox *Inbox, dir *directory.Local, remote RemoteDeliverer, signer OutboundSigner, policy QueuePolicy) *Worker {
 	if policy.RunDelay == 0 {
 		policy = DefaultQueuePolicy()
 	}
@@ -39,6 +45,7 @@ func NewWorker(log *slog.Logger, queue *Queue, inbox *Inbox, dir *directory.Loca
 		inbox:  inbox,
 		dir:    dir,
 		remote: remote,
+		signer: signer,
 		policy: policy,
 	}
 }
@@ -90,6 +97,12 @@ func (w *Worker) deliverEntry(ctx context.Context, e QueueEntry) error {
 	raw, err := w.queue.LoadRaw(ctx, msg)
 	if err != nil {
 		return err
+	}
+	if w.signer != nil && w.hasPendingRemote(ctx, msg) {
+		raw, err = w.signer.Sign(msg.ReturnPath, raw)
+		if err != nil {
+			return err
+		}
 	}
 
 	changed := false
@@ -249,6 +262,21 @@ func (w *Worker) deliverTo(ctx context.Context, returnPath, rcpt string, raw []b
 		return errors.New("mail: no remote delivery configured")
 	}
 	return w.remote.DeliverRemote(ctx, returnPath, rcpt, raw)
+}
+
+func (w *Worker) hasPendingRemote(ctx context.Context, msg storage.QueueMessage) bool {
+	if w.remote == nil {
+		return false
+	}
+	for _, rcpt := range msg.Recipients {
+		if !recipientPending(rcpt) {
+			continue
+		}
+		if _, _, err := w.dir.ResolveEmail(ctx, rcpt.Address); errors.Is(err, directory.ErrNotFound) {
+			return true
+		}
+	}
+	return false
 }
 
 func deliveryPermanent(err error) bool {

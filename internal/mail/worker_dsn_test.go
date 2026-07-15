@@ -61,7 +61,7 @@ func TestWorkerPermanentFailDSN(t *testing.T) {
 	remote := stubRemote{err: &smtp.ResponseError{Code: 550, Line: "5.1.1 user unknown"}}
 	policy := mail.TestQueuePolicy()
 	policy.DelayNotifyAfter = 0
-	w := mail.NewWorker(log.New("error"), queue, inbox, dir, remote, policy)
+	w := mail.NewWorker(log.New("error"), queue, inbox, dir, remote, nil, policy)
 	w.ProcessOnce(ctx)
 
 	msgs, err := inbox.List(ctx, acc.ID, mail.InboxMailboxID)
@@ -112,7 +112,7 @@ func TestWorkerNotifyNeverNoDSN(t *testing.T) {
 	}
 
 	remote := stubRemote{err: &smtp.ResponseError{Code: 550, Line: "nope"}}
-	w := mail.NewWorker(log.New("error"), queue, inbox, dir, remote, mail.TestQueuePolicy())
+	w := mail.NewWorker(log.New("error"), queue, inbox, dir, remote, nil, mail.TestQueuePolicy())
 	w.ProcessOnce(ctx)
 
 	msgs, err := inbox.List(ctx, acc.ID, mail.InboxMailboxID)
@@ -156,7 +156,7 @@ func TestWorkerSuccessDSN(t *testing.T) {
 	}
 
 	remote := stubRemote{ok: true}
-	w := mail.NewWorker(log.New("error"), queue, inbox, dir, remote, mail.TestQueuePolicy())
+	w := mail.NewWorker(log.New("error"), queue, inbox, dir, remote, nil, mail.TestQueuePolicy())
 	w.ProcessOnce(ctx)
 
 	msgs, err := inbox.List(ctx, acc.ID, mail.InboxMailboxID)
@@ -209,7 +209,7 @@ func TestWorkerDelayDSN(t *testing.T) {
 	remote := stubRemote{err: &smtp.ResponseError{Code: 451, Line: "try later"}}
 	policy := mail.TestQueuePolicy()
 	policy.DelayNotifyAfter = 0
-	w := mail.NewWorker(log.New("error"), queue, inbox, dir, remote, policy)
+	w := mail.NewWorker(log.New("error"), queue, inbox, dir, remote, nil, policy)
 	w.ProcessOnce(ctx)
 
 	msgs, err := inbox.List(ctx, acc.ID, mail.InboxMailboxID)
@@ -261,7 +261,7 @@ func TestWorkerNullReturnPathNoDSN(t *testing.T) {
 
 	policy := mail.TestQueuePolicy()
 	policy.MaxLifetime = time.Millisecond
-	w := mail.NewWorker(log.New("error"), queue, inbox, dir, nil, policy)
+	w := mail.NewWorker(log.New("error"), queue, inbox, dir, nil, nil, policy)
 	w.ProcessOnce(ctx)
 	time.Sleep(5 * time.Millisecond)
 	w.ProcessOnce(ctx)
@@ -358,7 +358,7 @@ func TestWorkerDNSPermanentFailDSN(t *testing.T) {
 	remote := stubRemote{err: smtp.WrapDNS(&net.DNSError{IsNotFound: true, Err: "no such host", Name: "invalid.invalid"})}
 	policy := mail.TestQueuePolicy()
 	policy.DelayNotifyAfter = 0
-	w := mail.NewWorker(log.New("error"), queue, inbox, dir, remote, policy)
+	w := mail.NewWorker(log.New("error"), queue, inbox, dir, remote, nil, policy)
 	w.ProcessOnce(ctx)
 
 	msgs, err := inbox.List(ctx, acc.ID, mail.InboxMailboxID)

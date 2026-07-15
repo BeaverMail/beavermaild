@@ -30,7 +30,7 @@ func TestWorkerWaitsBackoffBeforeRetry(t *testing.T) {
 	}
 
 	policy := mail.TestQueuePolicy()
-	w := mail.NewWorker(log.New("error"), queue, nil, dir, nil, policy)
+	w := mail.NewWorker(log.New("error"), queue, nil, dir, nil, nil, policy)
 	w.ProcessOnce(ctx)
 
 	entries, err := queue.ListPending(ctx)

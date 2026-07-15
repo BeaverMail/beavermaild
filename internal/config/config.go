@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BeaverMail/beaver/internal/dkimout"
 	"github.com/BeaverMail/beaver/internal/mtasts"
 	"github.com/BeaverMail/beaver/internal/security"
 )
@@ -91,6 +92,7 @@ type SMTPConfig struct {
 	RelayPassword           string       `json:"relay_password"`
 	OutboundTLSInsecureSkip bool         `json:"outbound_tls_insecure_skip_verify"` // dev/self-signed relay or MX; default verify
 	MTASTS                  MTASTSConfig `json:"mta_sts"`
+	DKIMSign                DKIMSignConfig `json:"dkim_sign"`
 	MaxMessageBytes         int          `json:"max_message_bytes"`
 	VRFYEnabled             bool         `json:"vrfy_enabled"` // off by default (RFC 5321: user enumeration risk)
 }
@@ -98,6 +100,13 @@ type SMTPConfig struct {
 // MTASTSConfig controls outbound MTA-STS policy lookup (RFC 8461).
 type MTASTSConfig struct {
 	Disable bool `json:"disable"` // default off = MTA-STS enabled for direct MX delivery
+}
+
+// DKIMSignConfig enables outbound DKIM signing for remote queue delivery.
+type DKIMSignConfig struct {
+	Selector       string `json:"selector"`
+	Domain         string `json:"domain"`           // optional SDID override
+	PrivateKeyPath string `json:"private_key_path"` // PEM under data_dir or absolute
 }
 
 // IMAPConfig holds IMAP listener settings.
@@ -495,4 +504,21 @@ func (c *Config) NewMTASTSResolver() *mtasts.Resolver {
 		return nil
 	}
 	return mtasts.NewResolver()
+}
+
+// NewDKIMSigner loads the outbound DKIM signer when selector and key path are set.
+func (c *Config) NewDKIMSigner() (*dkimout.Signer, error) {
+	s := c.SMTP.DKIMSign
+	if strings.TrimSpace(s.Selector) == "" || strings.TrimSpace(s.PrivateKeyPath) == "" {
+		return nil, nil
+	}
+	path := s.PrivateKeyPath
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(c.DataDir, path)
+	}
+	return dkimout.New(dkimout.Config{
+		Selector: s.Selector,
+		Domain:   s.Domain,
+		KeyPath:  path,
+	})
 }

@@ -74,7 +74,7 @@ func TestWorkerExpireBouncesReturnPath(t *testing.T) {
 
 	policy := mail.TestQueuePolicy()
 	policy.MaxLifetime = time.Millisecond
-	w := mail.NewWorker(log.New("error"), queue, inbox, dir, nil, policy)
+	w := mail.NewWorker(log.New("error"), queue, inbox, dir, nil, nil, policy)
 	w.ProcessOnce(ctx)
 	time.Sleep(5 * time.Millisecond)
 	w.ProcessOnce(ctx)

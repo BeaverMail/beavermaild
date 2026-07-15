@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/BeaverMail/beaver/internal/config"
+	"github.com/BeaverMail/beaver/internal/dkimout"
 	"github.com/BeaverMail/beaver/internal/security"
 )
 
@@ -186,5 +187,28 @@ func TestNewMTASTSResolverEnvDisable(t *testing.T) {
 	cfg.ApplyEnv()
 	if cfg.NewMTASTSResolver() != nil {
 		t.Fatal("expected nil when env disabled")
+	}
+}
+
+func TestNewDKIMSigner(t *testing.T) {
+	cfg := config.Default(t.TempDir())
+	if _, err := cfg.NewDKIMSigner(); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := cfg.NewDKIMSigner(); s != nil {
+		t.Fatal("expected nil without config")
+	}
+	keyPath := filepath.Join(cfg.DataDir, "dkim.pem")
+	if err := dkimout.GenerateTestKey(keyPath); err != nil {
+		t.Fatal(err)
+	}
+	cfg.SMTP.DKIMSign = config.DKIMSignConfig{
+		Selector:       "beaver",
+		Domain:         "example.com",
+		PrivateKeyPath: "dkim.pem",
+	}
+	s, err := cfg.NewDKIMSigner()
+	if err != nil || s == nil {
+		t.Fatalf("signer %v err %v", s, err)
 	}
 }

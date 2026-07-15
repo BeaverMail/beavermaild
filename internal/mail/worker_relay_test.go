@@ -136,7 +136,7 @@ func TestWorkerDeliversRemoteRelaySTARTTLS(t *testing.T) {
 			Password:              "relaypass",
 		},
 	}}
-	w := mail.NewWorker(log.New("error"), queue, mail.NewInbox(store, blobs), dir, remote, mail.TestQueuePolicy())
+	w := mail.NewWorker(log.New("error"), queue, mail.NewInbox(store, blobs), dir, remote, nil, mail.TestQueuePolicy())
 	w.ProcessOnce(ctx)
 
 	<-done

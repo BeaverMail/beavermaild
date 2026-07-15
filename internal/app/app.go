@@ -168,7 +168,11 @@ func (a *App) Run(ctx context.Context) error {
 
 	go func() { errCh <- a.smtp.Serve(ctx) }()
 	go func() { errCh <- a.imap.Serve(ctx) }()
-	go mail.NewWorker(a.log, a.queue, a.inbox, a.dir, newRemoteDeliverer(a.cfg), policy).Run(ctx)
+	signer, err := a.cfg.NewDKIMSigner()
+	if err != nil {
+		return fmt.Errorf("dkim sign: %w", err)
+	}
+	go mail.NewWorker(a.log, a.queue, a.inbox, a.dir, newRemoteDeliverer(a.cfg), signer, policy).Run(ctx)
 
 	_, _, tlsOn := a.cfg.TLSPair()
 	a.log.Info("beaver ready",
