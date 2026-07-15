@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/BeaverMail/beaver/internal/mtasts"
 )
 
 func TestDeliverMXPermanentStops(t *testing.T) {
@@ -65,8 +67,45 @@ func TestDeliverMXDialFailTriesNext(t *testing.T) {
 	}
 }
 
+func TestFilterMXForMTASTS(t *testing.T) {
+	t.Parallel()
+	policy := &mtasts.Policy{
+		Mode: mtasts.ModeEnforce,
+		MX:   []string{"mx.ok.test"},
+	}
+	hosts, err := filterMXForMTASTS([]string{"mx.ok.test:25", "mx.bad.test:25"}, policy)
+	if err != nil || len(hosts) != 1 || hosts[0] != "mx.ok.test:25" {
+		t.Fatalf("hosts %v err %v", hosts, err)
+	}
+	_, err = filterMXForMTASTS([]string{"mx.bad.test:25"}, policy)
+	if err == nil {
+		t.Fatal("expected no matching mx error")
+	}
+}
+
+func TestDeliverMXMTASTSEnforceRequiresSTARTTLS(t *testing.T) {
+	t.Parallel()
+	mx := startMockMX(t, mxScript{})
+	t.Cleanup(mx.close)
+
+	host, _, _ := net.SplitHostPort(mx.addr)
+	policy := &mtasts.Policy{
+		Mode: mtasts.ModeEnforce,
+		MX:   []string{strings.ToLower(host)},
+	}
+	err := deliverMX(context.Background(), []string{mx.addr}, "a@b.c", "x@example.com", []byte("hi\r\n"), mxOptionsForPolicy(ClientOptions{}, policy))
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var de *DeliveryError
+	if !errors.As(err, &de) || !de.Permanent {
+		t.Fatalf("got %v", err)
+	}
+}
+
 type mxScript struct {
-	onRCPT string
+	onRCPT            string
+	advertiseSTARTTLS bool
 }
 
 type mockMX struct {
@@ -106,7 +145,13 @@ func startMockMX(t *testing.T, script mxScript) *mockMX {
 			line = strings.TrimSpace(line)
 			switch {
 			case strings.HasPrefix(line, "EHLO"):
-				writeSMTP(conn, "250-mx.test\r\n250 OK\r\n")
+				if script.advertiseSTARTTLS {
+					writeSMTP(conn, "250-mx.test\r\n250-STARTTLS\r\n250 OK\r\n")
+				} else {
+					writeSMTP(conn, "250-mx.test\r\n250 OK\r\n")
+				}
+			case strings.HasPrefix(line, "STARTTLS"):
+				writeSMTP(conn, "220 ready\r\n")
 			case strings.HasPrefix(line, "MAIL"):
 				writeSMTP(conn, "250 OK\r\n")
 			case strings.HasPrefix(line, "RCPT"):

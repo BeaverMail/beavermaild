@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BeaverMail/beaver/internal/mtasts"
 	"github.com/BeaverMail/beaver/internal/security"
 )
 
@@ -29,26 +30,26 @@ func DefaultConfigPath() string {
 
 // Config is the on-disk bootstrap configuration (JSON).
 type Config struct {
-	DataDir  string        `json:"data_dir"`
-	LogLevel string        `json:"log_level"`
-	Secrets  Secrets       `json:"secrets"`
-	TLS      TLSConfig     `json:"tls"`
-	SMTP     SMTPConfig    `json:"smtp"`
-	IMAP     IMAPConfig    `json:"imap"`
-	Auth     AuthConfig    `json:"auth"`
-	Queue    QueueConfig   `json:"queue"`
-	Quota    QuotaConfig   `json:"quota"`
-	Plugins  PluginsConfig `json:"plugins"`
+	DataDir  string         `json:"data_dir"`
+	LogLevel string         `json:"log_level"`
+	Secrets  Secrets        `json:"secrets"`
+	TLS      TLSConfig      `json:"tls"`
+	SMTP     SMTPConfig     `json:"smtp"`
+	IMAP     IMAPConfig     `json:"imap"`
+	Auth     AuthConfig     `json:"auth"`
+	Queue    QueueConfig    `json:"queue"`
+	Quota    QuotaConfig    `json:"quota"`
+	Plugins  PluginsConfig  `json:"plugins"`
 	MailAuth MailAuthConfig `json:"mail_auth"`
 }
 
 // MailAuthConfig holds inbound SPF/DKIM/DMARC verification settings.
 type MailAuthConfig struct {
-	Enabled      bool            `json:"enabled"`
-	DNSTimeoutMs int             `json:"dns_timeout_ms"`
-	SPF          MailAuthToggle  `json:"spf"`
-	DKIM         MailAuthToggle  `json:"dkim"`
-	DMARC        MailAuthToggle  `json:"dmarc"`
+	Enabled      bool           `json:"enabled"`
+	DNSTimeoutMs int            `json:"dns_timeout_ms"`
+	SPF          MailAuthToggle `json:"spf"`
+	DKIM         MailAuthToggle `json:"dkim"`
+	DMARC        MailAuthToggle `json:"dmarc"`
 }
 
 // MailAuthToggle enables one mail-auth check family.
@@ -81,16 +82,22 @@ type TLSConfig struct {
 
 // SMTPConfig holds inbound SMTP listener settings.
 type SMTPConfig struct {
-	Listen              string `json:"listen"`
-	SubmissionListen    string `json:"submission_listen"`
-	SubmissionTLSListen string `json:"submission_tls_listen"`
-	Relay               string `json:"relay"`
-	RelayStartTLS       bool   `json:"relay_starttls"`
-	RelayUser                 string `json:"relay_user"`
-	RelayPassword             string `json:"relay_password"`
-	OutboundTLSInsecureSkip   bool   `json:"outbound_tls_insecure_skip_verify"` // dev/self-signed relay or MX; default verify
-	MaxMessageBytes           int    `json:"max_message_bytes"`
-	VRFYEnabled         bool   `json:"vrfy_enabled"` // off by default (RFC 5321: user enumeration risk)
+	Listen                  string       `json:"listen"`
+	SubmissionListen        string       `json:"submission_listen"`
+	SubmissionTLSListen     string       `json:"submission_tls_listen"`
+	Relay                   string       `json:"relay"`
+	RelayStartTLS           bool         `json:"relay_starttls"`
+	RelayUser               string       `json:"relay_user"`
+	RelayPassword           string       `json:"relay_password"`
+	OutboundTLSInsecureSkip bool         `json:"outbound_tls_insecure_skip_verify"` // dev/self-signed relay or MX; default verify
+	MTASTS                  MTASTSConfig `json:"mta_sts"`
+	MaxMessageBytes         int          `json:"max_message_bytes"`
+	VRFYEnabled             bool         `json:"vrfy_enabled"` // off by default (RFC 5321: user enumeration risk)
+}
+
+// MTASTSConfig controls outbound MTA-STS policy lookup (RFC 8461).
+type MTASTSConfig struct {
+	Disable bool `json:"disable"` // default off = MTA-STS enabled for direct MX delivery
 }
 
 // IMAPConfig holds IMAP listener settings.
@@ -201,6 +208,9 @@ func (c *Config) ApplyEnv() {
 	}
 	if v := os.Getenv("BEAVER_AUTH_RATE_LIMIT_DISABLE"); v == "1" || strings.EqualFold(v, "true") {
 		c.Auth.RateLimit.Disable = true
+	}
+	if v := os.Getenv("BEAVER_SMTP_MTA_STS_DISABLE"); v == "1" || strings.EqualFold(v, "true") {
+		c.SMTP.MTASTS.Disable = true
 	}
 	if v := os.Getenv("BEAVER_QUEUE_RUN_DELAY"); v != "" {
 		c.Queue.RunDelay = v
@@ -477,4 +487,12 @@ func (c *Config) NewAuthGate() security.AuthGate {
 		}
 	}
 	return security.NewRateLimitGate(cfg)
+}
+
+// NewMTASTSResolver returns the outbound MTA-STS resolver, or nil when disabled.
+func (c *Config) NewMTASTSResolver() *mtasts.Resolver {
+	if c.SMTP.MTASTS.Disable {
+		return nil
+	}
+	return mtasts.NewResolver()
 }

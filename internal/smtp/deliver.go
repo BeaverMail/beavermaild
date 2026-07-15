@@ -4,6 +4,10 @@ package smtp
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net"
+
+	"github.com/BeaverMail/beaver/internal/mtasts"
 )
 
 // RemoteConfig holds relay address and optional TLS/AUTH for outbound submission.
@@ -11,6 +15,7 @@ type RemoteConfig struct {
 	Relay        string
 	RelayOptions ClientOptions
 	MXOptions    ClientOptions // TLS verify policy for direct MX delivery
+	MTASTS       *mtasts.Resolver
 }
 
 // DeliverRemote submits mail using relay when set, otherwise MX lookup on rcptTo domain.
@@ -22,17 +27,60 @@ func DeliverRemote(ctx context.Context, cfg RemoteConfig, mailFrom, rcptTo strin
 	if err != nil {
 		return err
 	}
+	var policy *mtasts.Policy
+	if cfg.MTASTS != nil {
+		policy, err = cfg.MTASTS.Policy(ctx, domain)
+		if err != nil {
+			return err
+		}
+	}
 	hosts, err := LookupHosts(ctx, domain)
 	if err != nil {
 		return err
 	}
-	return deliverMX(ctx, hosts, mailFrom, rcptTo, data, cfg.MXOptions)
+	hosts, err = filterMXForMTASTS(hosts, policy)
+	if err != nil {
+		return err
+	}
+	return deliverMX(ctx, hosts, mailFrom, rcptTo, data, mxOptionsForPolicy(cfg.MXOptions, policy))
+}
+
+func filterMXForMTASTS(hosts []string, policy *mtasts.Policy) ([]string, error) {
+	if policy == nil || !policy.Enforce() {
+		return hosts, nil
+	}
+	out := make([]string, 0, len(hosts))
+	for _, addr := range hosts {
+		host, _, err := net.SplitHostPort(addr)
+		if err != nil {
+			host = addr
+		}
+		if policy.AllowsMX(host) {
+			out = append(out, addr)
+		}
+	}
+	if len(out) == 0 {
+		return nil, &DeliveryError{Err: errors.New("mta-sts: no MX host matches policy"), Permanent: true}
+	}
+	return out, nil
+}
+
+func mxOptionsForPolicy(base ClientOptions, policy *mtasts.Policy) ClientOptions {
+	opts := ClientOptions{
+		OpportunisticSTARTTLS: true,
+		TLSInsecureSkipVerify: base.TLSInsecureSkipVerify,
+	}
+	if policy != nil && policy.Enforce() {
+		opts.MTASTSRequireTLS = true
+		opts.TLSInsecureSkipVerify = false
+	}
+	return opts
 }
 
 func deliverMX(ctx context.Context, hosts []string, mailFrom, rcptTo string, data []byte, opts ClientOptions) error {
-	mxOpts := ClientOptions{
-		OpportunisticSTARTTLS: true,
-		TLSInsecureSkipVerify: opts.TLSInsecureSkipVerify,
+	mxOpts := opts
+	if !mxOpts.OpportunisticSTARTTLS && !mxOpts.MTASTSRequireTLS {
+		mxOpts.OpportunisticSTARTTLS = true
 	}
 	var last error
 	for _, host := range hosts {
@@ -52,5 +100,5 @@ func deliverMX(ctx context.Context, hosts []string, mailFrom, rcptTo string, dat
 	if last != nil {
 		return last
 	}
-	return errors.New("smtp: no MX hosts")
+	return fmt.Errorf("smtp: no MX hosts")
 }

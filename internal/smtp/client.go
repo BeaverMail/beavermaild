@@ -20,6 +20,7 @@ type ClientOptions struct {
 	STARTTLS              bool // relay: upgrade when configured
 	OpportunisticSTARTTLS bool // MX: upgrade when EHLO offers STARTTLS
 	TLSInsecureSkipVerify bool // skip server cert verification (dev/self-signed relay only)
+	MTASTSRequireTLS      bool // MX: RFC 8461 enforce requires STARTTLS with PKIX verify
 	User                  string
 	Password              string
 }
@@ -54,6 +55,9 @@ func Send(ctx context.Context, addr, mailFrom, rcptTo string, data []byte, opts 
 	if wantSTARTTLS(opts) && caps.StartTLS {
 		conn, err = startTLS(conn, r, host, opts.TLSInsecureSkipVerify)
 		if err != nil {
+			if opts.MTASTSRequireTLS {
+				return &DeliveryError{Err: fmt.Errorf("smtp client starttls: %w", err), Permanent: true}
+			}
 			return err
 		}
 		r = bufio.NewReader(conn)
@@ -61,6 +65,8 @@ func Send(ctx context.Context, addr, mailFrom, rcptTo string, data []byte, opts 
 		if err != nil {
 			return err
 		}
+	} else if opts.MTASTSRequireTLS {
+		return &DeliveryError{Err: fmt.Errorf("mta-sts: STARTTLS required but not advertised"), Permanent: true}
 	}
 	if opts.User != "" && opts.Password != "" {
 		if err := authPlain(conn, r, caps, opts.User, opts.Password); err != nil {
@@ -78,7 +84,7 @@ func Send(ctx context.Context, addr, mailFrom, rcptTo string, data []byte, opts 
 }
 
 func wantSTARTTLS(opts ClientOptions) bool {
-	return opts.STARTTLS || opts.OpportunisticSTARTTLS
+	return opts.STARTTLS || opts.OpportunisticSTARTTLS || opts.MTASTSRequireTLS
 }
 
 func mailFromLine(mailFrom string, data []byte, caps clientCaps) string {

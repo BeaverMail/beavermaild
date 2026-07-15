@@ -168,3 +168,23 @@ func TestNewAuthGateEnvDisable(t *testing.T) {
 		t.Fatalf("env disabled gate type %T", cfg.NewAuthGate())
 	}
 }
+
+func TestNewMTASTSResolver(t *testing.T) {
+	cfg := config.Default(t.TempDir())
+	if cfg.NewMTASTSResolver() == nil {
+		t.Fatal("expected resolver by default")
+	}
+	cfg.SMTP.MTASTS.Disable = true
+	if cfg.NewMTASTSResolver() != nil {
+		t.Fatal("expected nil when disabled")
+	}
+}
+
+func TestNewMTASTSResolverEnvDisable(t *testing.T) {
+	cfg := config.Default(t.TempDir())
+	t.Setenv("BEAVER_SMTP_MTA_STS_DISABLE", "true")
+	cfg.ApplyEnv()
+	if cfg.NewMTASTSResolver() != nil {
+		t.Fatal("expected nil when env disabled")
+	}
+}

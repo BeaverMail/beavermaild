@@ -23,6 +23,7 @@ func newRemoteDeliverer(c *config.Config) remoteDeliverer {
 			Password:              c.SMTPRelayPassword(),
 		},
 		MXOptions: smtp.ClientOptions{TLSInsecureSkipVerify: tlsSkip},
+		MTASTS:    c.NewMTASTSResolver(),
 	}}
 }
 
