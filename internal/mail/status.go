@@ -44,16 +44,22 @@ func statusNeedFlagCounts(fields []string) bool {
 }
 
 func (ib *Inbox) statusFromIndex(ctx context.Context, accountID, mailboxID uint32, mbox storage.Mailbox) (MailboxStatus, error) {
-	emailIDs, err := ib.ListMailboxIndexEmailIDs(ctx, accountID, mailboxID)
-	if err != nil {
-		return MailboxStatus{}, err
+	var messages uint32
+	if mbox.MessageCount > 0 {
+		messages = mbox.MessageCount
+	} else {
+		emailIDs, err := ib.ListMailboxIndexEmailIDs(ctx, accountID, mailboxID)
+		if err != nil {
+			return MailboxStatus{}, err
+		}
+		messages = uint32(len(emailIDs))
 	}
 	uidNext := mbox.UIDNext
 	if uidNext == 0 {
 		uidNext = 1
 	}
 	return MailboxStatus{
-		Messages:    uint32(len(emailIDs)),
+		Messages:    messages,
 		UIDNext:     uidNext,
 		UIDValidity: mbox.UIDValidity,
 	}, nil

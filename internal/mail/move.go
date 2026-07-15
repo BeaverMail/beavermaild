@@ -28,12 +28,14 @@ func (ib *Inbox) MoveMessages(ctx context.Context, accountID uint32, emailIDs []
 	}
 	batch := storage.NewBatch().WithAccount(accountID)
 	destUIDs := make([]uint32, 0, len(emailIDs))
+	srcDeltas := make(map[uint32]uint32)
 	for _, id := range emailIDs {
 		meta, err := ib.GetMeta(ctx, accountID, id)
 		if err != nil {
 			return nil, err
 		}
 		srcMailbox := meta.MailboxID
+		srcDeltas[srcMailbox]++
 		imapUID, err := ib.allocateIMAPUID(ctx, accountID, destMailboxID)
 		if err != nil {
 			return nil, err
@@ -66,6 +68,14 @@ func (ib *Inbox) MoveMessages(ctx context.Context, accountID uint32, emailIDs []
 		destUIDs = append(destUIDs, imapUID)
 	}
 	if err := ib.store.Commit(ctx, batch); err != nil {
+		return nil, err
+	}
+	for src, n := range srcDeltas {
+		if err := ib.bumpMailboxMessageCount(ctx, accountID, src, -int32(n)); err != nil {
+			return nil, err
+		}
+	}
+	if err := ib.bumpMailboxMessageCount(ctx, accountID, destMailboxID, int32(len(emailIDs))); err != nil {
 		return nil, err
 	}
 	return destUIDs, nil
@@ -137,6 +147,9 @@ func (ib *Inbox) CopyMessages(ctx context.Context, accountID uint32, emailIDs []
 	if err := ib.addQuotaUsage(ctx, accountID, addBytes, addMsgs); err != nil {
 		return nil, nil, err
 	}
+	if err := ib.bumpMailboxMessageCount(ctx, accountID, destMailboxID, int32(len(emailIDs))); err != nil {
+		return nil, nil, err
+	}
 	return newIDs, newIMAPUIDs, nil
 }
 
@@ -189,11 +202,11 @@ func (ib *Inbox) DeleteMailbox(ctx context.Context, accountID, mailboxID uint32)
 	if mailboxID <= DraftsMailboxID {
 		return ErrSystemMailbox
 	}
-	msgs, err := ib.List(ctx, accountID, mailboxID)
+	n, err := ib.mailboxMessageCount(ctx, accountID, mailboxID)
 	if err != nil {
 		return err
 	}
-	if len(msgs) > 0 {
+	if n > 0 {
 		return ErrMailboxNotEmpty
 	}
 	batch := storage.NewBatch().WithAccount(accountID)

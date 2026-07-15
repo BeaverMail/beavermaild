@@ -86,6 +86,9 @@ func (ib *Inbox) Deliver(ctx context.Context, accountID uint32, raw []byte) (uin
 	if err := ib.store.Commit(ctx, batch); err != nil {
 		return 0, err
 	}
+	if err := ib.bumpMailboxMessageCount(ctx, accountID, InboxMailboxID, 1); err != nil {
+		return 0, err
+	}
 	if err := ib.addQuotaUsage(ctx, accountID, uint64(len(raw)), 1); err != nil {
 		return 0, err
 	}

@@ -31,6 +31,7 @@ type Mailbox struct {
 	UIDValidity   uint32 `msgpack:"uv"`
 	HighestModSeq uint64 `msgpack:"hm,omitempty"`
 	UIDSeqInit    bool   `msgpack:"ui,omitempty"` // true once per-mailbox IMAP UID backfill completed
+	MessageCount  uint32 `msgpack:"mc,omitempty"` // denormalized messages in folder; 0 until first sync/bump
 	Subscribed    bool   `msgpack:"sub,omitempty"`
 	SubSet        bool   `msgpack:"ss,omitempty"` // true once SUBSCRIBE/UNSUBSCRIBE touched this folder
 }

@@ -54,7 +54,10 @@ func (ib *Inbox) backfillMailboxIndex(ctx context.Context, accountID, mailboxID 
 	if err := ib.queueMailboxIndexReady(batch, mailboxID); err != nil {
 		return err
 	}
-	return ib.store.Commit(ctx, batch)
+	if err := ib.store.Commit(ctx, batch); err != nil {
+		return err
+	}
+	return ib.setMailboxMessageCount(ctx, accountID, mailboxID, uint32(len(msgs)))
 }
 
 func (ib *Inbox) listFromMailboxIndex(ctx context.Context, accountID, mailboxID uint32) ([]Message, error) {

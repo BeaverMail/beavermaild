@@ -3,6 +3,7 @@ package mail_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/BeaverMail/beaver/internal/directory"
 	"github.com/BeaverMail/beaver/internal/mail"
@@ -87,6 +88,69 @@ func TestCreateDeleteMailbox(t *testing.T) {
 	}
 	if err := inbox.DeleteMailbox(ctx, acc.ID, mail.InboxMailboxID); err != mail.ErrSystemMailbox {
 		t.Fatalf("delete inbox err %v", err)
+	}
+}
+
+func TestDeleteMailboxNonEmpty(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, "file:"+t.TempDir()+"/store.sqlite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	dir := directory.NewLocal(store)
+	acc, err := directory.SeedDev(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	blobs := blob.NewFS(t.TempDir() + "/blobs")
+	inbox := mail.NewInbox(store, blobs)
+	mb, err := inbox.CreateMailbox(ctx, acc.ID, "Archive")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := inbox.Append(ctx, acc.ID, mb.ID, []byte("From: a@b\r\n\r\nx\r\n"), 0, time.Now().Unix()); err != nil {
+		t.Fatal(err)
+	}
+	if err := inbox.DeleteMailbox(ctx, acc.ID, mb.ID); err != mail.ErrMailboxNotEmpty {
+		t.Fatalf("delete non-empty err %v want %v", err, mail.ErrMailboxNotEmpty)
+	}
+}
+
+func TestMailboxMessageCountAfterDeliver(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, "file:"+t.TempDir()+"/store.sqlite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	dir := directory.NewLocal(store)
+	acc, err := directory.SeedDev(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	inbox := mail.NewInbox(store, blob.NewFS(t.TempDir()+"/blobs"))
+	if _, err := inbox.Deliver(ctx, acc.ID, []byte("From: a@b\r\n\r\none\r\n")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := inbox.Deliver(ctx, acc.ID, []byte("From: a@b\r\n\r\ntwo\r\n")); err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := inbox.Status(ctx, acc.ID, mail.InboxMailboxID, []string{"MESSAGES"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Messages != 2 {
+		t.Fatalf("messages %d want 2", st.Messages)
 	}
 }
 

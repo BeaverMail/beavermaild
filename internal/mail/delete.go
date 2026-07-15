@@ -31,6 +31,9 @@ func (ib *Inbox) DeleteMessage(ctx context.Context, accountID, emailID uint32) e
 	if err := ib.store.Commit(ctx, batch); err != nil {
 		return err
 	}
+	if err := ib.bumpMailboxMessageCount(ctx, accountID, mailboxID, -1); err != nil {
+		return err
+	}
 	if err := ib.subQuotaUsage(ctx, accountID, uint64(meta.Size), 1); err != nil {
 		return err
 	}

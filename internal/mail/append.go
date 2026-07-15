@@ -80,6 +80,9 @@ func (ib *Inbox) Append(ctx context.Context, accountID, mailboxID uint32, raw []
 	if err := ib.store.Commit(ctx, batch); err != nil {
 		return 0, err
 	}
+	if err := ib.bumpMailboxMessageCount(ctx, accountID, mailboxID, 1); err != nil {
+		return 0, err
+	}
 	if err := ib.addQuotaUsage(ctx, accountID, uint64(len(raw)), 1); err != nil {
 		return 0, err
 	}
