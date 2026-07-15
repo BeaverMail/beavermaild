@@ -32,14 +32,34 @@ func analyzeSubject(ctx *classifyCtx, res *classifyResult) {
 	if subject == gtubeSubject {
 		res.addTag("GTUBE_TEST")
 	}
-	if subjectAllCaps(subject) {
+	normalized := normalizeThreadSubject(subject)
+	if subjectAllCaps(normalized) {
 		res.addTag("SUBJ_ALL_CAPS")
 	}
-	if subjectHasCurrency(subject) {
+	if subjectHasCurrency(normalized) {
 		res.addTag("SUBJECT_HAS_CURRENCY")
 	}
-	if strings.Contains(strings.ToLower(subject), "http://") || strings.Contains(strings.ToLower(subject), "https://") {
+	if strings.Contains(strings.ToLower(normalized), "http://") || strings.Contains(strings.ToLower(normalized), "https://") {
 		res.addTag("URL_IN_SUBJECT")
+	}
+}
+
+// normalizeThreadSubject removes repeated standard reply/forward prefixes.
+func normalizeThreadSubject(subject string) string {
+	subject = strings.TrimSpace(subject)
+	for {
+		lower := strings.ToLower(subject)
+		matched := false
+		for _, prefix := range []string{"re:", "fw:", "fwd:"} {
+			if strings.HasPrefix(lower, prefix) {
+				subject = strings.TrimSpace(subject[len(prefix):])
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return subject
+		}
 	}
 }
 

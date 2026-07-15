@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BeaverMail/beaver/internal/mailauth/arc"
 	"github.com/emersion/go-msgauth/dkim"
 	"github.com/emersion/go-msgauth/dmarc"
 	spflib "github.com/wttw/spf"
@@ -20,6 +21,9 @@ type Config struct {
 	SPFEnabled   bool
 	DKIMEnabled  bool
 	DMARCEnabled bool
+	ARCEnabled   bool
+	SPFResolver  spflib.Resolver
+	LookupTXT    func(context.Context, string) ([]string, error)
 }
 
 // SessionState holds per-transaction auth results for filter wire encoding.
@@ -29,6 +33,7 @@ type SessionState struct {
 	DKIM        string
 	DMARC       string
 	DMARCPolicy string
+	ARC         string
 }
 
 // Wire maps session auth fields to filter request auth values.
@@ -36,8 +41,8 @@ func (s SessionState) Wire() SessionState { return s }
 
 // Verifier runs SPF, DKIM, and DMARC checks for one SMTP session.
 type Verifier struct {
-	cfg     Config
-	spf     *spflib.Checker
+	cfg Config
+	spf *spflib.Checker
 }
 
 // New builds a Verifier from host config. Returns nil when disabled.
@@ -48,7 +53,11 @@ func New(cfg Config) *Verifier {
 	if cfg.DNSTimeout <= 0 {
 		cfg.DNSTimeout = 5 * time.Second
 	}
-	return &Verifier{cfg: cfg, spf: spflib.NewChecker()}
+	spf := spflib.NewChecker()
+	if cfg.SPFResolver != nil {
+		spf.Resolver = cfg.SPFResolver
+	}
+	return &Verifier{cfg: cfg, spf: spf}
 }
 
 // Enabled reports whether mail-auth checks are active.
@@ -63,7 +72,13 @@ func (v *Verifier) CheckSPF(ctx context.Context, ip net.IP, mailFrom, helo strin
 	}
 	ctx, cancel := context.WithTimeout(ctx, v.cfg.DNSTimeout)
 	defer cancel()
-	res := v.spf.SPF(ctx, ip, mailFrom, helo)
+	var res spflib.Result
+	if mailFrom == "" {
+		res = v.spf.SPF(ctx, ip, "", helo)
+	} else {
+		domain := strings.TrimSuffix(domainFromAddress(mailFrom), ".") + "."
+		res = v.spf.CheckHost(ctx, ip, domain, mailFrom, helo)
+	}
 	return spfResultString(res)
 }
 
@@ -76,23 +91,50 @@ func (v *Verifier) FinishEom(ctx context.Context, bodyPath, mailFrom, helo strin
 	defer cancel()
 
 	if v.cfg.DKIMEnabled {
-		state.DKIM = v.verifyDKIM(bodyPath)
+		state.DKIM = v.verifyDKIM(ctx, bodyPath)
 	}
 	if v.cfg.DMARCEnabled {
 		dmarcRes, policy := v.evaluateDMARC(ctx, bodyPath, mailFrom, state)
 		state.DMARC = dmarcRes
 		state.DMARCPolicy = policy
 	}
+	if v.cfg.ARCEnabled {
+		state.ARC = v.verifyARC(ctx, bodyPath)
+	}
 	return state
 }
 
-func (v *Verifier) verifyDKIM(bodyPath string) string {
+// verifyARC validates the inbound Authenticated Received Chain (RFC 8617).
+func (v *Verifier) verifyARC(ctx context.Context, bodyPath string) string {
 	f, err := os.Open(bodyPath)
 	if err != nil {
 		return "temperror"
 	}
 	defer f.Close()
-	verifs, err := dkim.Verify(f)
+	return string(arc.Verify(ctx, f, v.arcLookupTXT()))
+}
+
+// arcLookupTXT binds the verifier DNS seam to the ARC lookup signature.
+func (v *Verifier) arcLookupTXT() arc.LookupTXT {
+	return func(reqCtx context.Context, name string) ([]string, error) {
+		if v.cfg.LookupTXT != nil {
+			return v.cfg.LookupTXT(reqCtx, name)
+		}
+		return net.DefaultResolver.LookupTXT(reqCtx, name)
+	}
+}
+
+// verifyDKIM verifies bounded signatures using the verifier DNS seam.
+func (v *Verifier) verifyDKIM(ctx context.Context, bodyPath string) string {
+	f, err := os.Open(bodyPath)
+	if err != nil {
+		return "temperror"
+	}
+	defer f.Close()
+	verifs, err := dkim.VerifyWithOptions(f, &dkim.VerifyOptions{
+		LookupTXT:        v.lookupTXT(ctx),
+		MaxVerifications: 8,
+	})
 	if err != nil {
 		if dkim.IsPermFail(err) {
 			return "permerror"
@@ -128,7 +170,7 @@ func (v *Verifier) evaluateDMARC(ctx context.Context, bodyPath, mailFrom string,
 		return "none", ""
 	}
 	rec, err := dmarc.LookupWithOptions(fromDomain, &dmarc.LookupOptions{
-		LookupTXT: lookupTXTWithContext(ctx),
+		LookupTXT: v.lookupTXT(ctx),
 	})
 	if err != nil {
 		if dmarc.IsTempFail(err) {
@@ -269,10 +311,14 @@ func spfResultString(res spflib.Result) string {
 	}
 }
 
-func lookupTXTWithContext(ctx context.Context) func(string) ([]string, error) {
+// lookupTXT binds DNS lookup implementations to the request context.
+func (v *Verifier) lookupTXT(ctx context.Context) func(string) ([]string, error) {
 	return func(name string) ([]string, error) {
 		if err := ctx.Err(); err != nil {
 			return nil, err
+		}
+		if v.cfg.LookupTXT != nil {
+			return v.cfg.LookupTXT(ctx, name)
 		}
 		return net.DefaultResolver.LookupTXT(ctx, name)
 	}

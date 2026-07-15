@@ -17,25 +17,26 @@ type wireAuth struct {
 	DKIM        string `json:"dkim,omitempty"`
 	DMARC       string `json:"dmarc,omitempty"`
 	DMARCPolicy string `json:"dmarc_policy,omitempty"`
+	ARC         string `json:"arc,omitempty"`
 }
 
 // FilterRequest is the host-to-plugin filter JSON line (protocol v2.2).
 type FilterRequest struct {
-	ID            string   `json:"id"`
-	Phase         string   `json:"phase"`
-	From          string   `json:"from,omitempty"`
-	To            []string `json:"to,omitempty"`
-	ClientIP      string   `json:"client_ip,omitempty"`
-	BodyPath      string   `json:"body_path,omitempty"`
-	TimeoutMs     int      `json:"timeout_ms,omitempty"`
-	Listener      string   `json:"listener,omitempty"`
-	TLS           bool     `json:"tls,omitempty"`
-	Authenticated bool     `json:"authenticated,omitempty"`
-	EHLODomain    string   `json:"ehlo_domain,omitempty"`
-	IPRevPTR      string   `json:"iprev_ptr,omitempty"`
-	IPRevResult   string   `json:"iprev_result,omitempty"`
-	ASN           uint32   `json:"asn,omitempty"`
-	Country       string   `json:"country,omitempty"`
+	ID            string    `json:"id"`
+	Phase         string    `json:"phase"`
+	From          string    `json:"from,omitempty"`
+	To            []string  `json:"to,omitempty"`
+	ClientIP      string    `json:"client_ip,omitempty"`
+	BodyPath      string    `json:"body_path,omitempty"`
+	TimeoutMs     int       `json:"timeout_ms,omitempty"`
+	Listener      string    `json:"listener,omitempty"`
+	TLS           bool      `json:"tls,omitempty"`
+	Authenticated bool      `json:"authenticated,omitempty"`
+	EHLODomain    string    `json:"ehlo_domain,omitempty"`
+	IPRevPTR      string    `json:"iprev_ptr,omitempty"`
+	IPRevResult   string    `json:"iprev_result,omitempty"`
+	ASN           uint32    `json:"asn,omitempty"`
+	Country       string    `json:"country,omitempty"`
 	Auth          *wireAuth `json:"auth,omitempty"`
 }
 
@@ -74,6 +75,7 @@ func encodeFilterRequest(req smtp.FilterRequest) FilterRequest {
 			DKIM:        req.Auth.DKIM,
 			DMARC:       req.Auth.DMARC,
 			DMARCPolicy: req.Auth.DMARCPolicy,
+			ARC:         req.Auth.ARC,
 		}
 	}
 	return out

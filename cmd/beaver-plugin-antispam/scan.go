@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"strings"
 
@@ -15,6 +16,7 @@ import (
 type scanParams struct {
 	AccountEmail string
 	ClientIP     string
+	EHLODomain   string
 	MailAuth     bool
 	RBL          bool
 	scanReportOpts
@@ -58,8 +60,12 @@ func parseScanParams(req plugin.CliRequest) (scanParams, error) {
 		}
 	}
 	out.ClientIP = "127.0.0.1"
+	out.EHLODomain = "scan.local"
 	if v := strings.TrimSpace(raw["client_ip"]); v != "" {
 		out.ClientIP = v
+	}
+	if v := strings.TrimSpace(raw["ehlo_domain"]); v != "" {
+		out.EHLODomain = v
 	}
 	out.MailAuth = truthy(raw["mail_auth"])
 	out.RBL = truthy(raw["rbl"])
@@ -95,9 +101,10 @@ func runScan(dataDir string, req plugin.CliRequest) error {
 	if params.MailAuth {
 		verifier = mailauth.New(mailauth.Config{
 			Enabled:      true,
-			SPFEnabled:   false,
+			SPFEnabled:   true,
 			DKIMEnabled:  true,
 			DMARCEnabled: true,
+			ARCEnabled:   true,
 		})
 	}
 
@@ -154,6 +161,7 @@ func (e *engine) scanFile(msg scanMessage, opts scanParams, verifier *mailauth.V
 	}
 	id := fmt.Sprintf("%s-%d", msg.Mailbox, msg.UID)
 	from, to := parseEnvelope(msg.BodyPath)
+	var state mailauth.SessionState
 
 	if opts.ClientIP != "" {
 		scanCfg := cfg
@@ -164,8 +172,29 @@ func (e *engine) scanFile(msg scanMessage, opts scanParams, verifier *mailauth.V
 			return r
 		}
 	}
+	if opts.EHLODomain != "" {
+		if verifier != nil {
+			if ip := net.ParseIP(opts.ClientIP); ip != nil {
+				state.SPFEhlo = verifier.CheckSPF(context.Background(), ip, "", opts.EHLODomain)
+			}
+		}
+		if r := e.handleHelo(filterReq{
+			ID: id, Phase: "helo", ClientIP: opts.ClientIP, EHLODomain: opts.EHLODomain,
+			Auth: scanWireAuth(state),
+		}, cfg); r.Action != "accept" {
+			return r
+		}
+	}
 	if from != "" {
-		if r := e.handleMail(filterReq{ID: id, Phase: "mail", From: from}, cfg); r.Action != "accept" {
+		if verifier != nil {
+			if ip := net.ParseIP(opts.ClientIP); ip != nil {
+				state.SPFMailFrom = verifier.CheckSPF(context.Background(), ip, from, opts.EHLODomain)
+			}
+		}
+		if r := e.handleMail(filterReq{
+			ID: id, Phase: "mail", From: from, ClientIP: opts.ClientIP,
+			EHLODomain: opts.EHLODomain, Auth: scanWireAuth(state),
+		}, cfg); r.Action != "accept" {
 			return r
 		}
 	}
@@ -176,21 +205,34 @@ func (e *engine) scanFile(msg scanMessage, opts scanParams, verifier *mailauth.V
 	}
 
 	req := filterReq{
-		ID:       id,
-		Phase:    "eom",
-		From:     from,
-		To:       []string{to},
-		BodyPath: msg.BodyPath,
+		ID:         id,
+		Phase:      "eom",
+		From:       from,
+		To:         []string{to},
+		BodyPath:   msg.BodyPath,
+		ClientIP:   opts.ClientIP,
+		EHLODomain: opts.EHLODomain,
 	}
 	if verifier != nil && verifier.Enabled() {
-		state := verifier.FinishEom(context.Background(), msg.BodyPath, from, "", mailauth.SessionState{})
-		req.Auth = &wireAuth{
-			DKIM:        state.DKIM,
-			DMARC:       state.DMARC,
-			DMARCPolicy: state.DMARCPolicy,
-		}
+		state = verifier.FinishEom(context.Background(), msg.BodyPath, from, opts.EHLODomain, state)
+		req.Auth = scanWireAuth(state)
 	}
 	return e.handleEom(req, cfg)
+}
+
+// scanWireAuth maps scan verifier state to the daemon wire.
+func scanWireAuth(state mailauth.SessionState) *wireAuth {
+	if state == (mailauth.SessionState{}) {
+		return nil
+	}
+	return &wireAuth{
+		SPFEhlo:     state.SPFEhlo,
+		SPFMailFrom: state.SPFMailFrom,
+		DKIM:        state.DKIM,
+		DMARC:       state.DMARC,
+		DMARCPolicy: state.DMARCPolicy,
+		ARC:         state.ARC,
+	}
 }
 
 func parseEnvelope(path string) (from, to string) {

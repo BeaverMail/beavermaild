@@ -26,6 +26,7 @@ func main() {
 			},
 			CliFlags: []plugin.CliFlag{
 				{Key: "client_ip", Flag: "client-ip", Description: "simulated SMTP client IP (scan)"},
+				{Key: "ehlo_domain", Flag: "ehlo", Description: "simulated SMTP EHLO domain (scan)"},
 				{Key: "mail_auth", Flag: "mail-auth", Bool: true, Description: "run DKIM/DMARC verify on each message (scan)"},
 				{Key: "rbl", Flag: "rbl", Bool: true, Description: "run RBL at connect phase (scan)"},
 				{Key: "json", Flag: "json", Bool: true, Description: "JSON lines on stderr instead of TSV (scan, no -o)"},

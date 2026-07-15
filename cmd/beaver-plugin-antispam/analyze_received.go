@@ -21,6 +21,7 @@ func analyzeReceived(ctx *classifyCtx, res *classifyResult) {
 		if strings.Contains(lower, " helo=user") || strings.Contains(lower, " ehlo=user") {
 			res.addTag("RCVD_HELO_USER")
 		}
+		checkForgedRcvdTrail(line, res)
 		if receivedFromBareIP(lower) {
 			rcvdFromIP++
 		}
@@ -48,6 +49,48 @@ func analyzeReceived(ctx *classifyCtx, res *classifyResult) {
 		}
 	}
 	addReceivedCountTag(res, rcvdCount)
+}
+
+// checkForgedRcvdTrail tags when a Received HELO/from hostname disagrees with its PTR name.
+func checkForgedRcvdTrail(line string, res *classifyResult) {
+	lower := strings.ToLower(line)
+	if strings.Contains(lower, " helo=user") || strings.Contains(lower, " ehlo=user") {
+		return
+	}
+	idx := strings.Index(lower, "from ")
+	if idx < 0 {
+		return
+	}
+	rest := strings.TrimSpace(line[idx+5:])
+	fields := strings.Fields(rest)
+	if len(fields) == 0 {
+		return
+	}
+	heloDomain := strings.Trim(fields[0], "([")
+	if strings.EqualFold(heloDomain, "user") {
+		return
+	}
+	pStart := strings.Index(rest, "(")
+	if pStart < 0 {
+		return
+	}
+	pEnd := strings.Index(rest[pStart:], ")")
+	if pEnd < 0 {
+		return
+	}
+	inner := strings.TrimSpace(rest[pStart+1 : pStart+pEnd])
+	if bracket := strings.Index(inner, "["); bracket >= 0 {
+		inner = strings.TrimSpace(inner[:bracket])
+	}
+	if inner == "" || net.ParseIP(inner) != nil {
+		return
+	}
+	if strings.HasPrefix(strings.ToLower(inner), "helo ") {
+		inner = strings.TrimSpace(inner[5:])
+	}
+	if inner != "" && !strings.EqualFold(heloDomain, inner) {
+		res.addTag("FORGED_RCVD_TRAIL")
+	}
 }
 
 func addReceivedCountTag(res *classifyResult, n int) {

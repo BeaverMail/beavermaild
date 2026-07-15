@@ -98,7 +98,7 @@ Common fields:
 | `tls` | connect+ | bool | TLS active (including after STARTTLS) |
 | `authenticated` | mail+ | bool | SMTP AUTH completed |
 | `ehlo_domain` | helo+ | string | Client EHLO/HELO name |
-| `auth` | mail+ / eom | object | Host mail-auth results (`spf_ehlo`, `spf_mail_from`, `dkim`, `dmarc`, `dmarc_policy`) |
+| `auth` | mail+ / eom | object | Host mail-auth results (`spf_ehlo`, `spf_mail_from`, `dkim`, `dmarc`, `dmarc_policy`, `arc`) |
 
 Response v2.2 optional fields: `score` (float), `tags` (string array), `headers` (map appended on accept).
 

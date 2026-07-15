@@ -22,7 +22,26 @@ func authTags(a *wireAuth) []string {
 	if a.DMARC != "" {
 		tags = append(tags, dmarcTag(a.DMARC, a.DMARCPolicy)...)
 	}
+	if a.ARC != "" {
+		tags = append(tags, arcTag(a.ARC)...)
+	}
 	return tags
+}
+
+// arcTag maps an RFC 8617 chain validation result to a spam tag.
+func arcTag(result string) []string {
+	switch result {
+	case "pass":
+		return []string{"ARC_ALLOW"}
+	case "fail":
+		return []string{"ARC_REJECT"}
+	case "invalid":
+		return []string{"ARC_INVALID"}
+	case "temperror":
+		return []string{"ARC_DNSFAIL"}
+	default:
+		return []string{"ARC_NA"}
+	}
 }
 
 func spfTag(result string) []string {

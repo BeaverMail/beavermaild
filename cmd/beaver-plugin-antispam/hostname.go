@@ -7,11 +7,11 @@ import (
 )
 
 type parsedHostname struct {
-	fqdn    string
-	sld     string
-	ip      net.IP
-	isIP    bool
-	hasSLD  bool
+	fqdn   string
+	sld    string
+	ip     net.IP
+	isIP   bool
+	hasSLD bool
 }
 
 // parseHostname parses EHLO/HELO identity from wire ehlo_domain.

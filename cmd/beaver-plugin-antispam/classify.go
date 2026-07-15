@@ -2,21 +2,21 @@
 package main
 
 type filterReq struct {
-	ID            string     `json:"id"`
-	Phase         string     `json:"phase"`
-	From          string     `json:"from"`
-	To            []string   `json:"to"`
-	ClientIP      string     `json:"client_ip"`
-	BodyPath      string     `json:"body_path"`
-	Listener      string     `json:"listener"`
-	TLS           bool       `json:"tls"`
-	Authenticated bool       `json:"authenticated"`
-	EHLODomain    string     `json:"ehlo_domain"`
-	IPRevPTR      string     `json:"iprev_ptr"`
-	IPRevResult   string     `json:"iprev_result"`
-	ASN           uint32     `json:"asn"`
-	Country       string     `json:"country"`
-	Auth          *wireAuth  `json:"auth"`
+	ID            string    `json:"id"`
+	Phase         string    `json:"phase"`
+	From          string    `json:"from"`
+	To            []string  `json:"to"`
+	ClientIP      string    `json:"client_ip"`
+	BodyPath      string    `json:"body_path"`
+	Listener      string    `json:"listener"`
+	TLS           bool      `json:"tls"`
+	Authenticated bool      `json:"authenticated"`
+	EHLODomain    string    `json:"ehlo_domain"`
+	IPRevPTR      string    `json:"iprev_ptr"`
+	IPRevResult   string    `json:"iprev_result"`
+	ASN           uint32    `json:"asn"`
+	Country       string    `json:"country"`
+	Auth          *wireAuth `json:"auth"`
 }
 
 type wireAuth struct {
@@ -25,6 +25,7 @@ type wireAuth struct {
 	DKIM        string `json:"dkim"`
 	DMARC       string `json:"dmarc"`
 	DMARCPolicy string `json:"dmarc_policy"`
+	ARC         string `json:"arc"`
 }
 
 type filterResp struct {
@@ -47,6 +48,7 @@ type classifyCtx struct {
 	content        *contentRules
 	lists          *lookupLists
 	rules          []exprRule
+	rblBudget      *rblBudget
 }
 
 // classifyResult accumulates tags during analyze pass.
@@ -107,6 +109,7 @@ func newClassifyCtx(req filterReq, cfg pluginConfig, early []string, content *co
 		content:        content,
 		lists:          lists,
 		rules:          rules,
+		rblBudget:      newRBLBudget(cfg.RBL.MaxChecksPerMessage),
 	}
 	if req.BodyPath != "" {
 		msg, err := loadParsedMessage(req.BodyPath, max)

@@ -58,3 +58,99 @@ func TestParseEmailSLD(t *testing.T) {
 		t.Fatalf("sld=%q", pe.sld)
 	}
 }
+
+func TestARCTagMapping(t *testing.T) {
+	cases := map[string]string{
+		"pass": "ARC_ALLOW", "fail": "ARC_REJECT", "invalid": "ARC_INVALID",
+		"temperror": "ARC_DNSFAIL", "none": "ARC_NA",
+	}
+	for res, want := range cases {
+		tags := authTags(&wireAuth{ARC: res})
+		if !containsTag(tags, want) {
+			t.Fatalf("arc=%q tags=%v want %q", res, tags, want)
+		}
+	}
+}
+
+func TestForgedSenderTag(t *testing.T) {
+	var res classifyResult
+	analyzeFrom(&classifyCtx{
+		req: filterReq{From: "billing@paypal.com"},
+		msg: &parsedMessage{From: "billing@evil.example", fromAddrs: []string{"billing@evil.example"}},
+		cfg: defaultConfig(),
+	}, &res)
+	if !containsTag(res.tags, "FORGED_SENDER") {
+		t.Fatalf("tags=%v want FORGED_SENDER", res.tags)
+	}
+}
+
+func TestMixedCharsetTag(t *testing.T) {
+	var res classifyResult
+	body := &messageBody{parts: []mimePart{
+		{contentType: "text/plain", charset: "utf-8", isPlain: true},
+		{contentType: "text/html", charset: "windows-1251", isHTML: true},
+	}}
+	analyzeMIME(&classifyCtx{
+		req:     filterReq{BodyPath: "x"},
+		body:    body,
+		harvest: newHarvestSet(),
+		lists:   newLookupLists(),
+	}, &res)
+	if !containsTag(res.tags, "MIXED_CHARSET") {
+		t.Fatalf("tags=%v want MIXED_CHARSET", res.tags)
+	}
+}
+
+func TestMimeBadExtensionByMagic(t *testing.T) {
+	var res classifyResult
+	body := &messageBody{parts: []mimePart{{
+		contentType: "application/octet-stream",
+		disposition: "attachment; filename=\"invoice.pdf\"",
+		filename:    "invoice.pdf",
+		body:        []byte{'M', 'Z', 0x90, 0x00},
+	}}}
+	analyzeMIME(&classifyCtx{
+		req:     filterReq{BodyPath: "x"},
+		body:    body,
+		harvest: newHarvestSet(),
+		lists:   newLookupLists(),
+	}, &res)
+	if !containsTag(res.tags, "MIME_BAD_EXTENSION") {
+		t.Fatalf("tags=%v want MIME_BAD_EXTENSION from magic bytes", res.tags)
+	}
+}
+
+func TestHomographURLTag(t *testing.T) {
+	var res classifyResult
+	h := newHarvestSet()
+	h.urls["http://p\u0430ypal.com/login"] = struct{}{} // Cyrillic 'а' mixed with Latin
+	analyzeURL(&classifyCtx{
+		req:     filterReq{},
+		cfg:     defaultConfig(),
+		harvest: h,
+		lists:   newLookupLists(),
+	}, &res, nil)
+	if !containsTag(res.tags, "HOMOGRAPH_URL") {
+		t.Fatalf("tags=%v want HOMOGRAPH_URL", res.tags)
+	}
+}
+
+func TestMultipartHarvest(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mp.eml")
+	raw := "MIME-Version: 1.0\r\n" +
+		"Content-Type: multipart/alternative; boundary=b\r\n\r\n" +
+		"--b\r\nContent-Type: text/plain\r\n\r\nvisit http://plain.example/x\r\n" +
+		"--b\r\nContent-Type: text/html\r\n\r\n<a href=\"http://html.example/y\">c</a>\r\n" +
+		"--b--\r\n"
+	if err := os.WriteFile(path, []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, h, err := loadMessageBody(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(h.domains) == 0 {
+		t.Fatalf("expected harvested domains, got none")
+	}
+}

@@ -5,21 +5,72 @@ import (
 	"context"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/BeaverMail/beaver/internal/directory"
 	"github.com/BeaverMail/beaver/internal/log"
 	"github.com/BeaverMail/beaver/internal/mail"
+	"github.com/BeaverMail/beaver/internal/mailauth"
 	"github.com/BeaverMail/beaver/internal/smtp"
 	"github.com/BeaverMail/beaver/internal/storage"
 	"github.com/BeaverMail/beaver/internal/storage/blob"
 	"github.com/BeaverMail/beaver/internal/storage/sqlite"
+	"github.com/miekg/dns"
 )
 
 type phaseFilter struct {
 	phase  string
 	action string
+}
+
+// captureFilter records filter requests for wire assertions.
+type captureFilter struct {
+	mu   sync.Mutex
+	reqs []smtp.FilterRequest
+}
+
+// Filter records req and accepts the phase.
+func (f *captureFilter) Filter(_ context.Context, req smtp.FilterRequest) (smtp.FilterOutcome, error) {
+	f.mu.Lock()
+	f.reqs = append(f.reqs, req)
+	f.mu.Unlock()
+	return smtp.FilterOutcome{Action: smtp.FilterActionAccept}, nil
+}
+
+// authAt returns the auth payload captured for phase.
+func (f *captureFilter) authAt(phase string) *smtp.FilterAuth {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, req := range f.reqs {
+		if req.Phase == phase {
+			return req.Auth
+		}
+	}
+	return nil
+}
+
+// spfResolver returns deterministic SPF records for SMTP tests.
+type spfResolver struct{}
+
+// Resolve returns pass for HELO and fail for the envelope sender domain.
+func (spfResolver) Resolve(_ context.Context, req *dns.Msg) (*dns.Msg, error) {
+	resp := new(dns.Msg)
+	resp.SetReply(req)
+	if len(req.Question) == 0 {
+		return resp, nil
+	}
+	name := req.Question[0].Name
+	policy := "v=spf1 -all"
+	if strings.EqualFold(name, "helo.example.") {
+		policy = "v=spf1 +all"
+	}
+	resp.Answer = append(resp.Answer, &dns.TXT{
+		Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 60},
+		Txt: []string{policy},
+	})
+	return resp, nil
 }
 
 func (f phaseFilter) Filter(_ context.Context, req smtp.FilterRequest) (smtp.FilterOutcome, error) {
@@ -151,6 +202,92 @@ func TestSMTPFilterRejectAtMail(t *testing.T) {
 	expect(t, read, "250")
 	send(t, conn, "MAIL FROM:<sender@example.com>")
 	expectPrefix(t, read, "550")
+}
+
+func TestSMTPFilterTempfailAtEom(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	_, inbox, dir := openSMTPTestStore(t, ctx)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := smtp.NewServer(log.New("error"), ln.Addr().String(), dir, inbox, nil, "", "", smtp.Options{
+		Filter:       phaseFilter{phase: smtp.FilterPhaseEom, action: smtp.FilterActionTempfail},
+		FilterTmpDir: t.TempDir(),
+	})
+	sctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() { _ = srv.ServeListener(sctx, ln) }()
+	time.Sleep(20 * time.Millisecond)
+
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	read := bufio.NewReader(conn)
+	expect(t, read, "220")
+	send(t, conn, "HELO test")
+	expect(t, read, "250")
+	send(t, conn, "MAIL FROM:<sender@example.com>")
+	expect(t, read, "250")
+	send(t, conn, "RCPT TO:<alice@localhost>")
+	expect(t, read, "250")
+	send(t, conn, "DATA")
+	expect(t, read, "354")
+	send(t, conn, "Subject: hi")
+	send(t, conn, "")
+	send(t, conn, "body")
+	send(t, conn, ".")
+	expectPrefix(t, read, "451")
+}
+
+func TestSMTPFilterReceivesCurrentSPFResults(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	_, inbox, dir := openSMTPTestStore(t, ctx)
+	filter := &captureFilter{}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier := mailauth.New(mailauth.Config{
+		Enabled:     true,
+		SPFEnabled:  true,
+		SPFResolver: spfResolver{},
+	})
+	srv := smtp.NewServer(log.New("error"), ln.Addr().String(), dir, inbox, nil, "", "", smtp.Options{
+		Filter:   filter,
+		MailAuth: verifier,
+	})
+	sctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() { _ = srv.ServeListener(sctx, ln) }()
+	time.Sleep(20 * time.Millisecond)
+
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	read := bufio.NewReader(conn)
+	expect(t, read, "220")
+	send(t, conn, "HELO helo.example")
+	expect(t, read, "250")
+	send(t, conn, "MAIL FROM:<sender@example.com>")
+	expect(t, read, "250")
+
+	heloAuth := filter.authAt(smtp.FilterPhaseHelo)
+	if heloAuth == nil || heloAuth.SPFEhlo != "pass" {
+		t.Fatalf("helo auth: %+v", heloAuth)
+	}
+	mailAuth := filter.authAt(smtp.FilterPhaseMail)
+	if mailAuth == nil || mailAuth.SPFEhlo != "pass" || mailAuth.SPFMailFrom != "fail" {
+		t.Fatalf("mail auth: %+v", mailAuth)
+	}
 }
 
 func openSMTPTestStore(t *testing.T, ctx context.Context) (storage.Store, *mail.Inbox, *directory.Local) {

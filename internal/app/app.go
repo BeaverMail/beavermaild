@@ -24,15 +24,15 @@ import (
 
 // App holds runtime resources opened by beaver serve.
 type App struct {
-	log   *slog.Logger
-	cfg   *config.Config
-	store storage.Store
-	blobs *blob.FS
-	dir   *directory.Local
-	inbox *mail.Inbox
-	queue *mail.Queue
-	smtp  *smtp.Server
-	imap  *imap.Server
+	log    *slog.Logger
+	cfg    *config.Config
+	store  storage.Store
+	blobs  *blob.FS
+	dir    *directory.Local
+	inbox  *mail.Inbox
+	queue  *mail.Queue
+	smtp   *smtp.Server
+	imap   *imap.Server
 	daemon *daemon.Manager
 }
 
@@ -66,8 +66,15 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 			SPFEnabled:   cfg.MailAuth.SPF.Enabled,
 			DKIMEnabled:  cfg.MailAuth.DKIM.Enabled,
 			DMARCEnabled: cfg.MailAuth.DMARC.Enabled,
+			ARCEnabled:   cfg.MailAuth.ARC.Enabled,
 		})
 	}
+	greylistEnabled, greylistMinDelay, greylistMaxAge := cfg.SMTPGreylist()
+	greylist := smtp.NewGreylist(store, smtp.GreylistConfig{
+		Enabled:  greylistEnabled,
+		MinDelay: greylistMinDelay,
+		MaxAge:   greylistMaxAge,
+	})
 
 	return &App{
 		log:   log,
@@ -87,6 +94,7 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 			FilterTimeoutMs: int(cfg.PluginsSMTPFilterTimeout() / time.Millisecond),
 			MailAuth:        mailAuth,
 			AuthGate:        authGate,
+			Greylist:        greylist,
 		}),
 		imap: imap.NewServer(log, cfg.IMAPListen(), dir, inbox, imap.Options{
 			Certs:       certs,

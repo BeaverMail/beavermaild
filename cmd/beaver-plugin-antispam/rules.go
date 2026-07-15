@@ -2,8 +2,12 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
 	"regexp"
 	"strings"
+	"time"
 )
 
 type exprRule struct {
@@ -13,6 +17,31 @@ type exprRule struct {
 	Tag      string  `json:"tag"`
 	MinScore float64 `json:"min_score"`
 	re       *regexp.Regexp
+}
+
+// loadRemoteRules loads a bounded HTTPS JSON rule list during atomic reload.
+func loadRemoteRules(rawURL string) ([]exprRule, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	body, _, err := getRemote(ctx, rawURL, true, 5*time.Second, 3)
+	if err != nil {
+		return nil, err
+	}
+	var rules []exprRule
+	if err := json.Unmarshal(body, &rules); err != nil {
+		return nil, fmt.Errorf("antispam: parse remote rules: %w", err)
+	}
+	for _, rule := range rules {
+		if rule.Tag == "" || (rule.Match != "" && !validRulePattern(rule.Match)) {
+			return nil, fmt.Errorf("antispam: invalid remote rule")
+		}
+	}
+	return rules, nil
+}
+
+func validRulePattern(pattern string) bool {
+	_, err := regexp.Compile(pattern)
+	return err == nil
 }
 
 func compileRules(cfg pluginConfig) []exprRule {

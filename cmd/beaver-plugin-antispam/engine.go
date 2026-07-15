@@ -76,11 +76,11 @@ func (e *engine) handle(req filterReq) filterResp {
 func (e *engine) handleConnect(req filterReq, cfg pluginConfig) filterResp {
 	if cfg.HardReject.StaticOnConnect {
 		if e.static.deniesIP(req.ClientIP) {
-			return filterResp{ID: req.ID, Action: "reject", Tags: []string{"IP_BLOCKED"}}
+			return filterResp{ID: req.ID, Action: "reject", Tags: []string{cfg.Static.tag("client_ip")}}
 		}
 	}
 	if cfg.RBL.Enabled {
-		listed, tag, dnsFail := e.rbl.checkIPStr(req.ClientIP, cfg.RBL)
+		listed, tag, dnsFail := e.rbl.checkIPStr(req.ClientIP, cfg.RBL.forScope("client_ip"))
 		if dnsFail && cfg.RBL.OnDNSFail == "tempfail" {
 			return filterResp{ID: req.ID, Action: "tempfail"}
 		}
@@ -109,10 +109,11 @@ func (e *engine) handleHelo(req filterReq, cfg pluginConfig) filterResp {
 
 func (e *engine) handleMail(req filterReq, cfg pluginConfig) filterResp {
 	if e.static.deniesFrom(req.From) {
-		if act := cfg.TagActions["ENV_FROM_BLOCKED"]; act != "" {
-			return filterResp{ID: req.ID, Action: act, Tags: []string{"ENV_FROM_BLOCKED"}}
+		tag := cfg.Static.tag("mail_from")
+		if act := cfg.TagActions[tag]; act != "" {
+			return filterResp{ID: req.ID, Action: act, Tags: []string{tag}}
 		}
-		e.addTag(req.ID, "ENV_FROM_BLOCKED")
+		e.addTag(req.ID, tag)
 	}
 	return filterResp{ID: req.ID, Action: "accept"}
 }
@@ -120,10 +121,11 @@ func (e *engine) handleMail(req filterReq, cfg pluginConfig) filterResp {
 func (e *engine) handleRcpt(req filterReq, cfg pluginConfig) filterResp {
 	for _, to := range req.To {
 		if e.static.deniesRcpt(to) {
-			if act := cfg.TagActions["RCPT_BLOCKED"]; act != "" {
-				return filterResp{ID: req.ID, Action: act, Tags: []string{"RCPT_BLOCKED"}}
+			tag := cfg.Static.tag("rcpt_to")
+			if act := cfg.TagActions[tag]; act != "" {
+				return filterResp{ID: req.ID, Action: act, Tags: []string{tag}}
 			}
-			e.addTag(req.ID, "RCPT_BLOCKED")
+			e.addTag(req.ID, tag)
 		}
 	}
 	return filterResp{ID: req.ID, Action: "accept"}

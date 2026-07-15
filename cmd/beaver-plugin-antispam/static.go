@@ -11,8 +11,8 @@ import (
 )
 
 type staticLists struct {
-	mu      sync.RWMutex
-	denyIP  []net.IP
+	mu       sync.RWMutex
+	denyIP   []net.IP
 	denyCIDR []*net.IPNet
 	denyFrom []string
 	denyRcpt []string

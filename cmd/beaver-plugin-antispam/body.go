@@ -18,6 +18,7 @@ type messageBody struct {
 
 type mimePart struct {
 	contentType string
+	charset     string
 	disposition string
 	filename    string
 	body        []byte
@@ -73,13 +74,14 @@ func loadMessageBody(path string) (*messageBody, *harvestSet, error) {
 				break
 			}
 			pct := p.Header.Get("Content-Type")
-			pt, _, _ := mime.ParseMediaType(pct)
+			pt, partParams, _ := mime.ParseMediaType(pct)
 			if pt == "" {
 				pt = pct
 			}
 			b, _ := io.ReadAll(io.LimitReader(p, 512*1024))
 			part := mimePart{
 				contentType: pt,
+				charset:     strings.ToLower(partParams["charset"]),
 				disposition: p.Header.Get("Content-Disposition"),
 				filename:    filenameFromDisposition(p.Header.Get("Content-Disposition")),
 				body:        b,
@@ -107,7 +109,13 @@ func loadMessageBody(path string) (*messageBody, *harvestSet, error) {
 	b, _ := io.ReadAll(msg.Body)
 	isHTML := strings.HasPrefix(strings.ToLower(mediaType), "text/html")
 	isPlain := strings.HasPrefix(strings.ToLower(mediaType), "text/plain")
-	mb.parts = append(mb.parts, mimePart{contentType: mediaType, body: b, isHTML: isHTML, isPlain: isPlain})
+	mb.parts = append(mb.parts, mimePart{
+		contentType: mediaType,
+		charset:     strings.ToLower(params["charset"]),
+		body:        b,
+		isHTML:      isHTML,
+		isPlain:     isPlain,
+	})
 	if isPlain {
 		h.plain = string(b)
 		h.hasPlain = true

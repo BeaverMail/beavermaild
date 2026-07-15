@@ -10,9 +10,9 @@ import (
 
 // IPRev outcomes on filter wire (plugin maps to RDNS_* tags).
 const (
-	IPRevPass       = "pass"
-	IPRevNone       = "none"
-	IPRevTempError  = "temperror"
+	IPRevPass      = "pass"
+	IPRevNone      = "none"
+	IPRevTempError = "temperror"
 )
 
 // LookupIPRev performs PTR lookup for clientIP with timeout.

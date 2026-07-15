@@ -18,10 +18,18 @@ type pluginConfig struct {
 	Lists             listsConfig        `json:"lists"`
 	Content           contentConfig      `json:"content"`
 	Rules             []exprRule         `json:"rules"`
+	SpamRulesURL      string             `json:"spam_rules_url"`
+	URLRedirects      urlRedirectConfig  `json:"url_redirects"`
 	Scores            map[string]float64 `json:"scores"`
 	Thresholds        thresholdConfig    `json:"thresholds"`
 	TagActions        map[string]string  `json:"tag_actions"`
 	lastReload        time.Time
+}
+
+type urlRedirectConfig struct {
+	Enabled      bool `json:"enabled"`
+	TimeoutMs    int  `json:"timeout_ms"`
+	MaxRedirects int  `json:"max_redirects"`
 }
 
 type listsConfig struct {
@@ -32,13 +40,16 @@ type listsConfig struct {
 }
 
 type hardRejectConfig struct {
-	RBLOnConnect     bool `json:"rbl_on_connect"`
-	StaticOnConnect  bool `json:"static_on_connect"`
+	RBLOnConnect    bool `json:"rbl_on_connect"`
+	StaticOnConnect bool `json:"static_on_connect"`
 }
 
 type rblConfig struct {
 	Enabled             bool              `json:"enabled"`
 	Zones               []string          `json:"zones"`
+	ClientIPZones       []string          `json:"client_ip_zones"`
+	DomainZones         []string          `json:"domain_zones"`
+	URLZones            []string          `json:"url_zones"`
 	TimeoutMs           int               `json:"timeout_ms"`
 	OnDNSFail           string            `json:"on_dns_fail"`
 	CacheTTLListedSec   int               `json:"cache_ttl_listed_sec"`
@@ -48,10 +59,51 @@ type rblConfig struct {
 	TagAliases          map[string]string `json:"tag_aliases"`
 }
 
+// forScope returns a config with the scope-specific zones or legacy zones.
+func (c rblConfig) forScope(scope string) rblConfig {
+	var zones []string
+	switch scope {
+	case "client_ip":
+		zones = c.ClientIPZones
+	case "domain":
+		zones = c.DomainZones
+	case "url":
+		zones = c.URLZones
+	}
+	if len(zones) > 0 {
+		c.Zones = zones
+	}
+	return c
+}
+
 type staticConfig struct {
-	DenyClientIP  []string `json:"deny_client_ip"`
-	DenyMailFrom  []string `json:"deny_mail_from"`
-	DenyRcptTo    []string `json:"deny_rcpt_to"`
+	DenyClientIP []string `json:"deny_client_ip"`
+	DenyMailFrom []string `json:"deny_mail_from"`
+	DenyRcptTo   []string `json:"deny_rcpt_to"`
+	ClientIPTag  string   `json:"client_ip_tag"`
+	MailFromTag  string   `json:"mail_from_tag"`
+	RcptToTag    string   `json:"rcpt_to_tag"`
+}
+
+// tag returns the configured static-list tag or its stable default.
+func (c staticConfig) tag(kind string) string {
+	switch kind {
+	case "client_ip":
+		if c.ClientIPTag != "" {
+			return c.ClientIPTag
+		}
+		return "IP_BLOCKED"
+	case "mail_from":
+		if c.MailFromTag != "" {
+			return c.MailFromTag
+		}
+		return "ENV_FROM_BLOCKED"
+	default:
+		if c.RcptToTag != "" {
+			return c.RcptToTag
+		}
+		return "RCPT_BLOCKED"
+	}
 }
 
 type contentConfig struct {
@@ -81,54 +133,65 @@ func defaultConfig() pluginConfig {
 			CacheTTLMissSec:   86400,
 		},
 		Scores: map[string]float64{
-			"RBL_ZEN":                  3.0,
-			"SPF_FAIL":                 5.0,
-			"SPF_SOFTFAIL":             2.0,
-			"DKIM_REJECT":              3.0,
-			"DMARC_POLICY_REJECT":      8.0,
-			"DMARC_POLICY_QUARANTINE":  4.0,
-			"SUBJECT_BAD":              5.0,
-			"GTUBE_TEST":               10.0,
-			"SUBJ_ALL_CAPS":            2.0,
-			"URL_IN_SUBJECT":           2.0,
-			"SUBJECT_HAS_CURRENCY":     1.5,
-			"MISSING_SUBJECT":          1.0,
-			"EMPTY_SUBJECT":            1.0,
-			"MISSING_DATE":             0.5,
-			"DATE_IN_PAST":             0.5,
-			"DATE_IN_FUTURE":           1.0,
-			"HELO_BAREIP":              2.0,
-			"HELO_NOT_FQDN":            2.0,
-			"HELO_IPREV_MISMATCH":      3.0,
-			"HELO_NORES_A_OR_MX":       2.0,
-			"HELO_IP_A":                2.0,
-			"RDNS_NONE":                2.0,
-			"RDNS_DNSFAIL":             1.0,
-			"RCVD_COUNT_ZERO":          1.0,
-			"RCVD_DOUBLE_IP_SPAM":      2.0,
-			"RCVD_NO_TLS_LAST":         0.5,
-			"MISSING_MID":              1.0,
-			"FORGED_SENDER":            4.0,
-			"SPOOF_REPLYTO":            3.0,
-			"SPAM_TRAP":                10.0,
-			"MIME_HTML_ONLY":           1.5,
-			"MIME_BAD_EXTENSION":       4.0,
-			"PHISHING":                 5.0,
-			"URL_ONLY":                 2.0,
-			"REDIRECTOR_URL":           2.0,
-			"HOMOGRAPH_URL":            3.0,
-			"MISSING_ESSENTIAL_HEADERS": 1.0,
+			// Weights from Stalwart spam-filter-rules catalog; operator scores merge on reload.
+			"RBL_ZEN":                   4.0,
+			"SPF_ALLOW":                 -0.2,
+			"SPF_FAIL":                  1.0,
+			"DKIM_ALLOW":                -0.2,
+			"DKIM_REJECT":               1.0,
+			"DMARC_POLICY_ALLOW":        -0.5,
+			"DMARC_POLICY_REJECT":       4.0,
+			"DMARC_POLICY_QUARANTINE":   1.5,
+			"DMARC_POLICY_SOFTFAIL":     0.1,
+			"ARC_ALLOW":                 -0.5,
+			"ARC_REJECT":                2.0,
+			"ARC_INVALID":               1.0,
+			"SUBJECT_BAD":               5.0,
+			"GTUBE_TEST":                1000.0,
+			"SUBJ_ALL_CAPS":             3.0,
+			"URL_IN_SUBJECT":            4.0,
+			"SUBJECT_HAS_CURRENCY":      1.0,
+			"MISSING_SUBJECT":           2.0,
+			"EMPTY_SUBJECT":             1.0,
+			"MISSING_DATE":              1.0,
+			"DATE_IN_PAST":              1.0,
+			"DATE_IN_FUTURE":            4.0,
+			"HELO_BAREIP":               3.0,
+			"HELO_NOT_FQDN":             2.0,
+			"HELO_IPREV_MISMATCH":       1.0,
+			"HELO_NORES_A_OR_MX":        0.3,
+			"HELO_IP_A":                 1.0,
+			"RDNS_NONE":                 2.0,
+			"RCVD_COUNT_ZERO":           0.1,
+			"RCVD_DOUBLE_IP_SPAM":       2.0,
+			"RCVD_NO_TLS_LAST":          0.1,
+			"MISSING_MID":               2.5,
+			"FORGED_SENDER":             0.3,
+			"SPOOF_REPLYTO":             6.0,
+			"SPAM_TRAP":                 15.0,
+			"MIME_HTML_ONLY":            0.2,
+			"MIME_BAD_EXTENSION":        2.0,
+			"PHISHING":                  4.0,
+			"URL_ONLY":                  2.2,
+			"HOMOGRAPH_URL":             5.0,
+			"MISSING_ESSENTIAL_HEADERS": 7.0,
+			"MULTIPLE_FROM":             8.0,
+			"FROMHOST_NORES_A_OR_MX":    1.5,
+			"FROM_INVALID":              2.0,
+			"ENV_FROM_INVALID":          2.0,
+			"MISSING_FROM":              2.0,
+			"URL_REDIRECTED":            1.0,
 		},
 		Thresholds: thresholdConfig{Reject: 10, Discard: 15, Spam: 5},
-		TagActions: map[string]string{"IP_BLOCKED": "reject"},
-		Content: contentConfig{MaxHeaderBytes: 65536},
+		TagActions: map[string]string{"IP_BLOCKED": "reject", "GTUBE_TEST": "reject"},
+		Content:    contentConfig{MaxHeaderBytes: 65536},
 	}
 }
 
 type configStore struct {
-	mu      sync.RWMutex
-	cfg     pluginConfig
-	dataDir string
+	mu       sync.RWMutex
+	cfg      pluginConfig
+	dataDir  string
 	sentinel time.Time
 }
 
@@ -165,6 +228,13 @@ func (s *configStore) reload() error {
 		if err := json.Unmarshal(b, &cfg); err != nil {
 			return err
 		}
+	}
+	if cfg.SpamRulesURL != "" {
+		remote, err := loadRemoteRules(cfg.SpamRulesURL)
+		if err != nil {
+			return err
+		}
+		cfg.Rules = append(cfg.Rules, remote...)
 	}
 	cfg.lastReload = time.Now()
 	s.mu.Lock()

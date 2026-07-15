@@ -11,11 +11,11 @@ import (
 
 // MailParams holds optional MAIL FROM ESMTP parameters.
 type MailParams struct {
-	Ret          mail.RetMode
-	Envid        string
-	Body         string
-	SMTPUTF8     bool
-	Unsupported  string // non-empty: explicit reject reply for advertised extension params
+	Ret         mail.RetMode
+	Envid       string
+	Body        string
+	SMTPUTF8    bool
+	Unsupported string // non-empty: explicit reject reply for advertised extension params
 }
 
 // RcptParams holds optional RCPT TO ESMTP parameters.

@@ -16,15 +16,16 @@ import (
 
 // Options configures optional TLS and protocol knobs for SMTP listeners.
 type Options struct {
-	Certs             *tlsload.Certs
-	TLSRequired       bool
-	VRFYEnabled       bool
-	DataLimits        DataLimits
-	Filter            MessageFilter
-	FilterTmpDir      string
-	FilterTimeoutMs   int
-	MailAuth          *mailauth.Verifier
-	AuthGate          security.AuthGate
+	Certs           *tlsload.Certs
+	TLSRequired     bool
+	VRFYEnabled     bool
+	DataLimits      DataLimits
+	Filter          MessageFilter
+	FilterTmpDir    string
+	FilterTimeoutMs int
+	MailAuth        *mailauth.Verifier
+	AuthGate        security.AuthGate
+	Greylist        *Greylist
 }
 
 // Server accepts inbound SMTP connections.
@@ -45,6 +46,7 @@ type Server struct {
 	filterTimeoutMs     int
 	mailAuth            *mailauth.Verifier
 	authGate            security.AuthGate
+	greylist            *Greylist
 }
 
 // NewServer returns an SMTP server. submissionAddr is optional plain listener (e.g. :587).
@@ -71,6 +73,7 @@ func NewServer(log *slog.Logger, addr string, dir *directory.Local, inbox *mail.
 		filterTimeoutMs:     opts.FilterTimeoutMs,
 		mailAuth:            opts.MailAuth,
 		authGate:            gate,
+		greylist:            opts.Greylist,
 	}
 }
 
@@ -166,7 +169,7 @@ func (s *Server) serve(ctx context.Context, slots []listenerSlot) error {
 
 func (s *Server) serveConn(ctx context.Context, conn net.Conn, secure, submission bool) {
 	defer conn.Close()
-	sess := newSession(s.log, conn, s.dir, s.inbox, s.queue, s.certs, secure, s.tlsRequired, s.vrfyEnabled, submission, s.dataLimits, s.filter, s.filterTmpDir, s.filterTimeoutMs, s.mailAuth, s.authGate)
+	sess := newSession(s.log, conn, s.dir, s.inbox, s.queue, s.certs, secure, s.tlsRequired, s.vrfyEnabled, submission, s.dataLimits, s.filter, s.filterTmpDir, s.filterTimeoutMs, s.mailAuth, s.authGate, s.greylist)
 	if err := sess.run(ctx); err != nil && ctx.Err() == nil {
 		s.log.Debug("smtp session", slog.Any("err", err))
 	}

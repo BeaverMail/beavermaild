@@ -51,6 +51,7 @@ type MailAuthConfig struct {
 	SPF          MailAuthToggle `json:"spf"`
 	DKIM         MailAuthToggle `json:"dkim"`
 	DMARC        MailAuthToggle `json:"dmarc"`
+	ARC          MailAuthToggle `json:"arc"`
 }
 
 // MailAuthToggle enables one mail-auth check family.
@@ -83,18 +84,26 @@ type TLSConfig struct {
 
 // SMTPConfig holds inbound SMTP listener settings.
 type SMTPConfig struct {
-	Listen                  string       `json:"listen"`
-	SubmissionListen        string       `json:"submission_listen"`
-	SubmissionTLSListen     string       `json:"submission_tls_listen"`
-	Relay                   string       `json:"relay"`
-	RelayStartTLS           bool         `json:"relay_starttls"`
-	RelayUser               string       `json:"relay_user"`
-	RelayPassword           string       `json:"relay_password"`
-	OutboundTLSInsecureSkip bool         `json:"outbound_tls_insecure_skip_verify"` // dev/self-signed relay or MX; default verify
-	MTASTS                  MTASTSConfig `json:"mta_sts"`
+	Listen                  string         `json:"listen"`
+	SubmissionListen        string         `json:"submission_listen"`
+	SubmissionTLSListen     string         `json:"submission_tls_listen"`
+	Relay                   string         `json:"relay"`
+	RelayStartTLS           bool           `json:"relay_starttls"`
+	RelayUser               string         `json:"relay_user"`
+	RelayPassword           string         `json:"relay_password"`
+	OutboundTLSInsecureSkip bool           `json:"outbound_tls_insecure_skip_verify"` // dev/self-signed relay or MX; default verify
+	MTASTS                  MTASTSConfig   `json:"mta_sts"`
 	DKIMSign                DKIMSignConfig `json:"dkim_sign"`
-	MaxMessageBytes         int          `json:"max_message_bytes"`
-	VRFYEnabled             bool         `json:"vrfy_enabled"` // off by default (RFC 5321: user enumeration risk)
+	Greylist                GreylistConfig `json:"greylist"`
+	MaxMessageBytes         int            `json:"max_message_bytes"`
+	VRFYEnabled             bool           `json:"vrfy_enabled"` // off by default (RFC 5321: user enumeration risk)
+}
+
+// GreylistConfig controls persistent inbound SMTP greylisting.
+type GreylistConfig struct {
+	Enabled     bool `json:"enabled"`
+	MinDelaySec int  `json:"min_delay_sec"`
+	MaxAgeSec   int  `json:"max_age_sec"`
 }
 
 // MTASTSConfig controls outbound MTA-STS policy lookup (RFC 8461).
@@ -264,15 +273,16 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// normalizeMailAuth enables SPF/DKIM/DMARC when mail_auth.enabled and no sub-toggle is set.
+// normalizeMailAuth enables SPF/DKIM/DMARC/ARC when mail_auth.enabled and no sub-toggle is set.
 func (c *Config) normalizeMailAuth() {
 	if !c.MailAuth.Enabled {
 		return
 	}
-	if !c.MailAuth.SPF.Enabled && !c.MailAuth.DKIM.Enabled && !c.MailAuth.DMARC.Enabled {
+	if !c.MailAuth.SPF.Enabled && !c.MailAuth.DKIM.Enabled && !c.MailAuth.DMARC.Enabled && !c.MailAuth.ARC.Enabled {
 		c.MailAuth.SPF.Enabled = true
 		c.MailAuth.DKIM.Enabled = true
 		c.MailAuth.DMARC.Enabled = true
+		c.MailAuth.ARC.Enabled = true
 	}
 }
 
@@ -359,6 +369,22 @@ func (c *Config) SMTPMaxMessageBytes() int {
 // SMTPVRFYEnabled reports whether VRFY is advertised and honored on SMTP listeners.
 func (c *Config) SMTPVRFYEnabled() bool {
 	return c.SMTP.VRFYEnabled
+}
+
+// SMTPGreylist returns normalized greylist runtime settings.
+func (c *Config) SMTPGreylist() (enabled bool, minDelay, maxAge time.Duration) {
+	if !c.SMTP.Greylist.Enabled {
+		return false, 0, 0
+	}
+	minDelay = time.Duration(c.SMTP.Greylist.MinDelaySec) * time.Second
+	maxAge = time.Duration(c.SMTP.Greylist.MaxAgeSec) * time.Second
+	if minDelay <= 0 {
+		minDelay = 5 * time.Minute
+	}
+	if maxAge <= minDelay {
+		maxAge = 36 * time.Hour
+	}
+	return true, minDelay, maxAge
 }
 
 // IMAPListen returns the plain IMAP bind address.

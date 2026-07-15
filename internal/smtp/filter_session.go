@@ -18,6 +18,14 @@ func (s *session) nextFilterID() string {
 	return strconv.Itoa(s.filterSeq)
 }
 
+// currentFilterID keeps one correlation ID across all phases of a transaction.
+func (s *session) currentFilterID() string {
+	if s.filterTxnID == "" {
+		s.filterTxnID = s.nextFilterID()
+	}
+	return s.filterTxnID
+}
+
 func (s *session) clientIP() string {
 	host, _, err := net.SplitHostPort(s.conn.RemoteAddr().String())
 	if err != nil {
@@ -35,7 +43,7 @@ func (s *session) filterListener() string {
 
 func (s *session) buildFilterRequest(phase string, to []string, bodyPath string) FilterRequest {
 	req := FilterRequest{
-		ID:            s.nextFilterID(),
+		ID:            s.currentFilterID(),
 		Phase:         phase,
 		From:          s.mailFrom,
 		To:            to,
@@ -49,7 +57,7 @@ func (s *session) buildFilterRequest(phase string, to []string, bodyPath string)
 		IPRevPTR:      s.iprevPTR,
 		IPRevResult:   s.iprevResult,
 	}
-	if phase == FilterPhaseMail || phase == FilterPhaseRcpt || phase == FilterPhaseData || phase == FilterPhaseEom {
+	if phase == FilterPhaseHelo || phase == FilterPhaseMail || phase == FilterPhaseRcpt || phase == FilterPhaseData || phase == FilterPhaseEom {
 		req.Auth = s.authWire()
 	}
 	return req
@@ -60,7 +68,7 @@ func (s *session) authWire() *FilterAuth {
 		return nil
 	}
 	w := s.authState.Wire()
-	if w.SPFEhlo == "" && w.SPFMailFrom == "" && w.DKIM == "" && w.DMARC == "" {
+	if w.SPFEhlo == "" && w.SPFMailFrom == "" && w.DKIM == "" && w.DMARC == "" && w.ARC == "" {
 		return nil
 	}
 	return &FilterAuth{
@@ -69,6 +77,7 @@ func (s *session) authWire() *FilterAuth {
 		DKIM:        w.DKIM,
 		DMARC:       w.DMARC,
 		DMARCPolicy: w.DMARCPolicy,
+		ARC:         w.ARC,
 	}
 }
 
@@ -89,7 +98,7 @@ func (s *session) filterEom(ctx context.Context, raw []byte) (FilterOutcome, err
 	if err := os.MkdirAll(s.filterTmpDir, 0o755); err != nil {
 		return FilterOutcome{}, err
 	}
-	id := s.nextFilterID()
+	id := s.currentFilterID()
 	path := filepath.Join(s.filterTmpDir, "smtp-filter-"+id+".eml")
 	if err := os.WriteFile(path, raw, 0o600); err != nil {
 		return FilterOutcome{}, err

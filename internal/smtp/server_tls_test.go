@@ -12,10 +12,10 @@ import (
 	"github.com/BeaverMail/beaver/internal/log"
 	"github.com/BeaverMail/beaver/internal/mail"
 	"github.com/BeaverMail/beaver/internal/smtp"
-	"github.com/BeaverMail/beaver/internal/tlsload"
-	"github.com/BeaverMail/beaver/internal/tlsload/tlstest"
 	"github.com/BeaverMail/beaver/internal/storage/blob"
 	"github.com/BeaverMail/beaver/internal/storage/sqlite"
+	"github.com/BeaverMail/beaver/internal/tlsload"
+	"github.com/BeaverMail/beaver/internal/tlsload/tlstest"
 )
 
 func TestSMTPSTARTTLS(t *testing.T) {

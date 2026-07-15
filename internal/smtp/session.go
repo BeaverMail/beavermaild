@@ -38,6 +38,7 @@ type session struct {
 	filterTmpDir    string
 	filterTimeoutMs int
 	filterSeq       int
+	filterTxnID     string
 	mailAuth        *mailauth.Verifier
 	heloDomain      string
 	authState       mailauth.SessionState
@@ -47,6 +48,7 @@ type session struct {
 
 	principal directory.Principal
 	authGate  security.AuthGate
+	greylist  *Greylist
 
 	mailFrom  string
 	mailRet   mail.RetMode
@@ -71,7 +73,7 @@ type smtpCommand struct {
 	arg string
 }
 
-func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *mail.Inbox, queue *mail.Queue, certs *tlsload.Certs, secure, tlsRequired, vrfyEnabled, submission bool, limits DataLimits, filter MessageFilter, filterTmpDir string, filterTimeoutMs int, mailAuth *mailauth.Verifier, gate security.AuthGate) *session {
+func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *mail.Inbox, queue *mail.Queue, certs *tlsload.Certs, secure, tlsRequired, vrfyEnabled, submission bool, limits DataLimits, filter MessageFilter, filterTmpDir string, filterTimeoutMs int, mailAuth *mailauth.Verifier, gate security.AuthGate, greylist *Greylist) *session {
 	if filter == nil {
 		filter = NopFilter{}
 	}
@@ -99,6 +101,7 @@ func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *ma
 		filterTimeoutMs: filterTimeoutMs,
 		mailAuth:        mailAuth,
 		authGate:        gate,
+		greylist:        greylist,
 	}
 }
 
@@ -174,18 +177,18 @@ func (s *session) dispatch(ctx context.Context, cmd, arg string, mailBlocked boo
 	case "EHLO":
 		s.heloDomain = strings.TrimSpace(arg)
 		s.pipelining = true
+		s.checkSPFEhlo(ctx)
 		if err := s.filterHelo(ctx); err != nil {
 			return false, false, err
 		}
-		s.checkSPFEhlo(ctx)
 		return false, false, s.writeEHLO(true)
 	case "HELO":
 		s.heloDomain = strings.TrimSpace(arg)
 		s.pipelining = false
+		s.checkSPFEhlo(ctx)
 		if err := s.filterHelo(ctx); err != nil {
 			return false, false, err
 		}
-		s.checkSPFEhlo(ctx)
 		return false, false, s.writeEHLO(false)
 	case "STARTTLS":
 		return false, false, s.cmdStartTLS()
@@ -277,6 +280,7 @@ func (s *session) handleMail(ctx context.Context, arg string) (blockMail bool, e
 		s.mailBody = body
 	}
 	s.mailUTF8 = mailParams.SMTPUTF8 || addressNeedsUTF8(addr)
+	s.checkSPFMailFrom(ctx)
 	if out, err := s.runFilter(ctx, FilterPhaseMail, nil, ""); err != nil {
 		return true, err
 	} else if out.Action != FilterActionAccept {
@@ -286,7 +290,6 @@ func (s *session) handleMail(ctx context.Context, arg string) (blockMail bool, e
 		}
 		return true, s.writef(reply)
 	}
-	s.checkSPFMailFrom(ctx)
 	return false, s.writef(replyOK)
 }
 
@@ -322,6 +325,11 @@ func (s *session) handleRcpt(ctx context.Context, arg string, mailBlocked bool) 
 			if s.queue == nil {
 				return s.writef(replyDomainUnknown)
 			}
+			if ok, err := s.allowGreylist(ctx, addr); err != nil {
+				return err
+			} else if !ok {
+				return s.writef("452 4.2.2 Try again later")
+			}
 			s.rcpt = append(s.rcpt, rcptTarget{
 				address: normalizeEnvelopeAddress(addr),
 				notify:  rcptParams.Notify,
@@ -350,6 +358,11 @@ func (s *session) handleRcpt(ctx context.Context, arg string, mailBlocked bool) 
 	if !acc.Active {
 		return s.writef(replyUserInactive)
 	}
+	if ok, err := s.allowGreylist(ctx, addr); err != nil {
+		return err
+	} else if !ok {
+		return s.writef("452 4.2.2 Try again later")
+	}
 	s.rcpt = append(s.rcpt, rcptTarget{
 		address:   normalizeEnvelopeAddress(addr),
 		accountID: acc.ID,
@@ -366,6 +379,14 @@ func (s *session) handleRcpt(ctx context.Context, arg string, mailBlocked bool) 
 		return s.writef(reply)
 	}
 	return s.writef(replyOK)
+}
+
+// allowGreylist applies persistent greylisting only to unauthenticated inbound mail.
+func (s *session) allowGreylist(ctx context.Context, rcpt string) (bool, error) {
+	if s.greylist == nil || s.submission || s.principal.AccountID != 0 {
+		return true, nil
+	}
+	return s.greylist.Allow(ctx, s.clientIP(), s.mailFrom, rcpt)
 }
 
 func (s *session) handleDATA(ctx context.Context) error {
@@ -592,7 +613,8 @@ func (s *session) reset() {
 	s.rcpt = s.rcpt[:0]
 	s.bdatBuf = s.bdatBuf[:0]
 	s.bdatUsed = false
-	s.authState.SPFMailFrom = ""
+	s.filterTxnID = ""
+	s.authState = mailauth.SessionState{SPFEhlo: s.authState.SPFEhlo}
 }
 
 // finishDelivery stores the message for local recipients and enqueues remote ones.

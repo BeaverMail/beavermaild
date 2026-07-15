@@ -7,11 +7,11 @@ import (
 )
 
 type lookupLists struct {
-	mu              sync.RWMutex
-	spamTraps       map[string]struct{}
-	trustedDomains  map[string]struct{}
-	urlRedirectors  map[string]struct{}
-	badExtensions   map[string]struct{}
+	mu             sync.RWMutex
+	spamTraps      map[string]struct{}
+	trustedDomains map[string]struct{}
+	urlRedirectors map[string]struct{}
+	badExtensions  map[string]struct{}
 }
 
 func newLookupLists() *lookupLists {

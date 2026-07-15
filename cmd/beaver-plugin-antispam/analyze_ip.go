@@ -31,19 +31,18 @@ func analyzeIP(ctx *classifyCtx, res *classifyResult, eng *engine) {
 	if eng == nil || !ctx.cfg.RBL.Enabled {
 		return
 	}
-	budget := newRBLBudget(ctx.cfg.RBL.MaxChecksPerMessage)
 	ip := net.ParseIP(ctx.req.ClientIP)
 	if ip == nil || ip.IsLoopback() {
 		return
 	}
 	if eng.static.deniesIP(ctx.req.ClientIP) {
-		res.addTag("IP_BLOCKED")
+		res.addTag(ctx.cfg.Static.tag("client_ip"))
 		return
 	}
-	if !budget.take() {
+	if ctx.rblBudget == nil || !ctx.rblBudget.take() {
 		return
 	}
-	listed, tag, _ := eng.rbl.checkIP(ip, ctx.cfg.RBL)
+	listed, tag, _ := eng.rbl.checkIP(ip, ctx.cfg.RBL.forScope("client_ip"))
 	if listed && tag != "" {
 		res.addTag(tag)
 	}

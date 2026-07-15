@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,7 +13,7 @@ import (
 
 func TestScoreFinalizeReject(t *testing.T) {
 	cfg := defaultConfig()
-	tags := []string{"SPF_FAIL", "DMARC_POLICY_REJECT"}
+	tags := []string{"SPAM_TRAP", "MISSING_ESSENTIAL_HEADERS"}
 	score := scoreFor(tags, cfg.Scores)
 	if score < cfg.Thresholds.Reject {
 		t.Fatalf("score %.2f want >= %.2f", score, cfg.Thresholds.Reject)
@@ -123,11 +125,90 @@ func TestReceivedCount(t *testing.T) {
 	}
 }
 
+func TestForgedRcvdTrailTag(t *testing.T) {
+	var res classifyResult
+	analyzeReceived(&classifyCtx{
+		msg: &parsedMessage{received: []string{
+			"from forged.example (legit-ptr.example [192.0.2.1]) by mx.local with ESMTPS",
+		}},
+	}, &res)
+	if !containsTag(res.tags, "FORGED_RCVD_TRAIL") {
+		t.Fatalf("tags=%v want FORGED_RCVD_TRAIL", res.tags)
+	}
+}
+
 func TestReverseIPv6(t *testing.T) {
 	ip := net.ParseIP("2001:db8::1")
 	rev := reverseIP(ip)
 	if rev == "" || !strings.Contains(rev, ".") {
 		t.Fatalf("rev=%q", rev)
+	}
+}
+
+func TestRBLScopeZonesFallback(t *testing.T) {
+	cfg := rblConfig{
+		Zones:         []string{"legacy.test"},
+		ClientIPZones: []string{"ip.test"},
+		URLZones:      []string{"url.test"},
+	}
+	if got := cfg.forScope("client_ip").Zones; len(got) != 1 || got[0] != "ip.test" {
+		t.Fatalf("client zones: %v", got)
+	}
+	if got := cfg.forScope("domain").Zones; len(got) != 1 || got[0] != "legacy.test" {
+		t.Fatalf("domain fallback zones: %v", got)
+	}
+	if got := cfg.forScope("url").Zones; len(got) != 1 || got[0] != "url.test" {
+		t.Fatalf("url zones: %v", got)
+	}
+}
+
+func TestRBLCheckerUsesInjectedLookup(t *testing.T) {
+	checker := newRBLChecker()
+	checker.lookupIP = func(_ context.Context, network, host string) ([]net.IP, error) {
+		if network != "ip4" || host != "4.3.2.1.list.test" {
+			t.Fatalf("lookup network=%q host=%q", network, host)
+		}
+		return []net.IP{net.IPv4(127, 0, 0, 2)}, nil
+	}
+	cfg := rblConfig{Enabled: true, Zones: []string{"list.test"}}
+	listed, tag, failed := checker.checkIP(net.IPv4(1, 2, 3, 4), cfg)
+	if !listed || failed || tag != "RBL_LIST" {
+		t.Fatalf("listed=%v tag=%q failed=%v", listed, tag, failed)
+	}
+}
+
+func TestRBLBudgetSharedAcrossAnalyzers(t *testing.T) {
+	budget := newRBLBudget(2)
+	if !budget.take() {
+		t.Fatal("first take should succeed")
+	}
+	if !budget.take() {
+		t.Fatal("second take should succeed")
+	}
+	if budget.take() {
+		t.Fatalf("third take should fail, remaining=%d", budget.remaining)
+	}
+}
+
+func TestRemoteURLRejectsPrivateTargets(t *testing.T) {
+	u, err := url.Parse("https://127.0.0.1/rules.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateRemoteURL(u, true); err == nil {
+		t.Fatal("private remote target accepted")
+	}
+}
+
+func TestNormalizeThreadSubject(t *testing.T) {
+	if got := normalizeThreadSubject("Re: Fwd: WIN BIG NOW"); got != "WIN BIG NOW" {
+		t.Fatalf("normalized=%q", got)
+	}
+}
+
+func TestExecutableMagic(t *testing.T) {
+	if !executableMagic([]byte{'M', 'Z', 0, 0}) || executableMagic([]byte("plain")) {
+		t.Fatal("executable magic mismatch")
 	}
 }
 

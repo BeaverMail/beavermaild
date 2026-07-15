@@ -8,11 +8,11 @@ import (
 )
 
 var (
-	reURL      = regexp.MustCompile(`https?://[^\s<>"']+`)
-	reEmail    = regexp.MustCompile(`[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}`)
-	reBareIP   = regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}\b`)
-	reHTMLTag  = regexp.MustCompile(`(?i)<[^>]+>`)
-	reDataURI  = regexp.MustCompile(`(?i)data:[^"'\s>]+`)
+	reURL         = regexp.MustCompile(`https?://[^\s<>"']+`)
+	reEmail       = regexp.MustCompile(`[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}`)
+	reBareIP      = regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}\b`)
+	reHTMLTag     = regexp.MustCompile(`(?i)<[^>]+>`)
+	reDataURI     = regexp.MustCompile(`(?i)data:[^"'\s>]+`)
 	reMetaRefresh = regexp.MustCompile(`(?i)http-equiv=["']?refresh["']?`)
 )
 

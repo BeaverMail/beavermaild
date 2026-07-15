@@ -11,8 +11,9 @@ import (
 )
 
 type rblChecker struct {
-	mu    sync.Mutex
-	cache map[string]cacheEntry
+	mu       sync.Mutex
+	cache    map[string]cacheEntry
+	lookupIP func(context.Context, string, string) ([]net.IP, error)
 }
 
 type cacheEntry struct {
@@ -22,7 +23,10 @@ type cacheEntry struct {
 }
 
 func newRBLChecker() *rblChecker {
-	return &rblChecker{cache: make(map[string]cacheEntry)}
+	return &rblChecker{
+		cache:    make(map[string]cacheEntry),
+		lookupIP: net.DefaultResolver.LookupIP,
+	}
 }
 
 func (r *rblChecker) checkIPStr(clientIP string, cfg rblConfig) (listed bool, tag string, dnsFail bool) {
@@ -89,7 +93,7 @@ func (r *rblChecker) query(qname, zone string, timeout time.Duration, cfg rblCon
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	addrs, err := net.DefaultResolver.LookupIP(ctx, "ip4", qname)
+	addrs, err := r.lookupIP(ctx, "ip4", qname)
 	if err != nil {
 		if derr, ok := err.(*net.DNSError); ok && derr.IsNotFound {
 			r.store(qname, false, "", cfg.CacheTTLMissSec)
