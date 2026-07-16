@@ -75,6 +75,16 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 		MinDelay: greylistMinDelay,
 		MaxAge:   greylistMaxAge,
 	})
+	asnEnabled, asnTimeout, asnCacheTTL, asnCacheMissTTL, asnZoneV4, asnZoneV6, asnCacheMax := cfg.SMTPASNLookup()
+	asnLookup := smtp.NewASNLookup(smtp.ASNLookupConfig{
+		Enabled:         asnEnabled,
+		Timeout:         asnTimeout,
+		ZoneIPv4:        asnZoneV4,
+		ZoneIPv6:        asnZoneV6,
+		CacheTTL:        asnCacheTTL,
+		CacheMissTTL:    asnCacheMissTTL,
+		CacheMaxEntries: asnCacheMax,
+	})
 
 	return &App{
 		log:   log,
@@ -95,6 +105,7 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 			MailAuth:        mailAuth,
 			AuthGate:        authGate,
 			Greylist:        greylist,
+			ASNLookup:       asnLookup,
 		}),
 		imap: imap.NewServer(log, cfg.IMAPListen(), dir, inbox, imap.Options{
 			Certs:       certs,

@@ -56,6 +56,8 @@ func (s *session) buildFilterRequest(phase string, to []string, bodyPath string)
 		Authenticated: s.principal.AccountID != 0,
 		IPRevPTR:      s.iprevPTR,
 		IPRevResult:   s.iprevResult,
+		ASN:           s.clientASN,
+		Country:       s.clientCountry,
 	}
 	if phase == FilterPhaseHelo || phase == FilterPhaseMail || phase == FilterPhaseRcpt || phase == FilterPhaseData || phase == FilterPhaseEom {
 		req.Auth = s.authWire()
@@ -222,4 +224,16 @@ func (s *session) ensureIPRev(ctx context.Context) {
 		timeout = 2 * time.Second
 	}
 	s.iprevPTR, s.iprevResult = LookupIPRev(ctx, s.clientIP(), timeout)
+}
+
+// ensureASN resolves client ASN/country once per connection for filter wire.
+func (s *session) ensureASN(ctx context.Context) {
+	if s.asnDone {
+		return
+	}
+	s.asnDone = true
+	if s.asnLookup == nil {
+		return
+	}
+	s.clientASN, s.clientCountry = s.asnLookup.Lookup(ctx, s.clientIP())
 }

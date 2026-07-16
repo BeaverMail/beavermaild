@@ -84,19 +84,20 @@ type TLSConfig struct {
 
 // SMTPConfig holds inbound SMTP listener settings.
 type SMTPConfig struct {
-	Listen                  string         `json:"listen"`
-	SubmissionListen        string         `json:"submission_listen"`
-	SubmissionTLSListen     string         `json:"submission_tls_listen"`
-	Relay                   string         `json:"relay"`
-	RelayStartTLS           bool           `json:"relay_starttls"`
-	RelayUser               string         `json:"relay_user"`
-	RelayPassword           string         `json:"relay_password"`
-	OutboundTLSInsecureSkip bool           `json:"outbound_tls_insecure_skip_verify"` // dev/self-signed relay or MX; default verify
-	MTASTS                  MTASTSConfig   `json:"mta_sts"`
-	DKIMSign                DKIMSignConfig `json:"dkim_sign"`
-	Greylist                GreylistConfig `json:"greylist"`
-	MaxMessageBytes         int            `json:"max_message_bytes"`
-	VRFYEnabled             bool           `json:"vrfy_enabled"` // off by default (RFC 5321: user enumeration risk)
+	Listen                  string          `json:"listen"`
+	SubmissionListen        string          `json:"submission_listen"`
+	SubmissionTLSListen     string          `json:"submission_tls_listen"`
+	Relay                   string          `json:"relay"`
+	RelayStartTLS           bool            `json:"relay_starttls"`
+	RelayUser               string          `json:"relay_user"`
+	RelayPassword           string          `json:"relay_password"`
+	OutboundTLSInsecureSkip bool            `json:"outbound_tls_insecure_skip_verify"` // dev/self-signed relay or MX; default verify
+	MTASTS                  MTASTSConfig    `json:"mta_sts"`
+	DKIMSign                DKIMSignConfig  `json:"dkim_sign"`
+	Greylist                GreylistConfig  `json:"greylist"`
+	ASNLookup               ASNLookupConfig `json:"asn_lookup"`
+	MaxMessageBytes         int             `json:"max_message_bytes"`
+	VRFYEnabled             bool            `json:"vrfy_enabled"` // off by default (RFC 5321: user enumeration risk)
 }
 
 // GreylistConfig controls persistent inbound SMTP greylisting.
@@ -104,6 +105,17 @@ type GreylistConfig struct {
 	Enabled     bool `json:"enabled"`
 	MinDelaySec int  `json:"min_delay_sec"`
 	MaxAgeSec   int  `json:"max_age_sec"`
+}
+
+// ASNLookupConfig enables optional Team Cymru-style ASN/country DNS at SMTP connect.
+type ASNLookupConfig struct {
+	Enabled         bool   `json:"enabled"` // default false
+	TimeoutMs       int    `json:"timeout_ms"`
+	ZoneIPv4        string `json:"zone_ipv4"`
+	ZoneIPv6        string `json:"zone_ipv6"`
+	CacheTTLSec     int    `json:"cache_ttl_sec"`
+	CacheTTLMissSec int    `json:"cache_ttl_miss_sec"`
+	CacheMaxEntries int    `json:"cache_max_entries"`
 }
 
 // MTASTSConfig controls outbound MTA-STS policy lookup (RFC 8461).
@@ -385,6 +397,23 @@ func (c *Config) SMTPGreylist() (enabled bool, minDelay, maxAge time.Duration) {
 		maxAge = 36 * time.Hour
 	}
 	return true, minDelay, maxAge
+}
+
+// SMTPASNLookup returns runtime ASN lookup settings (disabled by default).
+func (c *Config) SMTPASNLookup() (enabled bool, timeout, cacheTTL, cacheMissTTL time.Duration, zoneV4, zoneV6 string, cacheMax int) {
+	if !c.SMTP.ASNLookup.Enabled {
+		return false, 0, 0, 0, "", "", 0
+	}
+	timeout = time.Duration(c.SMTP.ASNLookup.TimeoutMs) * time.Millisecond
+	if timeout <= 0 {
+		timeout = 2 * time.Second
+	}
+	cacheTTL = time.Duration(c.SMTP.ASNLookup.CacheTTLSec) * time.Second
+	cacheMissTTL = time.Duration(c.SMTP.ASNLookup.CacheTTLMissSec) * time.Second
+	zoneV4 = strings.TrimSpace(c.SMTP.ASNLookup.ZoneIPv4)
+	zoneV6 = strings.TrimSpace(c.SMTP.ASNLookup.ZoneIPv6)
+	cacheMax = c.SMTP.ASNLookup.CacheMaxEntries
+	return true, timeout, cacheTTL, cacheMissTTL, zoneV4, zoneV6, cacheMax
 }
 
 // IMAPListen returns the plain IMAP bind address.

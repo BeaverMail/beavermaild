@@ -26,6 +26,7 @@ type Options struct {
 	MailAuth        *mailauth.Verifier
 	AuthGate        security.AuthGate
 	Greylist        *Greylist
+	ASNLookup       *ASNLookup
 }
 
 // Server accepts inbound SMTP connections.
@@ -47,6 +48,7 @@ type Server struct {
 	mailAuth            *mailauth.Verifier
 	authGate            security.AuthGate
 	greylist            *Greylist
+	asnLookup           *ASNLookup
 }
 
 // NewServer returns an SMTP server. submissionAddr is optional plain listener (e.g. :587).
@@ -74,6 +76,7 @@ func NewServer(log *slog.Logger, addr string, dir *directory.Local, inbox *mail.
 		mailAuth:            opts.MailAuth,
 		authGate:            gate,
 		greylist:            opts.Greylist,
+		asnLookup:           opts.ASNLookup,
 	}
 }
 
@@ -169,7 +172,7 @@ func (s *Server) serve(ctx context.Context, slots []listenerSlot) error {
 
 func (s *Server) serveConn(ctx context.Context, conn net.Conn, secure, submission bool) {
 	defer conn.Close()
-	sess := newSession(s.log, conn, s.dir, s.inbox, s.queue, s.certs, secure, s.tlsRequired, s.vrfyEnabled, submission, s.dataLimits, s.filter, s.filterTmpDir, s.filterTimeoutMs, s.mailAuth, s.authGate, s.greylist)
+	sess := newSession(s.log, conn, s.dir, s.inbox, s.queue, s.certs, secure, s.tlsRequired, s.vrfyEnabled, submission, s.dataLimits, s.filter, s.filterTmpDir, s.filterTimeoutMs, s.mailAuth, s.authGate, s.greylist, s.asnLookup)
 	if err := sess.run(ctx); err != nil && ctx.Err() == nil {
 		s.log.Debug("smtp session", slog.Any("err", err))
 	}

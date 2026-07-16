@@ -45,6 +45,10 @@ type session struct {
 	iprevPTR        string
 	iprevResult     string
 	iprevDone       bool
+	clientASN       uint32
+	clientCountry   string
+	asnDone         bool
+	asnLookup       *ASNLookup
 
 	principal directory.Principal
 	authGate  security.AuthGate
@@ -73,7 +77,7 @@ type smtpCommand struct {
 	arg string
 }
 
-func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *mail.Inbox, queue *mail.Queue, certs *tlsload.Certs, secure, tlsRequired, vrfyEnabled, submission bool, limits DataLimits, filter MessageFilter, filterTmpDir string, filterTimeoutMs int, mailAuth *mailauth.Verifier, gate security.AuthGate, greylist *Greylist) *session {
+func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *mail.Inbox, queue *mail.Queue, certs *tlsload.Certs, secure, tlsRequired, vrfyEnabled, submission bool, limits DataLimits, filter MessageFilter, filterTmpDir string, filterTimeoutMs int, mailAuth *mailauth.Verifier, gate security.AuthGate, greylist *Greylist, asnLookup *ASNLookup) *session {
 	if filter == nil {
 		filter = NopFilter{}
 	}
@@ -102,6 +106,7 @@ func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *ma
 		mailAuth:        mailAuth,
 		authGate:        gate,
 		greylist:        greylist,
+		asnLookup:       asnLookup,
 	}
 }
 
@@ -110,6 +115,7 @@ func (s *session) run(ctx context.Context) error {
 		return err
 	}
 	s.ensureIPRev(ctx)
+	s.ensureASN(ctx)
 	if out, err := s.runFilter(ctx, FilterPhaseConnect, nil, ""); err != nil {
 		return err
 	} else if out.Action != FilterActionAccept {

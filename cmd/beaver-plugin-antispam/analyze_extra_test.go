@@ -6,6 +6,14 @@ import (
 	"testing"
 )
 
+func TestSOURCEASNTag(t *testing.T) {
+	var res classifyResult
+	analyzeASN(&classifyCtx{req: filterReq{ASN: 15169}}, &res)
+	if !containsTag(res.tags, "SOURCE_ASN_15169") {
+		t.Fatalf("tags=%v", res.tags)
+	}
+}
+
 func TestSpamTrapList(t *testing.T) {
 	dir := t.TempDir()
 	anti := filepath.Join(dir, "antispam")
