@@ -11,6 +11,32 @@ import (
 	"github.com/BeaverMail/beaver/internal/security"
 )
 
+func TestStoreDriverMySQLRequiresDSN(t *testing.T) {
+	t.Parallel()
+	cfg := config.Default(t.TempDir())
+	cfg.Store.Driver = config.StoreDriverMySQL
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected dsn required")
+	}
+	cfg.Store.DSN = "user:pass@tcp(127.0.0.1:3306)/beaver"
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestStoreDriverEnv(t *testing.T) {
+	cfg := config.Default(t.TempDir())
+	t.Setenv("BEAVER_STORE_DRIVER", "mysql")
+	t.Setenv("BEAVER_STORE_DSN", "u:p@tcp(127.0.0.1:3306)/db")
+	cfg.ApplyEnv()
+	if cfg.StoreDriver() != config.StoreDriverMySQL {
+		t.Fatalf("driver %q", cfg.StoreDriver())
+	}
+	if cfg.StoreDSN() != "u:p@tcp(127.0.0.1:3306)/db" {
+		t.Fatalf("dsn %q", cfg.StoreDSN())
+	}
+}
+
 func TestInitLayoutCreatesConfig(t *testing.T) {
 	t.Parallel()
 

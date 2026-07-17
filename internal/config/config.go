@@ -33,6 +33,7 @@ func DefaultConfigPath() string {
 type Config struct {
 	DataDir  string         `json:"data_dir"`
 	LogLevel string         `json:"log_level"`
+	Store    StoreConfig    `json:"store"`
 	Secrets  Secrets        `json:"secrets"`
 	TLS      TLSConfig      `json:"tls"`
 	SMTP     SMTPConfig     `json:"smtp"`
@@ -42,6 +43,20 @@ type Config struct {
 	Quota    QuotaConfig    `json:"quota"`
 	Plugins  PluginsConfig  `json:"plugins"`
 	MailAuth MailAuthConfig `json:"mail_auth"`
+}
+
+// StoreDriverSQLite is the default embedded KV backend.
+const StoreDriverSQLite = "sqlite"
+
+// StoreDriverMySQL selects MySQL or MariaDB via the MySQL wire protocol.
+const StoreDriverMySQL = "mysql"
+
+// StoreConfig selects the KV backend (sqlite default; mysql for MariaDB/MySQL).
+type StoreConfig struct {
+	// Driver is sqlite (default) or mysql (MariaDB/MySQL).
+	Driver string `json:"driver"`
+	// DSN is required for mysql (go-sql-driver format). Ignored for sqlite.
+	DSN string `json:"dsn"`
 }
 
 // MailAuthConfig holds inbound SPF/DKIM/DMARC verification settings.
@@ -245,6 +260,12 @@ func (c *Config) ApplyEnv() {
 	if v := os.Getenv("BEAVER_QUEUE_RUN_DELAY"); v != "" {
 		c.Queue.RunDelay = v
 	}
+	if v := os.Getenv("BEAVER_STORE_DRIVER"); v != "" {
+		c.Store.Driver = v
+	}
+	if v := os.Getenv("BEAVER_STORE_DSN"); v != "" {
+		c.Store.DSN = v
+	}
 }
 
 // Validate checks required fields and paths.
@@ -254,6 +275,9 @@ func (c *Config) Validate() error {
 	}
 	if c.LogLevel == "" {
 		c.LogLevel = "info"
+	}
+	if err := c.validateStore(); err != nil {
+		return err
 	}
 	if c.SMTP.Listen == "" {
 		c.SMTP.Listen = "127.0.0.1:1025"
@@ -468,9 +492,38 @@ func (c *Config) ConfigPath() string {
 	return filepath.Join(c.DataDir, "config.json")
 }
 
+// StoreDriver returns the normalized KV driver name (default sqlite).
+func (c *Config) StoreDriver() string {
+	d := strings.ToLower(strings.TrimSpace(c.Store.Driver))
+	if d == "" {
+		return StoreDriverSQLite
+	}
+	return d
+}
+
+// StoreDSN returns the MySQL/MariaDB DSN when configured.
+func (c *Config) StoreDSN() string {
+	return strings.TrimSpace(c.Store.DSN)
+}
+
 // StorePath returns the SQLite database file path.
 func (c *Config) StorePath() string {
 	return filepath.Join(c.DataDir, "store.sqlite")
+}
+
+// validateStore checks store.driver / store.dsn consistency.
+func (c *Config) validateStore() error {
+	switch c.StoreDriver() {
+	case StoreDriverSQLite:
+		return nil
+	case StoreDriverMySQL:
+		if c.StoreDSN() == "" {
+			return errors.New("config: store.dsn is required when store.driver is mysql")
+		}
+		return nil
+	default:
+		return fmt.Errorf("config: unknown store.driver %q (want sqlite or mysql)", c.Store.Driver)
+	}
 }
 
 // BlobDir returns the filesystem blob store root.

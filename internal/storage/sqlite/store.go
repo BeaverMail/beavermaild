@@ -201,6 +201,11 @@ func (s *Store) commitOnce(ctx context.Context, batch *storage.Batch, ops []stor
 	return nil
 }
 
+// SchemaVersion returns the applied KV schema version for this store.
+func (s *Store) SchemaVersion(ctx context.Context) (int, error) {
+	return SchemaVersion(ctx, s.db)
+}
+
 // Ping checks database connectivity.
 func (s *Store) Ping(ctx context.Context) error {
 	return s.db.PingContext(ctx)

@@ -24,7 +24,8 @@ import (
 	plugincli "github.com/BeaverMail/beaver/internal/pluginhost/cli"
 	"github.com/BeaverMail/beaver/internal/storage"
 	"github.com/BeaverMail/beaver/internal/storage/blob"
-	"github.com/BeaverMail/beaver/internal/storage/sqlite"
+	"github.com/BeaverMail/beaver/internal/storage/openstore"
+	"github.com/BeaverMail/beaver/internal/storage/xfer"
 	"github.com/BeaverMail/beaver/plugin"
 )
 
@@ -51,6 +52,10 @@ func run(args []string) int {
 		return cli.ExitOK
 	case "init":
 		return runInit(args[1:])
+	case "migrate":
+		return runMigrate(args[1:])
+	case "store":
+		return runStore(args[1:])
 	case "serve":
 		return runServe(args[1:])
 	case "seed":
@@ -97,7 +102,206 @@ func runInit(args []string) int {
 		return cli.ExitError
 	}
 	fmt.Fprintf(os.Stderr, "initialized %s (config %s)\n", cfg.DataDir, cfg.ConfigPath())
+
+	// Apply KV schema for the configured driver (sqlite file or MySQL/MariaDB tables).
+	ctx := context.Background()
+	if err := migrateStore(ctx, cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "init: migrate store: %v\n", err)
+		return cli.ExitError
+	}
 	return cli.ExitOK
+}
+
+// runMigrate opens the configured store so pending schema migrations run (idempotent).
+func runMigrate(args []string) int {
+	fs := flag.NewFlagSet("migrate", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	configPath := configFlag(fs)
+	if err := fs.Parse(args); err != nil {
+		return cli.ExitUsage
+	}
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "migrate: load config: %v\n", err)
+		return cli.ExitError
+	}
+
+	ctx := context.Background()
+	if err := migrateStore(ctx, cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "migrate: %v\n", err)
+		return cli.ExitError
+	}
+	return cli.ExitOK
+}
+
+// migrateStore opens the KV backend (Open runs Migrate) and reports driver + schema version.
+func migrateStore(ctx context.Context, cfg *config.Config) error {
+	store, closeStore, err := openStore(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer closeStore()
+
+	version, err := storeSchemaVersion(ctx, store)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "store ready driver=%s schema=%d\n", cfg.StoreDriver(), version)
+	return nil
+}
+
+// storeSchemaVersion reads _beaver_schema_version when the concrete store exposes it.
+func storeSchemaVersion(ctx context.Context, store storage.Store) (int, error) {
+	type versioned interface {
+		SchemaVersion(context.Context) (int, error)
+	}
+	if v, ok := store.(versioned); ok {
+		return v.SchemaVersion(ctx)
+	}
+	return storage.SchemaVersion, nil
+}
+
+// runStore dispatches beaver store export|import.
+func runStore(args []string) int {
+	if len(args) == 0 {
+		storeUsage()
+		return cli.ExitUsage
+	}
+	switch args[0] {
+	case "export":
+		return runStoreExport(args[1:])
+	case "import":
+		return runStoreImport(args[1:])
+	case "help", "-h", "--help":
+		storeUsage()
+		return cli.ExitOK
+	default:
+		fmt.Fprintf(os.Stderr, "unknown store command: %s\n", args[0])
+		storeUsage()
+		return cli.ExitUsage
+	}
+}
+
+func storeUsage() {
+	fmt.Fprintln(os.Stderr, "usage:")
+	fmt.Fprintln(os.Stderr, "  beaver store export [-c path] -o file|-")
+	fmt.Fprintln(os.Stderr, "  beaver store import [-c path] -i file|- [--force]")
+}
+
+// runStoreExport dumps all KV rows (BEAVERKV1) to -o (file or stdout).
+func runStoreExport(args []string) int {
+	fs := flag.NewFlagSet("store export", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	configPath := configFlag(fs)
+	outPath := fs.String("o", "", "output path, or - for stdout")
+	if err := fs.Parse(args); err != nil {
+		return cli.ExitUsage
+	}
+	if strings.TrimSpace(*outPath) == "" {
+		fmt.Fprintln(os.Stderr, "store export: -o is required")
+		storeUsage()
+		return cli.ExitUsage
+	}
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "store export: load config: %v\n", err)
+		return cli.ExitError
+	}
+
+	ctx := context.Background()
+	store, closeStore, err := openStore(ctx, cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "store export: %v\n", err)
+		return cli.ExitError
+	}
+	defer closeStore()
+
+	out, err := openOutput(*outPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "store export: %v\n", err)
+		return cli.ExitError
+	}
+	defer func() {
+		if out != os.Stdout {
+			_ = out.Close()
+		}
+	}()
+
+	n, err := xfer.Export(ctx, store, out)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "store export: %v\n", err)
+		return cli.ExitError
+	}
+	fmt.Fprintf(os.Stderr, "exported %d keys driver=%s\n", n, cfg.StoreDriver())
+	return cli.ExitOK
+}
+
+// runStoreImport loads a BEAVERKV1 dump into the configured store.
+func runStoreImport(args []string) int {
+	fs := flag.NewFlagSet("store import", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	configPath := configFlag(fs)
+	inPath := fs.String("i", "", "input path, or - for stdin")
+	force := fs.Bool("force", false, "upsert into a non-empty store")
+	if err := fs.Parse(args); err != nil {
+		return cli.ExitUsage
+	}
+	if strings.TrimSpace(*inPath) == "" {
+		fmt.Fprintln(os.Stderr, "store import: -i is required")
+		storeUsage()
+		return cli.ExitUsage
+	}
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "store import: load config: %v\n", err)
+		return cli.ExitError
+	}
+
+	ctx := context.Background()
+	store, closeStore, err := openStore(ctx, cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "store import: %v\n", err)
+		return cli.ExitError
+	}
+	defer closeStore()
+
+	in, err := openInput(*inPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "store import: %v\n", err)
+		return cli.ExitError
+	}
+	defer func() {
+		if in != os.Stdin {
+			_ = in.Close()
+		}
+	}()
+
+	n, err := xfer.Import(ctx, store, in, xfer.ImportOptions{Force: *force})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "store import: %v\n", err)
+		return cli.ExitError
+	}
+	fmt.Fprintf(os.Stderr, "imported %d keys driver=%s\n", n, cfg.StoreDriver())
+	return cli.ExitOK
+}
+
+// openOutput returns a writable file or os.Stdout when path is "-".
+func openOutput(path string) (*os.File, error) {
+	if path == "-" {
+		return os.Stdout, nil
+	}
+	return os.Create(path)
+}
+
+// openInput returns a readable file or os.Stdin when path is "-".
+func openInput(path string) (*os.File, error) {
+	if path == "-" {
+		return os.Stdin, nil
+	}
+	return os.Open(path)
 }
 
 func runServe(args []string) int {
@@ -332,11 +536,11 @@ type queueJSON struct {
 }
 
 type queueRcptJSON struct {
-	Address      string `json:"address"`
-	Retry        uint32 `json:"retry"`
-	Status       string `json:"status"`
-	NextDueMS    int64  `json:"next_due_ms"`
-	LastAttemptMS int64 `json:"last_attempt_ms"`
+	Address       string `json:"address"`
+	Retry         uint32 `json:"retry"`
+	Status        string `json:"status"`
+	NextDueMS     int64  `json:"next_due_ms"`
+	LastAttemptMS int64  `json:"last_attempt_ms"`
 }
 
 func queueEntryJSON(e mail.QueueEntry) queueJSON {
@@ -872,7 +1076,7 @@ func openDirectory(ctx context.Context, cfg *config.Config) (*directory.Local, f
 }
 
 func openStore(ctx context.Context, cfg *config.Config) (storage.Store, func(), error) {
-	store, err := sqlite.Open(ctx, cfg.StorePath())
+	store, err := openstore.OpenConfig(ctx, cfg)
 	if err != nil {
 		return nil, nil, fmt.Errorf("open store: %w", err)
 	}
@@ -914,6 +1118,9 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "usage:")
 	fmt.Fprintln(os.Stderr, "  beaver version")
 	fmt.Fprintln(os.Stderr, "  beaver init [-data-dir data]")
+	fmt.Fprintln(os.Stderr, "  beaver migrate [-c path]")
+	fmt.Fprintln(os.Stderr, "  beaver store export [-c path] -o file|-")
+	fmt.Fprintln(os.Stderr, "  beaver store import [-c path] -i file|- [--force]")
 	fmt.Fprintln(os.Stderr, "  beaver serve [-c path]")
 	fmt.Fprintln(os.Stderr, "  beaver seed [-c path]")
 	fmt.Fprintln(os.Stderr, "  beaver auth [-c path] email password")

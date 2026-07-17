@@ -79,6 +79,23 @@ func (b *Batch) Set(subspace byte, suffix, value []byte) error {
 	return nil
 }
 
+// SetRaw queues an upsert using a full wire key (no WithAccount required).
+func (b *Batch) SetRaw(key, value []byte) error {
+	if len(key) < KeyPrefixLen {
+		return ErrKeyTooShort
+	}
+	if err := checkSubspace(key[0]); err != nil {
+		return err
+	}
+	b.ops = append(b.ops, BatchOp{
+		Kind:     OpSet,
+		Subspace: key[0],
+		Key:      append([]byte(nil), key...),
+		Value:    append([]byte(nil), value...),
+	})
+	return nil
+}
+
 // Assert queues a CAS check. expect nil means the key must be absent.
 func (b *Batch) Assert(subspace byte, suffix, expect []byte) error {
 	key, err := b.appendOpKey(subspace, suffix)
@@ -136,6 +153,16 @@ func (b *Batch) appendOpKey(subspace byte, suffix []byte) ([]byte, error) {
 	b.keyBuf = b.keyBuf[:0]
 	b.keyBuf = AppendKey(b.keyBuf, subspace, b.accountID, documentID, collection, tail)
 	return b.keyBuf, nil
+}
+
+// checkSubspace returns ErrUnknownSubspace when sub is not a known table letter.
+func checkSubspace(sub byte) error {
+	for _, s := range Subspaces() {
+		if s == sub {
+			return nil
+		}
+	}
+	return ErrUnknownSubspace
 }
 
 // BatchSuffix builds the suffix head for collection and document_id.

@@ -3,6 +3,7 @@ module github.com/BeaverMail/beaver
 go 1.26
 
 require (
+	github.com/go-sql-driver/mysql v1.9.3
 	github.com/pierrec/lz4/v4 v4.1.27
 	github.com/vmihailenco/msgpack/v5 v5.4.1
 	github.com/zeebo/blake3 v0.2.4
@@ -10,6 +11,8 @@ require (
 	golang.org/x/crypto v0.53.0
 	modernc.org/sqlite v1.53.0
 )
+
+require filippo.io/edwards25519 v1.1.0 // indirect
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect

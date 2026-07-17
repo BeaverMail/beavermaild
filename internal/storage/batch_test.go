@@ -33,3 +33,25 @@ func TestBatchRequiresAccount(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+func TestBatchSetRaw(t *testing.T) {
+	t.Parallel()
+
+	key := storage.AppendKey(nil, storage.SubspaceMail, 1, 2, 3, []byte("x"))
+	batch := storage.NewBatch()
+	if err := batch.SetRaw(key, []byte("v")); err != nil {
+		t.Fatal(err)
+	}
+	ops := batch.Ops()
+	if len(ops) != 1 || string(ops[0].Key) != string(key) || string(ops[0].Value) != "v" {
+		t.Fatalf("ops=%v", ops)
+	}
+	if err := batch.SetRaw([]byte{storage.SubspaceMail}, []byte("v")); err != storage.ErrKeyTooShort {
+		t.Fatalf("got %v want short", err)
+	}
+	bad := storage.AppendKey(nil, 'z', 1, 2, 3, nil)
+	if err := batch.SetRaw(bad, []byte("v")); err != storage.ErrUnknownSubspace {
+		t.Fatalf("got %v want unknown", err)
+	}
+}
+
