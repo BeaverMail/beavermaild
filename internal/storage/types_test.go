@@ -16,7 +16,7 @@ func TestMarshalPersistCoreTypes(t *testing.T) {
 	}{
 		{"tenant", storage.Tenant{ID: 1, Name: "default"}},
 		{"domain", storage.Domain{ID: 1, TenantID: 1, Name: "example.com"}},
-		{"account", storage.Account{ID: 2, DomainID: 1, LocalPart: "alice", Active: true}},
+		{"account", storage.Account{ID: 2, DomainID: 1, TenantID: 1, LocalPart: "alice", Role: "admin", Active: true}},
 		{"mailbox", storage.Mailbox{ID: 3, Name: "INBOX", Role: "inbox", UIDNext: 10, UIDValidity: 99}},
 		{"email", storage.EmailMeta{
 			Version: 1, MailboxID: 3, ThreadID: 4, ReceivedAt: 1710000000,

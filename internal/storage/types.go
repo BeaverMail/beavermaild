@@ -18,7 +18,9 @@ type Domain struct {
 type Account struct {
 	ID        uint32 `msgpack:"id"`
 	DomainID  uint32 `msgpack:"dom"`
+	TenantID  uint32 `msgpack:"tid,omitempty"` // denormalized from domain; 0 = legacy, fill on read
 	LocalPart string `msgpack:"lp"`
+	Role      string `msgpack:"role,omitempty"` // user | admin | tenant_admin; empty = user
 	Active    bool   `msgpack:"act"`
 }
 

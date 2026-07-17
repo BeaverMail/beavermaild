@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/BeaverMail/beaver/internal/storage"
@@ -14,8 +15,10 @@ import (
 type Principal struct {
 	AccountID  uint32
 	DomainID   uint32
+	TenantID   uint32
 	LocalPart  string
 	DomainName string
+	Role       string
 }
 
 // Email returns the full address local@domain.
@@ -52,8 +55,10 @@ func (d *Local) Authenticate(ctx context.Context, email, password string) (Princ
 	return Principal{
 		AccountID:  acc.ID,
 		DomainID:   dom.ID,
+		TenantID:   acc.TenantID,
 		LocalPart:  acc.LocalPart,
 		DomainName: dom.Name,
+		Role:       NormalizeRole(acc.Role),
 	}, nil
 }
 
@@ -66,6 +71,12 @@ func (d *Local) ResolveEmail(ctx context.Context, email string) (storage.Account
 func (d *Local) CreateDomain(ctx context.Context, tenantID uint32, name string) (storage.Domain, error) {
 	name, err := validateDomainName(name)
 	if err != nil {
+		return storage.Domain{}, err
+	}
+	if tenantID == 0 {
+		return storage.Domain{}, fmt.Errorf("directory: tenant_id required")
+	}
+	if err := d.ensureTenant(ctx, tenantRecord(tenantID)); err != nil {
 		return storage.Domain{}, err
 	}
 	if _, err := d.lookupDomainID(ctx, name); err == nil {
@@ -92,15 +103,27 @@ func (d *Local) CreateDomain(ctx context.Context, tenantID uint32, name string) 
 	return dom, nil
 }
 
-// CreateAccount registers an account with password and a default INBOX mailbox.
+// CreateAccount registers an account with password, role user, and default mailboxes.
 func (d *Local) CreateAccount(ctx context.Context, domainID uint32, localPart, password string) (storage.Account, error) {
+	return d.CreateAccountRole(ctx, domainID, localPart, password, RoleUser)
+}
+
+// CreateAccountRole registers an account with an explicit directory role.
+func (d *Local) CreateAccountRole(ctx context.Context, domainID uint32, localPart, password, role string) (storage.Account, error) {
 	localPart = normalizeLocalPart(localPart)
 	if localPart == "" {
 		return storage.Account{}, fmt.Errorf("directory: empty local part")
 	}
+	role = NormalizeRole(role)
+	if err := ValidateRole(role); err != nil {
+		return storage.Account{}, err
+	}
 	dom, err := d.getDomain(ctx, domainID)
 	if err != nil {
 		return storage.Account{}, err
+	}
+	if dom.TenantID == 0 {
+		return storage.Account{}, fmt.Errorf("directory: domain %d missing tenant_id", domainID)
 	}
 	email := localPart + "@" + dom.Name
 	if _, err := d.lookupAccountID(ctx, email); err == nil {
@@ -118,7 +141,14 @@ func (d *Local) CreateAccount(ctx context.Context, domainID uint32, localPart, p
 	if err != nil {
 		return storage.Account{}, err
 	}
-	acc := storage.Account{ID: id, DomainID: domainID, LocalPart: localPart, Active: true}
+	acc := storage.Account{
+		ID:        id,
+		DomainID:  domainID,
+		TenantID:  dom.TenantID,
+		LocalPart: localPart,
+		Role:      role,
+		Active:    true,
+	}
 	cred := Credential{Algorithm: passwordAlgorithm, PasswordHash: hash}
 	mailboxes := []storage.Mailbox{
 		{ID: 1, Name: "INBOX", Role: "inbox", UIDNext: 1, UIDValidity: 1},
@@ -196,7 +226,79 @@ func (d *Local) getAccount(ctx context.Context, id uint32) (storage.Account, err
 	if err := d.getRecord(ctx, accountKey(id), &acc); err != nil {
 		return storage.Account{}, err
 	}
+	return d.normalizeAccount(ctx, acc)
+}
+
+// normalizeAccount fills legacy empty role/tenant from domain defaults.
+func (d *Local) normalizeAccount(ctx context.Context, acc storage.Account) (storage.Account, error) {
+	acc.Role = NormalizeRole(acc.Role)
+	if acc.TenantID == 0 && acc.DomainID != 0 {
+		dom, err := d.getDomain(ctx, acc.DomainID)
+		if err != nil {
+			return storage.Account{}, err
+		}
+		acc.TenantID = dom.TenantID
+	}
 	return acc, nil
+}
+
+// GetTenant returns a tenant by id.
+func (d *Local) GetTenant(ctx context.Context, id uint32) (storage.Tenant, error) {
+	if id == 0 {
+		return storage.Tenant{}, fmt.Errorf("directory: tenant_id required")
+	}
+	var tenant storage.Tenant
+	if err := d.getRecord(ctx, tenantKey(id), &tenant); err != nil {
+		return storage.Tenant{}, err
+	}
+	return tenant, nil
+}
+
+// ListTenants returns all tenants sorted by id.
+func (d *Local) ListTenants(ctx context.Context) ([]storage.Tenant, error) {
+	from := storage.AppendKeyPrefix(nil, storage.SubspaceAccount, systemAccountID, 0, colTenant, 6)
+	to := storage.AppendKey(nil, storage.SubspaceAccount, systemAccountID, ^uint32(0), colTenant, nil)
+	var out []storage.Tenant
+	err := d.store.Iterate(ctx, from, to, func(k, v []byte) error {
+		var tenant storage.Tenant
+		if err := storage.UnmarshalPersist(v, &tenant); err != nil {
+			return err
+		}
+		out = append(out, tenant)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	slices.SortFunc(out, func(a, b storage.Tenant) int {
+		switch {
+		case a.ID < b.ID:
+			return -1
+		case a.ID > b.ID:
+			return 1
+		default:
+			return 0
+		}
+	})
+	return out, nil
+}
+
+// SetAccountRole updates the directory role on an existing account.
+func (d *Local) SetAccountRole(ctx context.Context, accountID uint32, role string) error {
+	role = NormalizeRole(role)
+	if err := ValidateRole(role); err != nil {
+		return err
+	}
+	acc, err := d.getAccount(ctx, accountID)
+	if err != nil {
+		return err
+	}
+	acc.Role = role
+	batch := storage.NewBatch().WithAccount(acc.ID)
+	if err := d.putAccount(batch, acc); err != nil {
+		return err
+	}
+	return d.store.Commit(ctx, batch)
 }
 
 func (d *Local) getDomain(ctx context.Context, id uint32) (storage.Domain, error) {

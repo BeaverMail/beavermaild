@@ -739,6 +739,7 @@ func runAccountCreate(args []string) int {
 	domainName := fs.String("domain", "", "mail domain name")
 	localPart := fs.String("local", "", "mailbox local part")
 	password := fs.String("password", "", "account password")
+	role := fs.String("role", directory.RoleUser, "directory role: user, admin, or tenant_admin")
 	if err := fs.Parse(args); err != nil {
 		return cli.ExitUsage
 	}
@@ -770,7 +771,7 @@ func runAccountCreate(args []string) int {
 		fmt.Fprintf(os.Stderr, "account create: %v\n", err)
 		return cli.ExitError
 	}
-	acc, err := dir.CreateAccount(ctx, dom.ID, *localPart, *password)
+	acc, err := dir.CreateAccountRole(ctx, dom.ID, *localPart, *password, *role)
 	if err != nil {
 		if errors.Is(err, directory.ErrExists) {
 			fmt.Fprintf(os.Stderr, "account create: account already exists\n")
@@ -780,7 +781,8 @@ func runAccountCreate(args []string) int {
 		return cli.ExitError
 	}
 	email := acc.LocalPart + "@" + dom.Name
-	fmt.Fprintf(os.Stderr, "account_id=%d email=%s domain_id=%d\n", acc.ID, email, dom.ID)
+	fmt.Fprintf(os.Stderr, "account_id=%d email=%s domain_id=%d tenant_id=%d role=%s\n",
+		acc.ID, email, dom.ID, acc.TenantID, acc.Role)
 	return cli.ExitOK
 }
 
@@ -835,6 +837,8 @@ func runAccountInfo(args []string) int {
 			AccountID: acc.ID,
 			Email:     fullEmail,
 			DomainID:  dom.ID,
+			TenantID:  acc.TenantID,
+			Role:      directory.NormalizeRole(acc.Role),
 			Folders:   make([]accountFolderJSON, len(tree)),
 		}
 		for i, line := range tree {
@@ -853,7 +857,8 @@ func runAccountInfo(args []string) int {
 		return cli.ExitOK
 	}
 
-	fmt.Fprintf(os.Stderr, "account_id=%d email=%s domain_id=%d\n", acc.ID, fullEmail, dom.ID)
+	fmt.Fprintf(os.Stderr, "account_id=%d email=%s domain_id=%d tenant_id=%d role=%s\n",
+		acc.ID, fullEmail, dom.ID, acc.TenantID, directory.NormalizeRole(acc.Role))
 	w := tabwriter.NewWriter(os.Stderr, 0, 0, 2, ' ', 0)
 	for _, line := range tree {
 		indent := strings.Repeat("  ", line.Depth)
@@ -981,6 +986,8 @@ type accountInfoJSON struct {
 	AccountID uint32              `json:"account_id"`
 	Email     string              `json:"email"`
 	DomainID  uint32              `json:"domain_id"`
+	TenantID  uint32              `json:"tenant_id"`
+	Role      string              `json:"role"`
 	Folders   []accountFolderJSON `json:"folders"`
 }
 
@@ -1099,7 +1106,7 @@ func accountUsage() {
 }
 
 func accountCreateUsage() {
-	fmt.Fprintln(os.Stderr, "  beaver account create [-c path] -domain name -local part -password pw")
+	fmt.Fprintln(os.Stderr, "  beaver account create [-c path] -domain name -local part -password pw [-role user|admin|tenant_admin]")
 }
 
 func accountListUsage() {
@@ -1129,7 +1136,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  beaver domain add [-c path] <name>")
 	fmt.Fprintln(os.Stderr, "  beaver domain list [-c path] [-json]")
 	fmt.Fprintln(os.Stderr, "  beaver domain delete [-c path] <name>")
-	fmt.Fprintln(os.Stderr, "  beaver account create [-c path] -domain name -local part -password pw")
+	fmt.Fprintln(os.Stderr, "  beaver account create [-c path] -domain name -local part -password pw [-role user|admin|tenant_admin]")
 	fmt.Fprintln(os.Stderr, "  beaver account list [-c path] -domain name [-json]")
 	fmt.Fprintln(os.Stderr, "  beaver account info [-c path] -email addr [-json]")
 	fmt.Fprintln(os.Stderr, "  beaver account delete [-c path] -email addr")

@@ -43,7 +43,7 @@ func SeedDev(ctx context.Context, d *Local) (storage.Account, error) {
 		return storage.Account{}, err
 	}
 
-	return d.CreateAccount(ctx, domID, seedLocalPart, seedPassword)
+	return d.CreateAccountRole(ctx, domID, seedLocalPart, seedPassword, RoleAdmin)
 }
 
 func (d *Local) ensureTenant(ctx context.Context, tenant storage.Tenant) error {
