@@ -124,9 +124,18 @@ beaver store import -c .data/config.json -i /tmp/kv.beaverkv
 
 ## Tests
 
-MySQL/MariaDB store tests skip unless a DSN is set:
+### Unit (package)
 
 ```bash
 export BEAVER_TEST_MYSQL_DSN='beaver:secret@tcp(127.0.0.1:3306)/beavermail_test?parseTime=true'
 go test ./internal/storage/mysql/ ./internal/storage/xfer/ -count=1
+```
+
+### E2E smoke (submission + IMAP + restart)
+
+Skips when `BEAVER_TEST_MYSQL_DSN` is unset. Wipes Beaver KV tables in that database, then delivers mail and checks persistence after `serve` restart.
+
+```bash
+export BEAVER_TEST_MYSQL_DSN='beaver:secret@tcp(127.0.0.1:3306)/beaver_e2e?parseTime=true'
+./tests/integration/mysql_smoke.sh
 ```

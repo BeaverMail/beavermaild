@@ -18,7 +18,7 @@ import (
 	"github.com/BeaverMail/beaver/internal/smtp"
 	"github.com/BeaverMail/beaver/internal/storage"
 	"github.com/BeaverMail/beaver/internal/storage/blob"
-	"github.com/BeaverMail/beaver/internal/storage/sqlite"
+	"github.com/BeaverMail/beaver/internal/storage/openstore"
 	"github.com/BeaverMail/beaver/internal/tlsload"
 )
 
@@ -38,7 +38,7 @@ type App struct {
 
 // Open connects storage using cfg and returns an App.
 func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, error) {
-	store, err := sqlite.Open(ctx, cfg.StorePath())
+	store, err := openstore.OpenConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("open store: %w", err)
 	}
@@ -194,9 +194,14 @@ func (a *App) Run(ctx context.Context) error {
 	go mail.NewWorker(a.log, a.queue, a.inbox, a.dir, newRemoteDeliverer(a.cfg), signer, policy).Run(ctx)
 
 	_, _, tlsOn := a.cfg.TLSPair()
+	storeInfo := a.cfg.StorePath()
+	if a.cfg.StoreDriver() == config.StoreDriverMySQL {
+		storeInfo = "mysql"
+	}
 	a.log.Info("beaver ready",
 		"data_dir", a.cfg.DataDir,
-		"store", a.cfg.StorePath(),
+		"store_driver", a.cfg.StoreDriver(),
+		"store", storeInfo,
 		"blobs", a.cfg.BlobDir(),
 		"smtp", a.cfg.SMTPListen(),
 		"smtp_submission", a.cfg.SMTPSubmissionListen(),
