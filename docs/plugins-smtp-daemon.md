@@ -2,6 +2,8 @@
 
 Semantic details for antispam and mail-auth: [`.specs/antispam.md`](../.specs/antispam.md).
 
+Operator settings (greylist, ASN lookup, `mail_auth`, plugin `config.json`): [antispam-ops.md](antispam-ops.md).
+
 Persistent plugins with `smtp` capability are started by `beaver serve`. The **same executable** may also expose `cli` and be spawned on demand for operator commands; see [plugins.md](plugins.md) (Capabilities).
 
 **Discovery:** host probes each `beaver-plugin-*` binary (`BEAVER_PLUGIN_MODE=metadata`) and reads `Descriptor.capabilities`. Plugins with `smtp` are spawned as daemons under `beaver serve`. No separate manifest file.
@@ -196,7 +198,19 @@ Plugins that need more time should document recommended `timeout_ms` / host conf
 | Read/analyze `body_path` | Plugin |
 | Never open the host mail store / deliver mail | Plugin |
 
-## Checklist (v2.1)
+## Related host config (not plugin JSON)
+
+These run in the SMTP core and feed the wire; full examples in [antispam-ops.md](antispam-ops.md).
+
+| Host key | Effect on filter wire |
+|----------|------------------------|
+| `mail_auth` | `auth.*` (SPF/DKIM/DMARC/ARC) at helo+ / eom |
+| `smtp.asn_lookup` | `asn`, `country` at connect+ (default off; cached DNS) |
+| `smtp.greylist` | Host RCPT `452` before filter `rcpt` (default off; not a plugin field) |
+
+Plugin policy remains under `<data_dir>/antispam/config.json`.
+
+## Checklist (v2.2)
 
 | Item | Spec | Implemented |
 |------|------|-------------|
@@ -206,4 +220,5 @@ Plugins that need more time should document recommended `timeout_ms` / host conf
 | Multi-phase hooks (connect/helo/mail/rcpt/data/eom) | yes | yes |
 | Wire into `beaver serve` and SMTP DATA path | yes | yes |
 | In-process plugin restart on crash | yes | yes |
+| v2.2 session fields (`listener`, `tls`, `auth`, `asn`, `iprev_*`, …) | yes | yes |
 | `web` capability reverse proxy | draft | no |
