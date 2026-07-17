@@ -58,6 +58,7 @@
     "spam": 5.0
   },
   "tag_actions": {
-    "IP_BLOCKED": "reject"
+    "IP_BLOCKED": "reject",
+    "GTUBE_TEST": "reject"
   }
 }
