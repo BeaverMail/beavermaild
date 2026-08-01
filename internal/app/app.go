@@ -10,6 +10,7 @@ import (
 
 	"github.com/BeaverMail/beaver/internal/config"
 	"github.com/BeaverMail/beaver/internal/directory"
+	"github.com/BeaverMail/beaver/internal/httpapi"
 	"github.com/BeaverMail/beaver/internal/imap"
 	"github.com/BeaverMail/beaver/internal/mail"
 	"github.com/BeaverMail/beaver/internal/mailauth"
@@ -33,6 +34,7 @@ type App struct {
 	queue  *mail.Queue
 	smtp   *smtp.Server
 	imap   *imap.Server
+	http   *httpapi.Server
 	daemon *daemon.Manager
 }
 
@@ -86,6 +88,22 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 		CacheMaxEntries: asnCacheMax,
 	})
 
+	var httpSrv *httpapi.Server
+	if cfg.HTTPEnabled() {
+		httpSrv, err = httpapi.New(httpapi.Options{
+			Listen:   cfg.HTTPListen(),
+			Dir:      dir,
+			Log:      log,
+			AuthKey:  cfg.Secrets.AuthKey,
+			Certs:    certs,
+			AuthGate: authGate,
+		})
+		if err != nil {
+			_ = store.Close()
+			return nil, fmt.Errorf("http api: %w", err)
+		}
+	}
+
 	return &App{
 		log:   log,
 		cfg:   cfg,
@@ -113,6 +131,7 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 			TLSRequired: tlsOpts.required,
 			AuthGate:    authGate,
 		}),
+		http: httpSrv,
 	}, nil
 }
 
@@ -165,7 +184,7 @@ func (a *App) Run(ctx context.Context) error {
 		RunDelay:       qt.RunDelay,
 	}
 
-	errCh := make(chan error, 2)
+	errCh := make(chan error, 3)
 
 	dm := daemon.NewManager(a.log, daemon.Config{
 		SocketDir:      a.cfg.PluginsSMTPSocketDir(),
@@ -187,6 +206,9 @@ func (a *App) Run(ctx context.Context) error {
 
 	go func() { errCh <- a.smtp.Serve(ctx) }()
 	go func() { errCh <- a.imap.Serve(ctx) }()
+	if a.http != nil {
+		go func() { errCh <- a.http.Serve(ctx) }()
+	}
 	signer, err := a.cfg.NewDKIMSigner()
 	if err != nil {
 		return fmt.Errorf("dkim sign: %w", err)
@@ -209,6 +231,8 @@ func (a *App) Run(ctx context.Context) error {
 		"tls_acme_hosts", a.cfg.ACMEHosts(),
 		"imap", a.cfg.IMAPListen(),
 		"imap_tls", a.cfg.IMAPTLSListen(),
+		"http", a.cfg.HTTPListen(),
+		"http_enabled", a.cfg.HTTPEnabled(),
 		"smtp_relay", a.cfg.SMTPRelay(),
 		"tls", tlsOn,
 	)

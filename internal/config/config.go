@@ -36,6 +36,7 @@ type Config struct {
 	Store    StoreConfig    `json:"store"`
 	Secrets  Secrets        `json:"secrets"`
 	TLS      TLSConfig      `json:"tls"`
+	HTTP     HTTPConfig     `json:"http"`
 	SMTP     SMTPConfig     `json:"smtp"`
 	IMAP     IMAPConfig     `json:"imap"`
 	Auth     AuthConfig     `json:"auth"`
@@ -43,6 +44,12 @@ type Config struct {
 	Quota    QuotaConfig    `json:"quota"`
 	Plugins  PluginsConfig  `json:"plugins"`
 	MailAuth MailAuthConfig `json:"mail_auth"`
+}
+
+// HTTPConfig enables the in-process admin/API listener (off by default).
+type HTTPConfig struct {
+	Enabled bool   `json:"enabled"`
+	Listen  string `json:"listen"` // e.g. 127.0.0.1:8080; non-loopback requires TLS certs
 }
 
 // StoreDriverSQLite is the default embedded KV backend.
@@ -266,6 +273,12 @@ func (c *Config) ApplyEnv() {
 	if v := os.Getenv("BEAVER_STORE_DSN"); v != "" {
 		c.Store.DSN = v
 	}
+	if v := os.Getenv("BEAVER_HTTP_ENABLED"); v == "1" || strings.EqualFold(v, "true") {
+		c.HTTP.Enabled = true
+	}
+	if v := os.Getenv("BEAVER_HTTP_LISTEN"); v != "" {
+		c.HTTP.Listen = v
+	}
 }
 
 // Validate checks required fields and paths.
@@ -306,6 +319,23 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("config: plugins.smtp.timeout_policy must be accept or tempfail")
 	}
 	c.normalizeMailAuth()
+	if err := c.validateHTTP(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateHTTP checks listen/auth_key when the HTTP API is enabled.
+func (c *Config) validateHTTP() error {
+	if !c.HTTP.Enabled {
+		return nil
+	}
+	if strings.TrimSpace(c.HTTP.Listen) == "" {
+		c.HTTP.Listen = "127.0.0.1:8080"
+	}
+	if strings.TrimSpace(c.Secrets.AuthKey) == "" {
+		return errors.New("config: secrets.auth_key is required when http.enabled")
+	}
 	return nil
 }
 
@@ -456,6 +486,25 @@ func (c *Config) IMAPTLSListen() string {
 // SMTPSubmissionTLSListen returns the implicit-TLS submission bind address (may be empty).
 func (c *Config) SMTPSubmissionTLSListen() string {
 	return strings.TrimSpace(c.SMTP.SubmissionTLSListen)
+}
+
+// HTTPEnabled reports whether the admin/API HTTP listener should start.
+func (c *Config) HTTPEnabled() bool {
+	return c != nil && c.HTTP.Enabled
+}
+
+// HTTPListen returns the HTTP API bind address (default loopback when enabled).
+func (c *Config) HTTPListen() string {
+	if c == nil {
+		return ""
+	}
+	if listen := strings.TrimSpace(c.HTTP.Listen); listen != "" {
+		return listen
+	}
+	if c.HTTP.Enabled {
+		return "127.0.0.1:8080"
+	}
+	return ""
 }
 
 // ACMEHosts returns trimmed ACME hostnames (empty if ACME disabled).

@@ -90,6 +90,22 @@ func TestACMECacheDirDefault(t *testing.T) {
 	}
 }
 
+func TestHTTPEnabledRequiresAuthKey(t *testing.T) {
+	t.Parallel()
+	cfg := config.Default(t.TempDir())
+	cfg.HTTP.Enabled = true
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected auth_key required")
+	}
+	cfg.Secrets.AuthKey = "0123456789abcdef0123456789abcdef"
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.HTTPListen() != "127.0.0.1:8080" {
+		t.Fatalf("listen %q", cfg.HTTPListen())
+	}
+}
+
 func TestSMTPRelayEnv(t *testing.T) {
 	cfg := config.Default(t.TempDir())
 	t.Setenv("BEAVER_SMTP_RELAY", "relay.test:587")
