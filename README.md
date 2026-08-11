@@ -11,7 +11,7 @@ Complete mail and collaboration server in Go. One deploy for SMTP, IMAP, POP3, J
 Default config path is `/etc/beavermail/config.json`. For local development, point at the tree created by `init`:
 
 ```bash
-go build -o beaver ./cmd/beaver
+make beaver          # embeds admin UI (needs Node)
 ./beaver version
 ./beaver init
 export BEAVER_CONFIG=data/config.json

@@ -4,6 +4,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"path/filepath"
 	"time"
@@ -21,6 +22,7 @@ import (
 	"github.com/BeaverMail/beaver/internal/storage/blob"
 	"github.com/BeaverMail/beaver/internal/storage/openstore"
 	"github.com/BeaverMail/beaver/internal/tlsload"
+	"github.com/BeaverMail/beaver/internal/webui"
 )
 
 // App holds runtime resources opened by beaver serve.
@@ -90,6 +92,10 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 
 	var httpSrv *httpapi.Server
 	if cfg.HTTPEnabled() {
+		var uiFS fs.FS
+		if assets, ok := webui.Assets(); ok {
+			uiFS = assets
+		}
 		httpSrv, err = httpapi.New(httpapi.Options{
 			Listen:   cfg.HTTPListen(),
 			Dir:      dir,
@@ -97,6 +103,7 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 			AuthKey:  cfg.Secrets.AuthKey,
 			Certs:    certs,
 			AuthGate: authGate,
+			UI:       uiFS,
 		})
 		if err != nil {
 			_ = store.Close()
@@ -233,6 +240,7 @@ func (a *App) Run(ctx context.Context) error {
 		"imap_tls", a.cfg.IMAPTLSListen(),
 		"http", a.cfg.HTTPListen(),
 		"http_enabled", a.cfg.HTTPEnabled(),
+		"web_ui", webui.Enabled(),
 		"smtp_relay", a.cfg.SMTPRelay(),
 		"tls", tlsOn,
 	)

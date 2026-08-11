@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -31,6 +32,8 @@ type Options struct {
 	AuthKey  string
 	Certs    *tlsload.Certs
 	AuthGate security.AuthGate
+	// UI is the embedded admin SPA (nil when not attached).
+	UI fs.FS
 }
 
 // Server is the optional admin/API HTTP listener.
@@ -42,6 +45,7 @@ type Server struct {
 	certs    *tlsload.Certs
 	useTLS   bool
 	authGate security.AuthGate
+	ui       fs.FS
 	mux      *http.ServeMux
 }
 
@@ -78,6 +82,7 @@ func New(opts Options) (*Server, error) {
 		certs:    opts.Certs,
 		useTLS:   useTLS,
 		authGate: gate,
+		ui:       opts.UI,
 		mux:      http.NewServeMux(),
 	}
 	s.routes()
@@ -108,7 +113,7 @@ func (s *Server) Serve(ctx context.Context) error {
 		_ = srv.Shutdown(shutdownCtx)
 	}()
 
-	s.log.Info("http api listening", "listen", s.listen, "tls", s.useTLS)
+	s.log.Info("http api listening", "listen", s.listen, "tls", s.useTLS, "web_ui", s.ui != nil)
 	err = srv.Serve(ln)
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil

@@ -726,6 +726,8 @@ func runAccount(args []string) int {
 		return runAccountList(args[1:])
 	case "delete":
 		return runAccountDelete(args[1:])
+	case "set-role":
+		return runAccountSetRole(args[1:])
 	default:
 		accountUsage()
 		return cli.ExitUsage
@@ -1103,6 +1105,7 @@ func accountUsage() {
 	accountListUsage()
 	accountInfoUsage()
 	accountDeleteUsage()
+	accountSetRoleUsage()
 }
 
 func accountCreateUsage() {
@@ -1119,6 +1122,56 @@ func accountInfoUsage() {
 
 func accountDeleteUsage() {
 	fmt.Fprintln(os.Stderr, "  beaver account delete [-c path] -email addr")
+}
+
+func accountSetRoleUsage() {
+	fmt.Fprintln(os.Stderr, "  beaver account set-role [-c path] -email addr -role user|admin|tenant_admin")
+}
+
+func runAccountSetRole(args []string) int {
+	fs := flag.NewFlagSet("account set-role", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	configPath := configFlag(fs)
+	email := fs.String("email", "", "account email address")
+	role := fs.String("role", "", "directory role: user, admin, or tenant_admin")
+	if err := fs.Parse(args); err != nil {
+		return cli.ExitUsage
+	}
+	if len(fs.Args()) != 0 || *email == "" || *role == "" {
+		accountSetRoleUsage()
+		return cli.ExitUsage
+	}
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "account set-role: load config: %v\n", err)
+		return cli.ExitError
+	}
+
+	ctx := context.Background()
+	dir, closeStore, err := openDirectory(ctx, cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "account set-role: %v\n", err)
+		return cli.ExitError
+	}
+	defer closeStore()
+
+	acc, dom, err := dir.ResolveEmail(ctx, *email)
+	if err != nil {
+		if errors.Is(err, directory.ErrNotFound) {
+			fmt.Fprintf(os.Stderr, "account set-role: account not found\n")
+			return cli.ExitError
+		}
+		fmt.Fprintf(os.Stderr, "account set-role: %v\n", err)
+		return cli.ExitError
+	}
+	if err := dir.SetAccountRole(ctx, acc.ID, *role); err != nil {
+		fmt.Fprintf(os.Stderr, "account set-role: %v\n", err)
+		return cli.ExitError
+	}
+	fmt.Fprintf(os.Stderr, "account_id=%d email=%s@%s role=%s\n",
+		acc.ID, acc.LocalPart, dom.Name, directory.NormalizeRole(*role))
+	return cli.ExitOK
 }
 
 func usage() {
@@ -1139,6 +1192,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  beaver account create [-c path] -domain name -local part -password pw [-role user|admin|tenant_admin]")
 	fmt.Fprintln(os.Stderr, "  beaver account list [-c path] -domain name [-json]")
 	fmt.Fprintln(os.Stderr, "  beaver account info [-c path] -email addr [-json]")
+	fmt.Fprintln(os.Stderr, "  beaver account set-role [-c path] -email addr -role user|admin|tenant_admin")
 	fmt.Fprintln(os.Stderr, "  beaver account delete [-c path] -email addr")
 	fmt.Fprintln(os.Stderr, "  beaver plugins list [-c path]")
 	printPluginUsageLines()

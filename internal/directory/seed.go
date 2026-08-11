@@ -38,7 +38,18 @@ func SeedDev(ctx context.Context, d *Local) (storage.Account, error) {
 
 	email := seedLocalPart + "@" + seedDomainName
 	if id, err := d.lookupAccountID(ctx, email); err == nil {
-		return d.getAccount(ctx, id)
+		acc, err := d.getAccount(ctx, id)
+		if err != nil {
+			return storage.Account{}, err
+		}
+		// Ensure the bootstrap account stays instance admin (pre-tenancy seeds were role user).
+		if NormalizeRole(acc.Role) != RoleAdmin {
+			if err := d.SetAccountRole(ctx, acc.ID, RoleAdmin); err != nil {
+				return storage.Account{}, err
+			}
+			return d.getAccount(ctx, acc.ID)
+		}
+		return acc, nil
 	} else if !errors.Is(err, ErrNotFound) {
 		return storage.Account{}, err
 	}

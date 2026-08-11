@@ -1,8 +1,10 @@
 PLUGINS_DIR ?= .data/plugins
+WEB_DIST := internal/webui/dist
 
-.PHONY: beaver beaver-plugin-antispam plugins test integration
+.PHONY: beaver beaver-plugin-antispam plugins test integration web-dev web-build
 
-beaver:
+# Mail stack + embedded admin UI (needs Node for web-build).
+beaver: web-build
 	go build -o beaver ./cmd/beaver
 
 plugins: beaver-plugin-antispam
@@ -19,3 +21,11 @@ integration:
 		echo "== $$s =="; \
 		bash "$$s" || exit 1; \
 	done
+
+web-dev:
+	cd web && npm run dev
+
+# Builds SvelteKit into internal/webui/dist for go:embed.
+web-build:
+	cd web && npm run build
+	@test -f $(WEB_DIST)/index.html || (echo "web-build: missing $(WEB_DIST)/index.html" >&2; exit 1)

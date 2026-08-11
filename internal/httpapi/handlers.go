@@ -18,6 +18,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET "+apiPrefix+"/tenants", s.requireAuth(s.handleListTenants))
 	s.mux.HandleFunc("GET "+apiPrefix+"/domains", s.requireAuth(s.handleListDomains))
 	s.mux.HandleFunc("GET "+apiPrefix+"/domains/{domain}/accounts", s.requireAuth(s.handleListAccounts))
+	if s.ui != nil {
+		s.mux.Handle("/", newSPAHandler(s.ui))
+	}
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {

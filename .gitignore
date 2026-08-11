@@ -14,11 +14,20 @@ vendor/
 run.sh
 *.tgz
 
+# Admin UI (SvelteKit)
+web/node_modules/
+web/build/
+web/.svelte-kit/
+internal/webui/dist/*
+!internal/webui/dist/index.html
+
 # Editor / tooling
 .*
 !.gitignore
 !.gitattributes
 !.github
+!web/.gitignore
+!web/.npmrc
 .specs
 .agents
 TODO.md

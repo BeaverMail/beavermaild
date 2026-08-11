@@ -85,6 +85,29 @@ func TestSeedDevIdempotent(t *testing.T) {
 	if p.LocalPart != "alice" {
 		t.Fatalf("principal %+v", p)
 	}
+	if p.Role != directory.RoleAdmin {
+		t.Fatalf("seed role %q want admin", p.Role)
+	}
+}
+
+func TestSeedDevPromotesLegacyUserToAdmin(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	d := openDir(t)
+	dom, _, err := d.EnsureDomain(ctx, directory.DefaultTenantID, "localhost")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.CreateAccount(ctx, dom.ID, "alice", directory.SeedPassword()); err != nil {
+		t.Fatal(err)
+	}
+	acc, err := directory.SeedDev(ctx, d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if directory.NormalizeRole(acc.Role) != directory.RoleAdmin {
+		t.Fatalf("role %q", acc.Role)
+	}
 }
 
 func openDir(t *testing.T) *directory.Local {
