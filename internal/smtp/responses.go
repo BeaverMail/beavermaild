@@ -30,6 +30,7 @@ const (
 	replyParamNotSupported   = "555 5.5.4 Extension parameter not supported"
 	replyLocalError          = "451 4.3.0 Local error in processing"
 	replyOutboundUnavailable = "451 4.3.0 Outbound delivery unavailable"
+	replySendRateLimited     = "452 4.7.0 Message rate limit exceeded, try again later"
 	replyFilterReject        = "550 5.7.1 Message rejected"
 	replyFilterTempfail      = "451 4.7.0 Message temporarily rejected"
 	replyConnectionRejected  = "554 5.7.1 Connection refused"

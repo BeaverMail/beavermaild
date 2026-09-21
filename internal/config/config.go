@@ -106,20 +106,28 @@ type TLSConfig struct {
 
 // SMTPConfig holds inbound SMTP listener settings.
 type SMTPConfig struct {
-	Listen                  string          `json:"listen"`
-	SubmissionListen        string          `json:"submission_listen"`
-	SubmissionTLSListen     string          `json:"submission_tls_listen"`
-	Relay                   string          `json:"relay"`
-	RelayStartTLS           bool            `json:"relay_starttls"`
-	RelayUser               string          `json:"relay_user"`
-	RelayPassword           string          `json:"relay_password"`
-	OutboundTLSInsecureSkip bool            `json:"outbound_tls_insecure_skip_verify"` // dev/self-signed relay or MX; default verify
-	MTASTS                  MTASTSConfig    `json:"mta_sts"`
-	DKIMSign                DKIMSignConfig  `json:"dkim_sign"`
-	Greylist                GreylistConfig  `json:"greylist"`
-	ASNLookup               ASNLookupConfig `json:"asn_lookup"`
-	MaxMessageBytes         int             `json:"max_message_bytes"`
-	VRFYEnabled             bool            `json:"vrfy_enabled"` // off by default (RFC 5321: user enumeration risk)
+	Listen                  string                    `json:"listen"`
+	SubmissionListen        string                    `json:"submission_listen"`
+	SubmissionTLSListen     string                    `json:"submission_tls_listen"`
+	Relay                   string                    `json:"relay"`
+	RelayStartTLS           bool                      `json:"relay_starttls"`
+	RelayUser               string                    `json:"relay_user"`
+	RelayPassword           string                    `json:"relay_password"`
+	OutboundTLSInsecureSkip bool                      `json:"outbound_tls_insecure_skip_verify"` // dev/self-signed relay or MX; default verify
+	MTASTS                  MTASTSConfig              `json:"mta_sts"`
+	DKIMSign                DKIMSignConfig            `json:"dkim_sign"`
+	Greylist                GreylistConfig            `json:"greylist"`
+	ASNLookup               ASNLookupConfig           `json:"asn_lookup"`
+	MaxMessageBytes         int                       `json:"max_message_bytes"`
+	VRFYEnabled             bool                      `json:"vrfy_enabled"` // off by default (RFC 5321: user enumeration risk)
+	SubmissionRateLimit     SubmissionRateLimitConfig `json:"submission_rate_limit"`
+}
+
+// SubmissionRateLimitConfig limits accepted messages per authenticated principal.
+type SubmissionRateLimitConfig struct {
+	Disable     bool   `json:"disable"`      // default off = rate limit enabled
+	MaxMessages int    `json:"max_messages"` // default 200
+	Window      string `json:"window"`       // default 1h
 }
 
 // GreylistConfig controls persistent inbound SMTP greylisting.
@@ -260,6 +268,9 @@ func (c *Config) ApplyEnv() {
 	}
 	if v := os.Getenv("BEAVER_AUTH_RATE_LIMIT_DISABLE"); v == "1" || strings.EqualFold(v, "true") {
 		c.Auth.RateLimit.Disable = true
+	}
+	if v := os.Getenv("BEAVER_SMTP_SUBMISSION_RATE_LIMIT_DISABLE"); v == "1" || strings.EqualFold(v, "true") {
+		c.SMTP.SubmissionRateLimit.Disable = true
 	}
 	if v := os.Getenv("BEAVER_SMTP_MTA_STS_DISABLE"); v == "1" || strings.EqualFold(v, "true") {
 		c.SMTP.MTASTS.Disable = true
@@ -653,6 +664,24 @@ func (c *Config) NewAuthGate() security.AuthGate {
 		}
 	}
 	return security.NewRateLimitGate(cfg)
+}
+
+// NewSendGate builds the process-wide submission message rate limit gate from config.
+func (c *Config) NewSendGate() security.SendGate {
+	if c.SMTP.SubmissionRateLimit.Disable {
+		return security.NopSendGate{}
+	}
+	cfg := security.DefaultSendLimitConfig()
+	if n := c.SMTP.SubmissionRateLimit.MaxMessages; n > 0 {
+		cfg.MaxMessages = n
+	}
+	if s := strings.TrimSpace(c.SMTP.SubmissionRateLimit.Window); s != "" {
+		d, err := ParseDuration(s)
+		if err == nil && d > 0 {
+			cfg.Window = d
+		}
+	}
+	return security.NewSendLimitGate(cfg)
 }
 
 // NewMTASTSResolver returns the outbound MTA-STS resolver, or nil when disabled.

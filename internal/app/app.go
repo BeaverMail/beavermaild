@@ -62,6 +62,7 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 	}
 	tlsOpts := tlsOptions(cfg, certs)
 	authGate := cfg.NewAuthGate()
+	sendGate := cfg.NewSendGate()
 	var mailAuth *mailauth.Verifier
 	if cfg.MailAuth.Enabled {
 		mailAuth = mailauth.New(mailauth.Config{
@@ -133,6 +134,7 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 			AuthGate:        authGate,
 			Greylist:        greylist,
 			ASNLookup:       asnLookup,
+			SendGate:        sendGate,
 		}),
 		imap: imap.NewServer(log, cfg.IMAPListen(), dir, inbox, imap.Options{
 			Certs:       certs,

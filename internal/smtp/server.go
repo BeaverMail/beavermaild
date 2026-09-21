@@ -25,6 +25,7 @@ type Options struct {
 	FilterTimeoutMs int
 	MailAuth        *mailauth.Verifier
 	AuthGate        security.AuthGate
+	SendGate        security.SendGate
 	Greylist        *Greylist
 	ASNLookup       *ASNLookup
 }
@@ -47,6 +48,7 @@ type Server struct {
 	filterTimeoutMs     int
 	mailAuth            *mailauth.Verifier
 	authGate            security.AuthGate
+	sendGate            security.SendGate
 	greylist            *Greylist
 	asnLookup           *ASNLookup
 }
@@ -57,6 +59,10 @@ func NewServer(log *slog.Logger, addr string, dir *directory.Local, inbox *mail.
 	gate := opts.AuthGate
 	if gate == nil {
 		gate = security.NopGate{}
+	}
+	sendGate := opts.SendGate
+	if sendGate == nil {
+		sendGate = security.NopSendGate{}
 	}
 	return &Server{
 		log:                 log,
@@ -75,6 +81,7 @@ func NewServer(log *slog.Logger, addr string, dir *directory.Local, inbox *mail.
 		filterTimeoutMs:     opts.FilterTimeoutMs,
 		mailAuth:            opts.MailAuth,
 		authGate:            gate,
+		sendGate:            sendGate,
 		greylist:            opts.Greylist,
 		asnLookup:           opts.ASNLookup,
 	}
@@ -172,7 +179,7 @@ func (s *Server) serve(ctx context.Context, slots []listenerSlot) error {
 
 func (s *Server) serveConn(ctx context.Context, conn net.Conn, secure, submission bool) {
 	defer conn.Close()
-	sess := newSession(s.log, conn, s.dir, s.inbox, s.queue, s.certs, secure, s.tlsRequired, s.vrfyEnabled, submission, s.dataLimits, s.filter, s.filterTmpDir, s.filterTimeoutMs, s.mailAuth, s.authGate, s.greylist, s.asnLookup)
+	sess := newSession(s.log, conn, s.dir, s.inbox, s.queue, s.certs, secure, s.tlsRequired, s.vrfyEnabled, submission, s.dataLimits, s.filter, s.filterTmpDir, s.filterTimeoutMs, s.mailAuth, s.authGate, s.sendGate, s.greylist, s.asnLookup)
 	if err := sess.run(ctx); err != nil && ctx.Err() == nil {
 		s.log.Debug("smtp session", slog.Any("err", err))
 	}

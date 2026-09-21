@@ -52,6 +52,7 @@ type session struct {
 
 	principal directory.Principal
 	authGate  security.AuthGate
+	sendGate  security.SendGate
 	greylist  *Greylist
 
 	mailFrom  string
@@ -77,12 +78,15 @@ type smtpCommand struct {
 	arg string
 }
 
-func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *mail.Inbox, queue *mail.Queue, certs *tlsload.Certs, secure, tlsRequired, vrfyEnabled, submission bool, limits DataLimits, filter MessageFilter, filterTmpDir string, filterTimeoutMs int, mailAuth *mailauth.Verifier, gate security.AuthGate, greylist *Greylist, asnLookup *ASNLookup) *session {
+func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *mail.Inbox, queue *mail.Queue, certs *tlsload.Certs, secure, tlsRequired, vrfyEnabled, submission bool, limits DataLimits, filter MessageFilter, filterTmpDir string, filterTimeoutMs int, mailAuth *mailauth.Verifier, gate security.AuthGate, sendGate security.SendGate, greylist *Greylist, asnLookup *ASNLookup) *session {
 	if filter == nil {
 		filter = NopFilter{}
 	}
 	if gate == nil {
 		gate = security.NopGate{}
+	}
+	if sendGate == nil {
+		sendGate = security.NopSendGate{}
 	}
 	if filterTimeoutMs <= 0 {
 		filterTimeoutMs = 10000
@@ -105,6 +109,7 @@ func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *ma
 		filterTimeoutMs: filterTimeoutMs,
 		mailAuth:        mailAuth,
 		authGate:        gate,
+		sendGate:        sendGate,
 		greylist:        greylist,
 		asnLookup:       asnLookup,
 	}
@@ -625,6 +630,16 @@ func (s *session) reset() {
 
 // finishDelivery stores the message for local recipients and enqueues remote ones.
 func (s *session) finishDelivery(ctx context.Context, raw []byte) error {
+	if s.submission && s.principal.AccountID != 0 {
+		email := s.principal.Email()
+		if !s.sendGate.AllowSend(email) {
+			if err := s.writef(replySendRateLimited); err != nil {
+				return err
+			}
+			s.reset()
+			return nil
+		}
+	}
 	var remotes []string
 	for _, t := range s.rcpt {
 		if t.accountID == 0 {
@@ -663,6 +678,9 @@ func (s *session) finishDelivery(ctx context.Context, raw []byte) error {
 			s.reset()
 			return nil
 		}
+	}
+	if s.submission && s.principal.AccountID != 0 {
+		s.sendGate.RecordSend(s.principal.Email())
 	}
 	if err := s.writef(replyOK); err != nil {
 		return err
