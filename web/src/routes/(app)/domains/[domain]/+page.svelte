@@ -124,10 +124,6 @@ async function onResetPassword(a: ListedAccount) {
 }
 </script>
 
-<div class="mb-2">
-  <a class="text-sm text-brand-700 hover:underline" href="/domains">← Domains</a>
-</div>
-
 <div class="mb-6 flex items-center gap-2">
   <Users class="size-5 text-gray-700" />
   <h1 class="text-xl font-semibold text-gray-900">Accounts · {domain}</h1>

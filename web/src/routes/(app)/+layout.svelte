@@ -1,10 +1,11 @@
 <script lang="ts">
-import { Building2, Globe, LogOut } from '@lucide/svelte'
+import { Building2, Globe, ListOrdered, LogOut } from '@lucide/svelte'
 import { onMount } from 'svelte'
 import { goto } from '$app/navigation'
 import { page } from '$app/state'
 import { ApiError, fetchMe, logout } from '$lib/api'
 import logo from '$lib/assets/beavermail.svg'
+import Breadcrumbs from '$lib/Breadcrumbs.svelte'
 import { me } from '$lib/session'
 
 let { children } = $props()
@@ -78,9 +79,16 @@ function navClass(href: string) {
           <Globe class="size-4" />
           Domains
         </a>
+        {#if $me && $me.role === 'admin'}
+          <a class={navClass('/queue')} href="/queue">
+            <ListOrdered class="size-4" />
+            Queue
+          </a>
+        {/if}
       </nav>
     </aside>
     <main class="flex-1 p-4 md:p-8">
+      <Breadcrumbs />
       {@render children()}
     </main>
   </div>

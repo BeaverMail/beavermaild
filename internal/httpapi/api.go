@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/BeaverMail/beaver/internal/directory"
+	"github.com/BeaverMail/beaver/internal/mail"
 	"github.com/BeaverMail/beaver/internal/security"
 	"github.com/BeaverMail/beaver/internal/storage/blob"
 	"github.com/BeaverMail/beaver/internal/tlsload"
@@ -35,6 +36,8 @@ type Options struct {
 	AuthGate security.AuthGate
 	// Blobs is required for domain/account delete (mail purge).
 	Blobs *blob.FS
+	// Queue is the outbound mail queue (nil disables queue endpoints).
+	Queue *mail.Queue
 	// UI is the embedded admin SPA (nil when not attached).
 	UI fs.FS
 }
@@ -49,6 +52,7 @@ type Server struct {
 	useTLS   bool
 	authGate security.AuthGate
 	blobs    *blob.FS
+	queue    *mail.Queue
 	ui       fs.FS
 	mux      *http.ServeMux
 }
@@ -87,6 +91,7 @@ func New(opts Options) (*Server, error) {
 		useTLS:   useTLS,
 		authGate: gate,
 		blobs:    opts.Blobs,
+		queue:    opts.Queue,
 		ui:       opts.UI,
 		mux:      http.NewServeMux(),
 	}

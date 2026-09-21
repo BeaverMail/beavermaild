@@ -184,3 +184,27 @@ export async function patchAccount(
     body: patch
   })
 }
+
+export type QueueRecipient = {
+  address: string
+  retry: number
+  status: string
+  next_due_ms: number
+  last_attempt_ms: number
+}
+
+export type QueueEntry = {
+  id: number
+  return_path: string
+  size: number
+  created: number
+  pending: number
+  recipients: QueueRecipient[]
+}
+
+/** Lists outbound queue entries (admin). Pass all=true for non-pending too. */
+export async function fetchQueue(all = false): Promise<QueueEntry[]> {
+  const q = all ? '?all=1' : ''
+  const out = await api<{ entries: QueueEntry[] }>(`/queue${q}`)
+  return out.entries ?? []
+}

@@ -28,6 +28,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST "+apiPrefix+"/domains/{domain}/accounts", s.requireAuth(s.requireSameOrigin(s.handleCreateAccount)))
 	s.mux.HandleFunc("DELETE "+apiPrefix+"/accounts/{email}", s.requireAuth(s.requireSameOrigin(s.handleDeleteAccount)))
 	s.mux.HandleFunc("PATCH "+apiPrefix+"/accounts/{email}", s.requireAuth(s.requireSameOrigin(s.handlePatchAccount)))
+	s.mux.HandleFunc("GET "+apiPrefix+"/queue", s.requireAuth(s.handleListQueue))
 	if s.ui != nil {
 		s.mux.Handle("/", newSPAHandler(s.ui))
 	}

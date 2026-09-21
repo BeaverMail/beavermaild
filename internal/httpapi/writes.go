@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/BeaverMail/beaver/internal/directory"
+	"github.com/BeaverMail/beaver/internal/mail"
 )
 
 // handleSetupStatus reports whether the greenfield wizard is still available.
@@ -495,4 +496,81 @@ func parsePathUint32(s string) (uint32, error) {
 		return 0, err
 	}
 	return uint32(n), nil
+}
+
+type queueRcptDTO struct {
+	Address       string `json:"address"`
+	Retry         uint32 `json:"retry"`
+	Status        string `json:"status"`
+	NextDueMS     int64  `json:"next_due_ms"`
+	LastAttemptMS int64  `json:"last_attempt_ms"`
+}
+
+type queueEntryDTO struct {
+	ID         uint32         `json:"id"`
+	ReturnPath string         `json:"return_path"`
+	Size       uint64         `json:"size"`
+	Created    uint64         `json:"created"`
+	Pending    int            `json:"pending"`
+	Recipients []queueRcptDTO `json:"recipients"`
+}
+
+// handleListQueue returns outbound queue entries (instance admin only).
+// Query ?all=1 includes entries with no pending recipients (default: pending only).
+func (s *Server) handleListQueue(w http.ResponseWriter, r *http.Request) {
+	p, ok := principal(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	if p.Role != directory.RoleAdmin {
+		writeError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+	if s.queue == nil {
+		writeError(w, http.StatusServiceUnavailable, "queue unavailable")
+		return
+	}
+	all := r.URL.Query().Get("all") == "1" || strings.EqualFold(r.URL.Query().Get("all"), "true")
+	var (
+		entries []mail.QueueEntry
+		err     error
+	)
+	if all {
+		entries, err = s.queue.ListAll(r.Context())
+	} else {
+		entries, err = s.queue.ListPending(r.Context())
+	}
+	if err != nil {
+		s.log.Error("http list queue", "err", err)
+		writeError(w, http.StatusInternalServerError, "list queue failed")
+		return
+	}
+	out := make([]queueEntryDTO, 0, len(entries))
+	for _, e := range entries {
+		rcpts := make([]queueRcptDTO, len(e.Msg.Recipients))
+		pending := 0
+		for i, rcpt := range e.Msg.Recipients {
+			st := mail.RecipientStatus(rcpt)
+			if st == "pending" {
+				pending++
+			}
+			rcpts[i] = queueRcptDTO{
+				Address:       rcpt.Address,
+				Retry:         rcpt.Retry,
+				Status:        st,
+				NextDueMS:     rcpt.NextDue,
+				LastAttemptMS: rcpt.LastAttempt,
+			}
+		}
+		out = append(out, queueEntryDTO{
+			ID:         e.ID,
+			ReturnPath: e.Msg.ReturnPath,
+			Size:       e.Msg.Size,
+			Created:    e.Msg.Created,
+			Pending:    pending,
+			Recipients: rcpts,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"entries": out})
 }

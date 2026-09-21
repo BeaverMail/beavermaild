@@ -104,6 +104,7 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 			Certs:    certs,
 			AuthGate: authGate,
 			Blobs:    blobs,
+			Queue:    queue,
 			UI:       uiFS,
 		})
 		if err != nil {

@@ -12,6 +12,7 @@ import (
 
 	"github.com/BeaverMail/beaver/internal/directory"
 	"github.com/BeaverMail/beaver/internal/httpapi"
+	"github.com/BeaverMail/beaver/internal/mail"
 	"github.com/BeaverMail/beaver/internal/security"
 	"github.com/BeaverMail/beaver/internal/storage/blob"
 	"github.com/BeaverMail/beaver/internal/storage/sqlite"
@@ -123,12 +124,14 @@ func newTestAPI(t *testing.T) (*httpapi.Server, *directory.Local) {
 		t.Fatal(err)
 	}
 	blobs := blob.NewFS(filepath.Join(t.TempDir(), "blobs"))
+	queue := mail.NewQueue(store, blobs)
 	srv, err := httpapi.New(httpapi.Options{
 		Listen:   "127.0.0.1:0",
 		Dir:      dir,
 		AuthKey:  "0123456789abcdef0123456789abcdef",
 		AuthGate: security.NopGate{},
 		Blobs:    blobs,
+		Queue:    queue,
 	})
 	if err != nil {
 		t.Fatal(err)

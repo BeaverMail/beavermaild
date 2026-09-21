@@ -14,6 +14,7 @@ import (
 
 	"github.com/BeaverMail/beaver/internal/directory"
 	"github.com/BeaverMail/beaver/internal/httpapi"
+	"github.com/BeaverMail/beaver/internal/mail"
 	"github.com/BeaverMail/beaver/internal/security"
 	"github.com/BeaverMail/beaver/internal/storage/blob"
 	"github.com/BeaverMail/beaver/internal/storage/sqlite"
@@ -288,6 +289,68 @@ func TestTenantAPIWrites(t *testing.T) {
 	}
 }
 
+func TestListQueue(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, "file:"+t.TempDir()+"/store.sqlite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	dir := directory.NewLocal(store)
+	dom, _, err := dir.EnsureDomain(ctx, directory.DefaultTenantID, "api.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dir.CreateAccountRole(ctx, dom.ID, "admin", "secret", directory.RoleAdmin); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dir.CreateAccountRole(ctx, dom.ID, "user", "secret", directory.RoleUser); err != nil {
+		t.Fatal(err)
+	}
+	blobs := blob.NewFS(filepath.Join(t.TempDir(), "blobs"))
+	queue := mail.NewQueue(store, blobs)
+	if _, err := queue.Enqueue(ctx, "sender@api.test", []string{"rcpt@example.com"}, []byte("Subject: hi\r\n\r\nbody")); err != nil {
+		t.Fatal(err)
+	}
+	srv, err := httpapi.New(httpapi.Options{
+		Listen:   "127.0.0.1:0",
+		Dir:      dir,
+		AuthKey:  "0123456789abcdef0123456789abcdef",
+		AuthGate: security.NopGate{},
+		Blobs:    blobs,
+		Queue:    queue,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	adminTok := login(t, srv, "admin@api.test", "secret")
+	req := authedJSON(t, http.MethodGet, "/api/v1/queue", adminTok, nil)
+	res := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("queue %d %s", res.Code, res.Body.String())
+	}
+	var out struct {
+		Entries []map[string]any `json:"entries"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Entries) != 1 {
+		t.Fatalf("entries %v", out.Entries)
+	}
+
+	userTok := login(t, srv, "user@api.test", "secret")
+	req = authedJSON(t, http.MethodGet, "/api/v1/queue", userTok, nil)
+	res = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("user queue want 403 got %d", res.Code)
+	}
+}
+
 func itoa(id uint32) string {
 	return strconv.FormatUint(uint64(id), 10)
 }
@@ -314,6 +377,7 @@ func newEmptyAPI(t *testing.T) (*httpapi.Server, *directory.Local) {
 		AuthKey:  "0123456789abcdef0123456789abcdef",
 		AuthGate: security.NopGate{},
 		Blobs:    blobs,
+		Queue:    mail.NewQueue(store, blobs),
 	})
 	if err != nil {
 		t.Fatal(err)
