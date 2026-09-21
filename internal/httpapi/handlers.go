@@ -1,4 +1,4 @@
-// /api/v1 handlers: health, auth, me, tenants, domains, accounts.
+// /api/v1 handlers: health, auth, me, tenants, domains, accounts, setup.
 package httpapi
 
 import (
@@ -12,12 +12,22 @@ import (
 // routes registers /api/v1 endpoints on the server mux.
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET "+apiPrefix+"/health", s.handleHealth)
+	s.mux.HandleFunc("GET "+apiPrefix+"/setup", s.handleSetupStatus)
+	s.mux.HandleFunc("POST "+apiPrefix+"/setup", s.requireSameOrigin(s.handleSetupBootstrap))
 	s.mux.HandleFunc("POST "+apiPrefix+"/auth/login", s.handleLogin)
 	s.mux.HandleFunc("POST "+apiPrefix+"/auth/logout", s.handleLogout)
 	s.mux.HandleFunc("GET "+apiPrefix+"/me", s.requireAuth(s.handleMe))
 	s.mux.HandleFunc("GET "+apiPrefix+"/tenants", s.requireAuth(s.handleListTenants))
+	s.mux.HandleFunc("POST "+apiPrefix+"/tenants", s.requireAuth(s.requireSameOrigin(s.handleCreateTenant)))
+	s.mux.HandleFunc("PATCH "+apiPrefix+"/tenants/{id}", s.requireAuth(s.requireSameOrigin(s.handlePatchTenant)))
+	s.mux.HandleFunc("DELETE "+apiPrefix+"/tenants/{id}", s.requireAuth(s.requireSameOrigin(s.handleDeleteTenant)))
 	s.mux.HandleFunc("GET "+apiPrefix+"/domains", s.requireAuth(s.handleListDomains))
+	s.mux.HandleFunc("POST "+apiPrefix+"/domains", s.requireAuth(s.requireSameOrigin(s.handleCreateDomain)))
+	s.mux.HandleFunc("DELETE "+apiPrefix+"/domains/{domain}", s.requireAuth(s.requireSameOrigin(s.handleDeleteDomain)))
 	s.mux.HandleFunc("GET "+apiPrefix+"/domains/{domain}/accounts", s.requireAuth(s.handleListAccounts))
+	s.mux.HandleFunc("POST "+apiPrefix+"/domains/{domain}/accounts", s.requireAuth(s.requireSameOrigin(s.handleCreateAccount)))
+	s.mux.HandleFunc("DELETE "+apiPrefix+"/accounts/{email}", s.requireAuth(s.requireSameOrigin(s.handleDeleteAccount)))
+	s.mux.HandleFunc("PATCH "+apiPrefix+"/accounts/{email}", s.requireAuth(s.requireSameOrigin(s.handlePatchAccount)))
 	if s.ui != nil {
 		s.mux.Handle("/", newSPAHandler(s.ui))
 	}
@@ -72,20 +82,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.authGate.RecordAuthSuccess(ip, req.Email)
-	token, exp, err := s.mintToken(p)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "token failed")
-		return
-	}
-	s.setSessionCookie(w, token, exp)
-	writeJSON(w, http.StatusOK, loginResponse{
-		Token: token,
-		Account: accountDTO{
-			Email:    p.Email(),
-			Role:     p.Role,
-			TenantID: p.TenantID,
-		},
-	})
+	s.writeSession(w, p)
 }
 
 // handleLogout clears the session cookie (Bearer clients drop the token locally).
@@ -222,4 +219,22 @@ func (s *Server) handleListAccounts(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"accounts": out})
+}
+
+// writeSession mints a token, sets the cookie, and returns the login response body.
+func (s *Server) writeSession(w http.ResponseWriter, p directory.Principal) {
+	token, exp, err := s.mintToken(p)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "token failed")
+		return
+	}
+	s.setSessionCookie(w, token, exp)
+	writeJSON(w, http.StatusOK, loginResponse{
+		Token: token,
+		Account: accountDTO{
+			Email:    p.Email(),
+			Role:     p.Role,
+			TenantID: p.TenantID,
+		},
+	})
 }

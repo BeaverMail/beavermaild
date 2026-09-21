@@ -7,11 +7,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 
 	"github.com/BeaverMail/beaver/internal/directory"
 	"github.com/BeaverMail/beaver/internal/httpapi"
 	"github.com/BeaverMail/beaver/internal/security"
+	"github.com/BeaverMail/beaver/internal/storage/blob"
 	"github.com/BeaverMail/beaver/internal/storage/sqlite"
 )
 
@@ -120,11 +122,13 @@ func newTestAPI(t *testing.T) (*httpapi.Server, *directory.Local) {
 	if _, err := dir.CreateAccountRole(ctx, dom.ID, "admin", "secret", directory.RoleAdmin); err != nil {
 		t.Fatal(err)
 	}
+	blobs := blob.NewFS(filepath.Join(t.TempDir(), "blobs"))
 	srv, err := httpapi.New(httpapi.Options{
 		Listen:   "127.0.0.1:0",
 		Dir:      dir,
 		AuthKey:  "0123456789abcdef0123456789abcdef",
 		AuthGate: security.NopGate{},
+		Blobs:    blobs,
 	})
 	if err != nil {
 		t.Fatal(err)

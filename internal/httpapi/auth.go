@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -219,4 +220,110 @@ func canListAccounts(p directory.Principal, tenantID uint32, domainName string) 
 	default:
 		return false
 	}
+}
+
+// canManageDomain reports whether p may create/delete domains in tenantID.
+func canManageDomain(p directory.Principal, tenantID uint32) bool {
+	switch p.Role {
+	case directory.RoleAdmin:
+		return true
+	case directory.RoleTenantAdmin:
+		return p.TenantID == tenantID
+	default:
+		return false
+	}
+}
+
+// canManageAccount reports whether p may mutate accounts on a domain tenant.
+func canManageAccount(p directory.Principal, tenantID uint32) bool {
+	return canManageDomain(p, tenantID)
+}
+
+// canCreateOrDeleteTenant reports instance-admin-only tenant lifecycle.
+func canCreateOrDeleteTenant(p directory.Principal) bool {
+	return p.Role == directory.RoleAdmin
+}
+
+// canRenameTenant reports whether p may rename tenantID.
+func canRenameTenant(p directory.Principal, tenantID uint32) bool {
+	switch p.Role {
+	case directory.RoleAdmin:
+		return true
+	case directory.RoleTenantAdmin:
+		return p.TenantID == tenantID
+	default:
+		return false
+	}
+}
+
+// canAssignRole reports whether p may set targetRole on an account.
+func canAssignRole(p directory.Principal, targetRole string) bool {
+	targetRole = directory.NormalizeRole(targetRole)
+	switch p.Role {
+	case directory.RoleAdmin:
+		return directory.ValidateRole(targetRole) == nil
+	case directory.RoleTenantAdmin:
+		return targetRole == directory.RoleUser || targetRole == directory.RoleTenantAdmin
+	default:
+		return false
+	}
+}
+
+// requireSameOrigin rejects cookie-authenticated mutations from cross-site origins.
+// Bearer clients (scripts / tests) are exempt. Login is not wrapped with this helper.
+func (s *Server) requireSameOrigin(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if bearerToken(r) != "" {
+			next(w, r)
+			return
+		}
+		if !sameOriginOK(r) {
+			writeError(w, http.StatusForbidden, "csrf origin check failed")
+			return
+		}
+		next(w, r)
+	}
+}
+
+// sameOriginOK accepts Sec-Fetch-Site same-origin/none, or Origin matching Host
+// (including Vite loopback proxy: Origin :5173 → Host :8080).
+func sameOriginOK(r *http.Request) bool {
+	switch strings.ToLower(strings.TrimSpace(r.Header.Get("Sec-Fetch-Site"))) {
+	case "same-origin", "none":
+		return true
+	case "cross-site", "same-site":
+		return false
+	}
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" {
+		return false
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	if strings.EqualFold(u.Host, r.Host) {
+		return true
+	}
+	return isLoopbackHost(u.Hostname()) && isLoopbackHost(hostOnly(r.Host))
+}
+
+func hostOnly(hostport string) string {
+	host, _, err := net.SplitHostPort(hostport)
+	if err != nil {
+		return hostport
+	}
+	return host
+}
+
+func isLoopbackHost(host string) bool {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

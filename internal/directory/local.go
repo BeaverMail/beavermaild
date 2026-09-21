@@ -301,6 +301,40 @@ func (d *Local) SetAccountRole(ctx context.Context, accountID uint32, role strin
 	return d.store.Commit(ctx, batch)
 }
 
+// SetPassword replaces the credential hash for an account.
+func (d *Local) SetPassword(ctx context.Context, accountID uint32, password string) error {
+	if strings.TrimSpace(password) == "" {
+		return fmt.Errorf("directory: password required")
+	}
+	if _, err := d.getAccount(ctx, accountID); err != nil {
+		return err
+	}
+	hash, err := HashPassword(password)
+	if err != nil {
+		return err
+	}
+	cred := Credential{Algorithm: passwordAlgorithm, PasswordHash: hash}
+	batch := storage.NewBatch().WithAccount(accountID)
+	if err := d.putCred(batch, accountID, cred); err != nil {
+		return err
+	}
+	return d.store.Commit(ctx, batch)
+}
+
+// SetActive updates whether the account may authenticate.
+func (d *Local) SetActive(ctx context.Context, accountID uint32, active bool) error {
+	acc, err := d.getAccount(ctx, accountID)
+	if err != nil {
+		return err
+	}
+	acc.Active = active
+	batch := storage.NewBatch().WithAccount(acc.ID)
+	if err := d.putAccount(batch, acc); err != nil {
+		return err
+	}
+	return d.store.Commit(ctx, batch)
+}
+
 func (d *Local) getDomain(ctx context.Context, id uint32) (storage.Domain, error) {
 	var dom storage.Domain
 	if err := d.getRecord(ctx, domainKey(id), &dom); err != nil {

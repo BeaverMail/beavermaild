@@ -15,6 +15,7 @@ import (
 
 	"github.com/BeaverMail/beaver/internal/directory"
 	"github.com/BeaverMail/beaver/internal/security"
+	"github.com/BeaverMail/beaver/internal/storage/blob"
 	"github.com/BeaverMail/beaver/internal/tlsload"
 )
 
@@ -32,6 +33,8 @@ type Options struct {
 	AuthKey  string
 	Certs    *tlsload.Certs
 	AuthGate security.AuthGate
+	// Blobs is required for domain/account delete (mail purge).
+	Blobs *blob.FS
 	// UI is the embedded admin SPA (nil when not attached).
 	UI fs.FS
 }
@@ -45,6 +48,7 @@ type Server struct {
 	certs    *tlsload.Certs
 	useTLS   bool
 	authGate security.AuthGate
+	blobs    *blob.FS
 	ui       fs.FS
 	mux      *http.ServeMux
 }
@@ -82,6 +86,7 @@ func New(opts Options) (*Server, error) {
 		certs:    opts.Certs,
 		useTLS:   useTLS,
 		authGate: gate,
+		blobs:    opts.Blobs,
 		ui:       opts.UI,
 		mux:      http.NewServeMux(),
 	}

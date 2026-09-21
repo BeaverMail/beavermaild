@@ -105,6 +105,21 @@ export async function fetchMe(): Promise<Account> {
   return api<Account>('/me')
 }
 
+export async function fetchSetup(): Promise<{ needed: boolean }> {
+  return api<{ needed: boolean }>('/setup')
+}
+
+/** First-install bootstrap; returns session like login. */
+export async function bootstrapSetup(email: string, password: string): Promise<Account> {
+  const out = await api<{ token: string; account: Account }>('/setup', {
+    body: { email, password }
+  })
+  setBearer(out.token)
+  const { markSetupComplete } = await import('$lib/setup')
+  markSetupComplete()
+  return out.account
+}
+
 export async function fetchDomains(): Promise<Domain[]> {
   const out = await api<{ domains: Domain[] }>('/domains')
   return out.domains ?? []
@@ -115,7 +130,57 @@ export async function fetchTenants(): Promise<Tenant[]> {
   return out.tenants ?? []
 }
 
+export async function createTenant(name: string): Promise<Tenant> {
+  return api<Tenant>('/tenants', { body: { name } })
+}
+
+export async function patchTenant(id: number, name: string): Promise<Tenant> {
+  return api<Tenant>(`/tenants/${id}`, { method: 'PATCH', body: { name } })
+}
+
+export async function deleteTenant(id: number, confirmName: string): Promise<void> {
+  await api(`/tenants/${id}`, { method: 'DELETE', body: { confirm: confirmName } })
+}
+
 export async function fetchAccounts(domain: string): Promise<ListedAccount[]> {
   const out = await api<{ accounts: ListedAccount[] }>(`/domains/${encodeURIComponent(domain)}/accounts`)
   return out.accounts ?? []
+}
+
+export async function createDomain(name: string, tenantId?: number): Promise<Domain> {
+  const body: { name: string; tenant_id?: number } = { name }
+  if (tenantId !== undefined) body.tenant_id = tenantId
+  return api<Domain>('/domains', { body })
+}
+
+export async function deleteDomain(name: string): Promise<void> {
+  await api(`/domains/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+    body: { confirm: name }
+  })
+}
+
+export async function createAccount(
+  domain: string,
+  localPart: string,
+  password: string,
+  role?: string
+): Promise<ListedAccount> {
+  return api<ListedAccount>(`/domains/${encodeURIComponent(domain)}/accounts`, {
+    body: { local_part: localPart, password, role: role || 'user' }
+  })
+}
+
+export async function deleteAccount(email: string): Promise<void> {
+  await api(`/accounts/${encodeURIComponent(email)}`, { method: 'DELETE' })
+}
+
+export async function patchAccount(
+  email: string,
+  patch: { role?: string; password?: string; active?: boolean }
+): Promise<ListedAccount> {
+  return api<ListedAccount>(`/accounts/${encodeURIComponent(email)}`, {
+    method: 'PATCH',
+    body: patch
+  })
 }

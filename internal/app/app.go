@@ -103,6 +103,7 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 			AuthKey:  cfg.Secrets.AuthKey,
 			Certs:    certs,
 			AuthGate: authGate,
+			Blobs:    blobs,
 			UI:       uiFS,
 		})
 		if err != nil {
