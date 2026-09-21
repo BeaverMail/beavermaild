@@ -1,10 +1,14 @@
 PLUGINS_DIR ?= .data/plugins
 WEB_DIST := internal/webui/dist
 
-.PHONY: beaver beaver-plugin-antispam plugins test integration web-dev web-build
+.PHONY: beaver beaver-go beaver-plugin-antispam plugins test integration web-dev web-build
 
 # Mail stack + embedded admin UI (needs Node for web-build).
 beaver: web-build
+	go build -o beaver ./cmd/beaver
+
+# Go binary only; embeds whatever is already in internal/webui/dist (no npm).
+beaver-go:
 	go build -o beaver ./cmd/beaver
 
 plugins: beaver-plugin-antispam
