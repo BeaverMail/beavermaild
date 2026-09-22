@@ -43,10 +43,18 @@ func (l DataLimits) withDefaults() DataLimits {
 }
 
 // readDATA reads dot-stuffed message data until CRLF.CRLF, enforcing limits and strict CRLF lines.
-func readDATA(r *bufio.Reader, limits DataLimits) ([]byte, error) {
+// beforeRead, if non-nil, is called before each line read (idle read deadline refresh).
+func readDATA(r *bufio.Reader, limits DataLimits, beforeRead ...func()) ([]byte, error) {
 	limits = limits.withDefaults()
+	var refresh func()
+	if len(beforeRead) > 0 {
+		refresh = beforeRead[0]
+	}
 	var buf bytes.Buffer
 	for {
+		if refresh != nil {
+			refresh()
+		}
 		line, err := r.ReadBytes('\n')
 		if err != nil {
 			return nil, err
@@ -74,8 +82,15 @@ func readDATA(r *bufio.Reader, limits DataLimits) ([]byte, error) {
 }
 
 // drainDATA discards the remainder of a failed DATA phase until the end marker.
-func drainDATA(r *bufio.Reader) {
+func drainDATA(r *bufio.Reader, beforeRead ...func()) {
+	var refresh func()
+	if len(beforeRead) > 0 {
+		refresh = beforeRead[0]
+	}
 	for {
+		if refresh != nil {
+			refresh()
+		}
 		line, err := r.ReadBytes('\n')
 		if err != nil {
 			return

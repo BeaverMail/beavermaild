@@ -8,7 +8,15 @@ import (
 )
 
 // readBDATChunk reads size raw bytes followed by the framing CRLF after a BDAT command.
-func readBDATChunk(r *bufio.Reader, size int) ([]byte, error) {
+// beforeRead, if provided, refreshes the idle read deadline before I/O.
+func readBDATChunk(r *bufio.Reader, size int, beforeRead ...func()) ([]byte, error) {
+	var refresh func()
+	if len(beforeRead) > 0 {
+		refresh = beforeRead[0]
+	}
+	if refresh != nil {
+		refresh()
+	}
 	if size == 0 {
 		crlf := make([]byte, 2)
 		if _, err := io.ReadFull(r, crlf); err != nil {
@@ -22,6 +30,9 @@ func readBDATChunk(r *bufio.Reader, size int) ([]byte, error) {
 	buf := make([]byte, size)
 	if _, err := io.ReadFull(r, buf); err != nil {
 		return nil, err
+	}
+	if refresh != nil {
+		refresh()
 	}
 	crlf := make([]byte, 2)
 	if _, err := io.ReadFull(r, crlf); err != nil {

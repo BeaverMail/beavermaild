@@ -23,7 +23,10 @@ func (s *session) cmdIdle(ctx context.Context, tag string) error {
 	if _, err := fmt.Fprintf(s.conn, "+ idling\r\n"); err != nil {
 		return err
 	}
-	defer func() { _ = s.conn.SetReadDeadline(time.Time{}) }()
+	defer func() {
+		// Clear IDLE poll deadline; next readLine restores the session idle timeout.
+		_ = s.conn.SetReadDeadline(time.Time{})
+	}()
 
 	for {
 		_ = s.conn.SetReadDeadline(time.Now().Add(idlePollInterval))

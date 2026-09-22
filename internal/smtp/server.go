@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net"
+	"time"
 
 	"github.com/BeaverMail/beaver/internal/directory"
 	"github.com/BeaverMail/beaver/internal/mail"
@@ -28,6 +29,8 @@ type Options struct {
 	SendGate        security.SendGate
 	Greylist        *Greylist
 	ASNLookup       *ASNLookup
+	MaxConnections  int           // 0 = unlimited (tests); positive = per-listener cap
+	ReadTimeout     time.Duration // 0 = no idle read deadline
 }
 
 // Server accepts inbound SMTP connections.
@@ -51,6 +54,8 @@ type Server struct {
 	sendGate            security.SendGate
 	greylist            *Greylist
 	asnLookup           *ASNLookup
+	maxConnections      int
+	readTimeout         time.Duration
 }
 
 // NewServer returns an SMTP server. submissionAddr is optional plain listener (e.g. :587).
@@ -84,6 +89,8 @@ func NewServer(log *slog.Logger, addr string, dir *directory.Local, inbox *mail.
 		sendGate:            sendGate,
 		greylist:            opts.Greylist,
 		asnLookup:           opts.ASNLookup,
+		maxConnections:      opts.MaxConnections,
+		readTimeout:         opts.ReadTimeout,
 	}
 }
 
@@ -99,6 +106,7 @@ type listenerSlot struct {
 	ln         net.Listener
 	secure     bool
 	submission bool
+	limiter    *security.ConnLimiter
 }
 
 // Serve listens on configured addresses until ctx is canceled.
@@ -109,7 +117,7 @@ func (s *Server) Serve(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		slots = append(slots, listenerSlot{ln: ln, secure: false, submission: false})
+		slots = append(slots, listenerSlot{ln: ln, secure: false, submission: false, limiter: security.NewConnLimiter(s.maxConnections)})
 		s.log.Info("smtp listening", "addr", ln.Addr().String())
 	}
 	if s.submissionPlainAddr != "" {
@@ -120,7 +128,7 @@ func (s *Server) Serve(ctx context.Context) error {
 			}
 			return err
 		}
-		slots = append(slots, listenerSlot{ln: ln, secure: false, submission: true})
+		slots = append(slots, listenerSlot{ln: ln, secure: false, submission: true, limiter: security.NewConnLimiter(s.maxConnections)})
 		s.log.Info("smtp listening", "addr", ln.Addr().String(), "submission", true)
 	}
 	if s.submissionTLSAddr != "" && s.certs != nil {
@@ -131,7 +139,7 @@ func (s *Server) Serve(ctx context.Context) error {
 			}
 			return err
 		}
-		slots = append(slots, listenerSlot{ln: tlsLn, secure: true, submission: true})
+		slots = append(slots, listenerSlot{ln: tlsLn, secure: true, submission: true, limiter: security.NewConnLimiter(s.maxConnections)})
 		s.log.Info("smtp tls listening", "addr", tlsLn.Addr().String(), "submission", true)
 	}
 	return s.serve(ctx, slots)
@@ -139,17 +147,17 @@ func (s *Server) Serve(ctx context.Context) error {
 
 // ServeListener serves inbound SMTP on an existing listener (for tests).
 func (s *Server) ServeListener(ctx context.Context, ln net.Listener) error {
-	return s.serve(ctx, []listenerSlot{{ln: ln, secure: false, submission: false}})
+	return s.serve(ctx, []listenerSlot{{ln: ln, secure: false, submission: false, limiter: security.NewConnLimiter(s.maxConnections)}})
 }
 
 // ServeTLSListener serves implicit TLS without submission semantics (for tests).
 func (s *Server) ServeTLSListener(ctx context.Context, ln net.Listener) error {
-	return s.serve(ctx, []listenerSlot{{ln: ln, secure: true, submission: false}})
+	return s.serve(ctx, []listenerSlot{{ln: ln, secure: true, submission: false, limiter: security.NewConnLimiter(s.maxConnections)}})
 }
 
 // ServeSubmissionListener serves submission SMTP on an existing listener (for tests).
 func (s *Server) ServeSubmissionListener(ctx context.Context, ln net.Listener, secure bool) error {
-	return s.serve(ctx, []listenerSlot{{ln: ln, secure: secure, submission: true}})
+	return s.serve(ctx, []listenerSlot{{ln: ln, secure: secure, submission: true, limiter: security.NewConnLimiter(s.maxConnections)}})
 }
 
 func (s *Server) serve(ctx context.Context, slots []listenerSlot) error {
@@ -165,7 +173,12 @@ func (s *Server) serve(ctx context.Context, slots []listenerSlot) error {
 					s.log.Warn("smtp accept", slog.Any("err", err))
 					continue
 				}
-				go s.serveConn(ctx, conn, slot.secure, slot.submission)
+				if !slot.limiter.Acquire() {
+					_, _ = conn.Write([]byte("421 4.7.0 Too many connections\r\n"))
+					_ = conn.Close()
+					continue
+				}
+				go s.serveConn(ctx, conn, slot.secure, slot.submission, slot.limiter)
 			}
 		}()
 	}
@@ -177,9 +190,10 @@ func (s *Server) serve(ctx context.Context, slots []listenerSlot) error {
 	return nil
 }
 
-func (s *Server) serveConn(ctx context.Context, conn net.Conn, secure, submission bool) {
+func (s *Server) serveConn(ctx context.Context, conn net.Conn, secure, submission bool, lim *security.ConnLimiter) {
+	defer lim.Release()
 	defer conn.Close()
-	sess := newSession(s.log, conn, s.dir, s.inbox, s.queue, s.certs, secure, s.tlsRequired, s.vrfyEnabled, submission, s.dataLimits, s.filter, s.filterTmpDir, s.filterTimeoutMs, s.mailAuth, s.authGate, s.sendGate, s.greylist, s.asnLookup)
+	sess := newSession(s.log, conn, s.dir, s.inbox, s.queue, s.certs, secure, s.tlsRequired, s.vrfyEnabled, submission, s.dataLimits, s.filter, s.filterTmpDir, s.filterTimeoutMs, s.mailAuth, s.authGate, s.sendGate, s.greylist, s.asnLookup, s.readTimeout)
 	if err := sess.run(ctx); err != nil && ctx.Err() == nil {
 		s.log.Debug("smtp session", slog.Any("err", err))
 	}

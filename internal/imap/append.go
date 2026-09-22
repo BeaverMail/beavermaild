@@ -68,6 +68,7 @@ func (s *session) cmdAppend(ctx context.Context, tag, arg string) error {
 }
 
 func (s *session) readLiteral(n int) ([]byte, error) {
+	s.bumpReadDeadline()
 	buf := make([]byte, n)
 	if _, err := io.ReadFull(s.r, buf); err != nil {
 		return nil, err

@@ -10,6 +10,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/BeaverMail/beaver/internal/directory"
 	"github.com/BeaverMail/beaver/internal/mail"
@@ -33,6 +34,7 @@ type session struct {
 
 	principal       directory.Principal
 	authGate        security.AuthGate
+	readTimeout     time.Duration
 	selected        bool
 	readOnly        bool
 	mbox            mail.Mailbox
@@ -40,7 +42,7 @@ type session struct {
 	idleWatchModSeq uint64 // mailbox HighestModSeq at last IDLE sync
 }
 
-func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *mail.Inbox, certs *tlsload.Certs, secure, tlsRequired bool, gate security.AuthGate) *session {
+func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *mail.Inbox, certs *tlsload.Certs, secure, tlsRequired bool, gate security.AuthGate, readTimeout time.Duration) *session {
 	if gate == nil {
 		gate = security.NopGate{}
 	}
@@ -54,6 +56,7 @@ func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *ma
 		secure:      secure,
 		tlsRequired: tlsRequired,
 		authGate:    gate,
+		readTimeout: readTimeout,
 	}
 }
 
@@ -921,7 +924,14 @@ func (s *session) tagged(tag, resp string) error {
 	return err
 }
 
+func (s *session) bumpReadDeadline() {
+	if s.readTimeout > 0 {
+		_ = s.conn.SetReadDeadline(time.Now().Add(s.readTimeout))
+	}
+}
+
 func (s *session) readLine() (string, error) {
+	s.bumpReadDeadline()
 	line, err := s.r.ReadString('\n')
 	if err != nil {
 		return "", err

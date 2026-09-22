@@ -121,6 +121,8 @@ type SMTPConfig struct {
 	MaxMessageBytes         int                       `json:"max_message_bytes"`
 	VRFYEnabled             bool                      `json:"vrfy_enabled"` // off by default (RFC 5321: user enumeration risk)
 	SubmissionRateLimit     SubmissionRateLimitConfig `json:"submission_rate_limit"`
+	MaxConnections          int                       `json:"max_connections"` // default 200; -1 = unlimited
+	ReadTimeout             string                    `json:"read_timeout"`    // default 5m; "0" = disabled
 }
 
 // SubmissionRateLimitConfig limits accepted messages per authenticated principal.
@@ -162,8 +164,10 @@ type DKIMSignConfig struct {
 
 // IMAPConfig holds IMAP listener settings.
 type IMAPConfig struct {
-	Listen    string `json:"listen"`
-	TLSListen string `json:"tls_listen"`
+	Listen         string `json:"listen"`
+	TLSListen      string `json:"tls_listen"`
+	MaxConnections int    `json:"max_connections"` // default 200; 0 after validate → default; -1 = unlimited
+	ReadTimeout    string `json:"read_timeout"`    // default 30m; empty → default; "0" = disabled
 }
 
 // AuthConfig holds authentication security settings.
@@ -308,6 +312,18 @@ func (c *Config) Validate() error {
 	}
 	if c.IMAP.Listen == "" {
 		c.IMAP.Listen = "127.0.0.1:1143"
+	}
+	if c.SMTP.MaxConnections == 0 {
+		c.SMTP.MaxConnections = 200
+	}
+	if c.SMTP.ReadTimeout == "" {
+		c.SMTP.ReadTimeout = "5m"
+	}
+	if c.IMAP.MaxConnections == 0 {
+		c.IMAP.MaxConnections = 200
+	}
+	if c.IMAP.ReadTimeout == "" {
+		c.IMAP.ReadTimeout = "30m"
 	}
 	if c.Queue.MaxLifetime == "" {
 		c.Queue.MaxLifetime = "3d"
@@ -682,6 +698,34 @@ func (c *Config) NewSendGate() security.SendGate {
 		}
 	}
 	return security.NewSendLimitGate(cfg)
+}
+
+// SMTPListenerLimits returns max concurrent SMTP connections and idle read timeout.
+// MaxConnections < 0 means unlimited. ReadTimeout of 0 means deadlines disabled.
+func (c *Config) SMTPListenerLimits() (maxConn int, readTimeout time.Duration, err error) {
+	maxConn = c.SMTP.MaxConnections
+	readTimeout, err = parseOptionalDuration(c.SMTP.ReadTimeout, 5*time.Minute)
+	return maxConn, readTimeout, err
+}
+
+// IMAPListenerLimits returns max concurrent IMAP connections and idle read timeout.
+func (c *Config) IMAPListenerLimits() (maxConn int, readTimeout time.Duration, err error) {
+	maxConn = c.IMAP.MaxConnections
+	readTimeout, err = parseOptionalDuration(c.IMAP.ReadTimeout, 30*time.Minute)
+	return maxConn, readTimeout, err
+}
+
+// parseOptionalDuration parses s; empty uses def; "0"/"0s" yields 0 (disabled).
+func parseOptionalDuration(s string, def time.Duration) (time.Duration, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return def, nil
+	}
+	d, err := ParseDuration(s)
+	if err != nil {
+		return 0, err
+	}
+	return d, nil
 }
 
 // NewMTASTSResolver returns the outbound MTA-STS resolver, or nil when disabled.

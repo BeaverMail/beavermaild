@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"strings"
+	"time"
 
 	"github.com/BeaverMail/beaver/internal/directory"
 	"github.com/BeaverMail/beaver/internal/mail"
@@ -50,10 +51,11 @@ type session struct {
 	asnDone         bool
 	asnLookup       *ASNLookup
 
-	principal directory.Principal
-	authGate  security.AuthGate
-	sendGate  security.SendGate
-	greylist  *Greylist
+	principal   directory.Principal
+	authGate    security.AuthGate
+	sendGate    security.SendGate
+	greylist    *Greylist
+	readTimeout time.Duration
 
 	mailFrom  string
 	mailRet   mail.RetMode
@@ -78,7 +80,7 @@ type smtpCommand struct {
 	arg string
 }
 
-func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *mail.Inbox, queue *mail.Queue, certs *tlsload.Certs, secure, tlsRequired, vrfyEnabled, submission bool, limits DataLimits, filter MessageFilter, filterTmpDir string, filterTimeoutMs int, mailAuth *mailauth.Verifier, gate security.AuthGate, sendGate security.SendGate, greylist *Greylist, asnLookup *ASNLookup) *session {
+func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *mail.Inbox, queue *mail.Queue, certs *tlsload.Certs, secure, tlsRequired, vrfyEnabled, submission bool, limits DataLimits, filter MessageFilter, filterTmpDir string, filterTimeoutMs int, mailAuth *mailauth.Verifier, gate security.AuthGate, sendGate security.SendGate, greylist *Greylist, asnLookup *ASNLookup, readTimeout time.Duration) *session {
 	if filter == nil {
 		filter = NopFilter{}
 	}
@@ -112,6 +114,7 @@ func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *ma
 		sendGate:        sendGate,
 		greylist:        greylist,
 		asnLookup:       asnLookup,
+		readTimeout:     readTimeout,
 	}
 }
 
@@ -419,9 +422,9 @@ func (s *session) handleDATA(ctx context.Context) error {
 	if err := s.writef(replyDataStart); err != nil {
 		return err
 	}
-	raw, err := readDATA(s.r, s.dataLimits)
+	raw, err := readDATA(s.r, s.dataLimits, s.bumpReadDeadline)
 	if err != nil {
-		drainDATA(s.r)
+		drainDATA(s.r, s.bumpReadDeadline)
 		if werr := s.writef(dataErrorResponse(err)); werr != nil {
 			return werr
 		}
@@ -707,7 +710,7 @@ func (s *session) cmdBDAT(ctx context.Context, arg string) error {
 	if err := s.writef(replyOK); err != nil {
 		return err
 	}
-	chunk, err := readBDATChunk(s.r, size)
+	chunk, err := readBDATChunk(s.r, size, s.bumpReadDeadline)
 	if err != nil {
 		s.reset()
 		return err
@@ -754,12 +757,19 @@ func (s *session) buildEnvelopeDSN(remotes []string) mail.EnvelopeDSN {
 	return env
 }
 
+func (s *session) bumpReadDeadline() {
+	if s.readTimeout > 0 {
+		_ = s.conn.SetReadDeadline(time.Now().Add(s.readTimeout))
+	}
+}
+
 func (s *session) writef(format string, args ...any) error {
 	_, err := fmt.Fprintf(s.conn, format+"\r\n", args...)
 	return err
 }
 
 func (s *session) readLine() (string, error) {
+	s.bumpReadDeadline()
 	line, err := s.r.ReadString('\n')
 	if err != nil {
 		return "", err

@@ -63,6 +63,16 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 	tlsOpts := tlsOptions(cfg, certs)
 	authGate := cfg.NewAuthGate()
 	sendGate := cfg.NewSendGate()
+	smtpMaxConn, smtpReadTO, err := cfg.SMTPListenerLimits()
+	if err != nil {
+		_ = store.Close()
+		return nil, fmt.Errorf("smtp listener limits: %w", err)
+	}
+	imapMaxConn, imapReadTO, err := cfg.IMAPListenerLimits()
+	if err != nil {
+		_ = store.Close()
+		return nil, fmt.Errorf("imap listener limits: %w", err)
+	}
 	var mailAuth *mailauth.Verifier
 	if cfg.MailAuth.Enabled {
 		mailAuth = mailauth.New(mailauth.Config{
@@ -135,12 +145,16 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 			Greylist:        greylist,
 			ASNLookup:       asnLookup,
 			SendGate:        sendGate,
+			MaxConnections:  smtpMaxConn,
+			ReadTimeout:     smtpReadTO,
 		}),
 		imap: imap.NewServer(log, cfg.IMAPListen(), dir, inbox, imap.Options{
-			Certs:       certs,
-			TLSListen:   tlsOpts.imapTLSListen,
-			TLSRequired: tlsOpts.required,
-			AuthGate:    authGate,
+			Certs:          certs,
+			TLSListen:      tlsOpts.imapTLSListen,
+			TLSRequired:    tlsOpts.required,
+			AuthGate:       authGate,
+			MaxConnections: imapMaxConn,
+			ReadTimeout:    imapReadTO,
 		}),
 		http: httpSrv,
 	}, nil
