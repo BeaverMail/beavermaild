@@ -13,8 +13,12 @@ type remoteDeliverer struct {
 }
 
 func newRemoteDeliverer(c *config.Config) remoteDeliverer {
+	return remoteDeliverer{cfg: remoteConfigFrom(c)}
+}
+
+func remoteConfigFrom(c *config.Config) smtp.RemoteConfig {
 	tlsSkip := c.SMTPOutboundTLSInsecureSkip()
-	return remoteDeliverer{cfg: smtp.RemoteConfig{
+	return smtp.RemoteConfig{
 		Relay: c.SMTPRelay(),
 		RelayOptions: smtp.ClientOptions{
 			STARTTLS:              c.SMTPRelayStartTLS(),
@@ -24,7 +28,7 @@ func newRemoteDeliverer(c *config.Config) remoteDeliverer {
 		},
 		MXOptions: smtp.ClientOptions{TLSInsecureSkipVerify: tlsSkip},
 		MTASTS:    c.NewMTASTSResolver(),
-	}}
+	}
 }
 
 func (d remoteDeliverer) DeliverRemote(ctx context.Context, mailFrom, rcptTo string, data []byte) error {

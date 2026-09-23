@@ -1,5 +1,5 @@
 <script lang="ts">
-import { Building2, Globe, ListOrdered, LogOut } from '@lucide/svelte'
+import { Activity, Building2, Globe, ListOrdered, LogOut } from '@lucide/svelte'
 import { onMount } from 'svelte'
 import { goto } from '$app/navigation'
 import { page } from '$app/state'
@@ -83,6 +83,10 @@ function navClass(href: string) {
           <a class={navClass('/queue')} href="/queue">
             <ListOrdered class="size-4" />
             Queue
+          </a>
+          <a class={navClass('/delivery')} href="/delivery">
+            <Activity class="size-4" />
+            Delivery test
           </a>
         {/if}
       </nav>

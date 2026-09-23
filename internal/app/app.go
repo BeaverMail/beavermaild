@@ -116,6 +116,7 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 			AuthGate: authGate,
 			Blobs:    blobs,
 			Queue:    queue,
+			Remote:   ptrRemote(remoteConfigFrom(cfg)),
 			UI:       uiFS,
 		})
 		if err != nil {
@@ -273,6 +274,10 @@ func (a *App) Run(ctx context.Context) error {
 		}
 		return a.Close()
 	}
+}
+
+func ptrRemote(cfg smtp.RemoteConfig) *smtp.RemoteConfig {
+	return &cfg
 }
 
 // Close releases storage handles and stops plugin daemons.

@@ -2,20 +2,26 @@
 package httpapi_test
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/BeaverMail/beaver/internal/directory"
 	"github.com/BeaverMail/beaver/internal/httpapi"
 	"github.com/BeaverMail/beaver/internal/mail"
 	"github.com/BeaverMail/beaver/internal/security"
+	"github.com/BeaverMail/beaver/internal/smtp"
 	"github.com/BeaverMail/beaver/internal/storage/blob"
 	"github.com/BeaverMail/beaver/internal/storage/sqlite"
 )
@@ -389,6 +395,122 @@ func TestListQueue(t *testing.T) {
 	}
 	if len(out.Entries) != 0 {
 		t.Fatalf("after cancel entries %v", out.Entries)
+	}
+}
+
+func TestDeliveryTestRelay(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, "file:"+t.TempDir()+"/store.sqlite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	dir := directory.NewLocal(store)
+	dom, _, err := dir.EnsureDomain(ctx, directory.DefaultTenantID, "api.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dir.CreateAccountRole(ctx, dom.ID, "admin", "secret", directory.RoleAdmin); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dir.CreateAccountRole(ctx, dom.ID, "user", "secret", directory.RoleUser); err != nil {
+		t.Fatal(err)
+	}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go serveProbeMock(ln)
+
+	remote := smtp.RemoteConfig{Relay: ln.Addr().String()}
+	blobs := blob.NewFS(filepath.Join(t.TempDir(), "blobs"))
+	srv, err := httpapi.New(httpapi.Options{
+		Listen:   "127.0.0.1:0",
+		Dir:      dir,
+		AuthKey:  "0123456789abcdef0123456789abcdef",
+		AuthGate: security.NopGate{},
+		Blobs:    blobs,
+		Queue:    mail.NewQueue(store, blobs),
+		Remote:   &remote,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	adminTok := login(t, srv, "admin@api.test", "secret")
+	body, _ := json.Marshal(map[string]string{"mode": "relay"})
+	req := authedJSON(t, http.MethodPost, "/api/v1/delivery/test", adminTok, body)
+	res := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("delivery test %d %s", res.Code, res.Body.String())
+	}
+	var out struct {
+		OK   bool   `json:"ok"`
+		Mode string `json:"mode"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if !out.OK || out.Mode != "relay" {
+		t.Fatalf("%+v", out)
+	}
+
+	userTok := login(t, srv, "user@api.test", "secret")
+	req = authedJSON(t, http.MethodPost, "/api/v1/delivery/test", userTok, body)
+	res = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("user want 403 got %d", res.Code)
+	}
+
+	req = authedJSON(t, http.MethodGet, "/api/v1/delivery", adminTok, nil)
+	res = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("delivery status %d %s", res.Code, res.Body.String())
+	}
+	var st struct {
+		RelayConfigured bool   `json:"relay_configured"`
+		Relay           string `json:"relay"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &st); err != nil {
+		t.Fatal(err)
+	}
+	if !st.RelayConfigured || st.Relay != ln.Addr().String() {
+		t.Fatalf("status %+v", st)
+	}
+}
+
+func serveProbeMock(ln net.Listener) {
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		go func(c net.Conn) {
+			defer c.Close()
+			_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+			r := bufio.NewReader(c)
+			_, _ = fmt.Fprint(c, "220 probe ESMTP\r\n")
+			for {
+				line, err := r.ReadString('\n')
+				if err != nil {
+					return
+				}
+				line = strings.TrimSpace(line)
+				switch {
+				case strings.HasPrefix(line, "EHLO"):
+					_, _ = fmt.Fprint(c, "250-probe\r\n250 OK\r\n")
+				case strings.HasPrefix(line, "QUIT"):
+					_, _ = fmt.Fprint(c, "221 bye\r\n")
+					return
+				}
+			}
+		}(conn)
 	}
 }
 

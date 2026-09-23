@@ -226,3 +226,36 @@ export async function unholdQueueEntry(id: number): Promise<void> {
 export async function cancelQueueEntry(id: number): Promise<void> {
   await api(`/queue/${id}`, { method: 'DELETE' })
 }
+
+export type DeliveryProbeStep = {
+  name: string
+  ok: boolean
+  detail?: string
+  error?: string
+}
+
+export type DeliveryProbeResult = {
+  ok: boolean
+  mode: string
+  domain?: string
+  host?: string
+  steps: DeliveryProbeStep[]
+}
+
+export type DeliveryStatus = {
+  relay_configured: boolean
+  relay: string
+}
+
+/** Admin outbound delivery options (relay presence, no secrets). */
+export async function fetchDeliveryStatus(): Promise<DeliveryStatus> {
+  return api<DeliveryStatus>('/delivery')
+}
+
+/** Admin outbound connectivity probe (no message sent). */
+export async function runDeliveryTest(body: {
+  to?: string
+  mode?: 'auto' | 'mx' | 'relay'
+}): Promise<DeliveryProbeResult> {
+  return api<DeliveryProbeResult>('/delivery/test', { method: 'POST', body })
+}

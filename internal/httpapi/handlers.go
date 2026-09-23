@@ -33,6 +33,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST "+apiPrefix+"/queue/{id}/hold", s.requireAuth(s.requireSameOrigin(s.handleQueueHold)))
 	s.mux.HandleFunc("POST "+apiPrefix+"/queue/{id}/unhold", s.requireAuth(s.requireSameOrigin(s.handleQueueUnhold)))
 	s.mux.HandleFunc("DELETE "+apiPrefix+"/queue/{id}", s.requireAuth(s.requireSameOrigin(s.handleQueueCancel)))
+	s.mux.HandleFunc("POST "+apiPrefix+"/delivery/test", s.requireAuth(s.requireSameOrigin(s.handleDeliveryTest)))
+	s.mux.HandleFunc("GET "+apiPrefix+"/delivery", s.requireAuth(s.handleDeliveryStatus))
 	if s.ui != nil {
 		s.mux.Handle("/", newSPAHandler(s.ui))
 	}

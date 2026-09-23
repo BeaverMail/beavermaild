@@ -8,7 +8,8 @@ type Crumb = { label: string; href?: string }
 const segmentLabel: Record<string, string> = {
   tenants: 'Tenants',
   domains: 'Domains',
-  queue: 'Queue'
+  queue: 'Queue',
+  delivery: 'Delivery test'
 }
 
 const crumbs = $derived.by((): Crumb[] => {

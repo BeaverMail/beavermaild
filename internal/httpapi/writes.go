@@ -2,13 +2,16 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/BeaverMail/beaver/internal/directory"
 	"github.com/BeaverMail/beaver/internal/mail"
+	"github.com/BeaverMail/beaver/internal/smtp"
 	"github.com/BeaverMail/beaver/internal/storage"
 )
 
@@ -683,4 +686,56 @@ func (s *Server) handleQueueCancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+type deliveryTestRequest struct {
+	To   string `json:"to"`
+	Mode string `json:"mode"`
+}
+
+// handleDeliveryStatus reports outbound probe options (no secrets).
+func (s *Server) handleDeliveryStatus(w http.ResponseWriter, r *http.Request) {
+	p, ok := principal(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	if p.Role != directory.RoleAdmin {
+		writeError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+	relay := ""
+	if s.remote != nil {
+		relay = strings.TrimSpace(s.remote.Relay)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"relay_configured": relay != "",
+		"relay":            relay,
+	})
+}
+
+// handleDeliveryTest probes outbound MX or relay connectivity without sending mail.
+func (s *Server) handleDeliveryTest(w http.ResponseWriter, r *http.Request) {
+	p, ok := principal(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	if p.Role != directory.RoleAdmin {
+		writeError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+	if s.remote == nil {
+		writeError(w, http.StatusServiceUnavailable, "delivery probe unavailable")
+		return
+	}
+	var req deliveryTestRequest
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	res := smtp.ProbeRemote(ctx, *s.remote, smtp.ProbeRequest{To: req.To, Mode: req.Mode})
+	writeJSON(w, http.StatusOK, res)
 }

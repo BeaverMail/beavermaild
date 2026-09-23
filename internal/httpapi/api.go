@@ -16,6 +16,7 @@ import (
 	"github.com/BeaverMail/beaver/internal/directory"
 	"github.com/BeaverMail/beaver/internal/mail"
 	"github.com/BeaverMail/beaver/internal/security"
+	"github.com/BeaverMail/beaver/internal/smtp"
 	"github.com/BeaverMail/beaver/internal/storage/blob"
 	"github.com/BeaverMail/beaver/internal/tlsload"
 )
@@ -38,6 +39,8 @@ type Options struct {
 	Blobs *blob.FS
 	// Queue is the outbound mail queue (nil disables queue endpoints).
 	Queue *mail.Queue
+	// Remote configures outbound delivery probes (nil/empty disables).
+	Remote *smtp.RemoteConfig
 	// UI is the embedded admin SPA (nil when not attached).
 	UI fs.FS
 }
@@ -53,6 +56,7 @@ type Server struct {
 	authGate security.AuthGate
 	blobs    *blob.FS
 	queue    *mail.Queue
+	remote   *smtp.RemoteConfig
 	ui       fs.FS
 	mux      *http.ServeMux
 }
@@ -92,6 +96,7 @@ func New(opts Options) (*Server, error) {
 		authGate: gate,
 		blobs:    opts.Blobs,
 		queue:    opts.Queue,
+		remote:   opts.Remote,
 		ui:       opts.UI,
 		mux:      http.NewServeMux(),
 	}
