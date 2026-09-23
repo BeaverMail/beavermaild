@@ -17,6 +17,7 @@ import (
 	"github.com/BeaverMail/beaver/internal/mailauth"
 	"github.com/BeaverMail/beaver/internal/pluginhost"
 	"github.com/BeaverMail/beaver/internal/pluginhost/daemon"
+	"github.com/BeaverMail/beaver/internal/servicestatus"
 	"github.com/BeaverMail/beaver/internal/smtp"
 	"github.com/BeaverMail/beaver/internal/storage"
 	"github.com/BeaverMail/beaver/internal/storage/blob"
@@ -38,6 +39,7 @@ type App struct {
 	imap   *imap.Server
 	http   *httpapi.Server
 	daemon *daemon.Manager
+	status *servicestatus.Registry
 }
 
 // Open connects storage using cfg and returns an App.
@@ -101,6 +103,9 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 		CacheMaxEntries: asnCacheMax,
 	})
 
+	status := servicestatus.New()
+	seedListenerStatus(status, cfg, certs != nil)
+
 	var httpSrv *httpapi.Server
 	if cfg.HTTPEnabled() {
 		var uiFS fs.FS
@@ -117,6 +122,7 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 			Blobs:    blobs,
 			Queue:    queue,
 			Remote:   ptrRemote(remoteConfigFrom(cfg)),
+			Status:   status,
 			UI:       uiFS,
 		})
 		if err != nil {
@@ -148,6 +154,7 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 			SendGate:        sendGate,
 			MaxConnections:  smtpMaxConn,
 			ReadTimeout:     smtpReadTO,
+			Status:          status,
 		}),
 		imap: imap.NewServer(log, cfg.IMAPListen(), dir, inbox, imap.Options{
 			Certs:          certs,
@@ -156,9 +163,54 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 			AuthGate:       authGate,
 			MaxConnections: imapMaxConn,
 			ReadTimeout:    imapReadTO,
+			Status:         status,
 		}),
-		http: httpSrv,
+		http:   httpSrv,
+		status: status,
 	}, nil
+}
+
+func seedListenerStatus(reg *servicestatus.Registry, cfg *config.Config, hasCerts bool) {
+	if addr := cfg.SMTPListen(); addr != "" {
+		reg.Set(servicestatus.Entry{ID: "smtp_inbound", Name: "SMTP inbound", Listen: addr, State: servicestatus.StateDown})
+	}
+	if addr := cfg.SMTPSubmissionListen(); addr != "" {
+		reg.Set(servicestatus.Entry{ID: "smtp_submission", Name: "SMTP submission", Listen: addr, State: servicestatus.StateDown})
+	}
+	if addr := cfg.SMTPSubmissionTLSListen(); addr != "" {
+		st := servicestatus.StateDown
+		errMsg := ""
+		if !hasCerts {
+			st = servicestatus.StateDisabled
+			errMsg = "tls not configured"
+		}
+		reg.Set(servicestatus.Entry{ID: "smtp_submission_tls", Name: "SMTP submission TLS", Listen: addr, State: st, Error: errMsg})
+	}
+	if addr := cfg.IMAPListen(); addr != "" {
+		reg.Set(servicestatus.Entry{ID: "imap", Name: "IMAP", Listen: addr, State: servicestatus.StateDown})
+	}
+	if addr := cfg.IMAPTLSListen(); addr != "" {
+		st := servicestatus.StateDown
+		errMsg := ""
+		if !hasCerts {
+			st = servicestatus.StateDisabled
+			errMsg = "tls not configured"
+		}
+		reg.Set(servicestatus.Entry{ID: "imap_tls", Name: "IMAP TLS", Listen: addr, State: st, Error: errMsg})
+	}
+	if cfg.HTTPEnabled() {
+		reg.Set(servicestatus.Entry{ID: "http", Name: "HTTP admin", Listen: cfg.HTTPListen(), State: servicestatus.StateDown})
+	}
+	reg.Set(servicestatus.Entry{ID: "queue_worker", Name: "Queue worker", State: servicestatus.StateDown})
+	if len(cfg.ACMEHosts()) > 0 {
+		st := servicestatus.StateDown
+		errMsg := "certs not loaded"
+		if hasCerts {
+			st = servicestatus.StateUp
+			errMsg = ""
+		}
+		reg.Set(servicestatus.Entry{ID: "acme", Name: "ACME", State: st, Error: errMsg})
+	}
 }
 
 type tlsRuntime struct {
@@ -228,6 +280,15 @@ func (a *App) Run(ctx context.Context) error {
 	} else {
 		a.daemon = dm
 		a.smtp.SetFilter(dm.Filter())
+		if a.status != nil {
+			st := servicestatus.StateUp
+			detail := ""
+			if len(reg.DaemonEntries()) == 0 {
+				st = servicestatus.StateDisabled
+				detail = "no daemon plugins"
+			}
+			a.status.Set(servicestatus.Entry{ID: "antispam", Name: "Antispam plugins", State: st, Error: detail})
+		}
 	}
 
 	go func() { errCh <- a.smtp.Serve(ctx) }()
@@ -238,6 +299,9 @@ func (a *App) Run(ctx context.Context) error {
 	signer, err := a.cfg.NewDKIMSigner()
 	if err != nil {
 		return fmt.Errorf("dkim sign: %w", err)
+	}
+	if a.status != nil {
+		a.status.Set(servicestatus.Entry{ID: "queue_worker", Name: "Queue worker", State: servicestatus.StateUp})
 	}
 	go mail.NewWorker(a.log, a.queue, a.inbox, a.dir, newRemoteDeliverer(a.cfg), signer, policy).Run(ctx)
 

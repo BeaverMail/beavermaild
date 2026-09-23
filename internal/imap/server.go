@@ -11,6 +11,7 @@ import (
 	"github.com/BeaverMail/beaver/internal/directory"
 	"github.com/BeaverMail/beaver/internal/mail"
 	"github.com/BeaverMail/beaver/internal/security"
+	"github.com/BeaverMail/beaver/internal/servicestatus"
 	"github.com/BeaverMail/beaver/internal/tlsload"
 )
 
@@ -22,6 +23,7 @@ type Options struct {
 	AuthGate       security.AuthGate
 	MaxConnections int           // 0 = unlimited (tests); positive = per-listener cap
 	ReadTimeout    time.Duration // 0 = no idle read deadline
+	Status         *servicestatus.Registry
 }
 
 // Server accepts IMAP connections.
@@ -36,6 +38,7 @@ type Server struct {
 	authGate       security.AuthGate
 	maxConnections int
 	readTimeout    time.Duration
+	status         *servicestatus.Registry
 }
 
 // NewServer returns an IMAP server bound to plainAddr; tlsAddr enables implicit TLS on :993.
@@ -55,6 +58,7 @@ func NewServer(log *slog.Logger, plainAddr string, dir *directory.Local, inbox *
 		authGate:       gate,
 		maxConnections: opts.MaxConnections,
 		readTimeout:    opts.ReadTimeout,
+		status:         opts.Status,
 	}
 }
 
@@ -64,27 +68,46 @@ type listenerSlot struct {
 	limiter *security.ConnLimiter
 }
 
-// Serve listens until ctx is canceled.
+// Serve listens until ctx is canceled. TLS bind failure does not take down plain IMAP.
 func (s *Server) Serve(ctx context.Context) error {
 	var slots []listenerSlot
-	plain, err := net.Listen("tcp", s.plainAddr)
-	if err != nil {
-		return err
-	}
-	slots = append(slots, listenerSlot{ln: plain, secure: false, limiter: security.NewConnLimiter(s.maxConnections)})
-	s.log.Info("imap listening", "addr", plain.Addr().String())
-
-	if s.tlsAddr != "" && s.certs != nil {
-		tlsLn, err := s.certs.Listen("tcp", s.tlsAddr)
+	if s.plainAddr != "" {
+		ln, err := net.Listen("tcp", s.plainAddr)
 		if err != nil {
-			_ = plain.Close()
-			return err
+			s.setStatus(servicestatus.Entry{ID: "imap", Name: "IMAP", Listen: s.plainAddr, State: servicestatus.StateError, Error: err.Error()})
+			s.log.Warn("imap listen failed", "addr", s.plainAddr, slog.Any("err", err))
+		} else {
+			s.setStatus(servicestatus.Entry{ID: "imap", Name: "IMAP", Listen: ln.Addr().String(), State: servicestatus.StateUp})
+			s.log.Info("imap listening", "addr", ln.Addr().String())
+			slots = append(slots, listenerSlot{ln: ln, secure: false, limiter: security.NewConnLimiter(s.maxConnections)})
 		}
-		slots = append(slots, listenerSlot{ln: tlsLn, secure: true, limiter: security.NewConnLimiter(s.maxConnections)})
-		s.log.Info("imap tls listening", "addr", tlsLn.Addr().String())
 	}
-
+	if s.tlsAddr != "" {
+		if s.certs == nil {
+			s.setStatus(servicestatus.Entry{ID: "imap_tls", Name: "IMAP TLS", Listen: s.tlsAddr, State: servicestatus.StateDisabled, Error: "tls not configured"})
+		} else {
+			tlsLn, err := s.certs.Listen("tcp", s.tlsAddr)
+			if err != nil {
+				s.setStatus(servicestatus.Entry{ID: "imap_tls", Name: "IMAP TLS", Listen: s.tlsAddr, State: servicestatus.StateError, Error: err.Error()})
+				s.log.Warn("imap tls listen failed", "addr", s.tlsAddr, slog.Any("err", err))
+			} else {
+				s.setStatus(servicestatus.Entry{ID: "imap_tls", Name: "IMAP TLS", Listen: tlsLn.Addr().String(), State: servicestatus.StateUp})
+				s.log.Info("imap tls listening", "addr", tlsLn.Addr().String())
+				slots = append(slots, listenerSlot{ln: tlsLn, secure: true, limiter: security.NewConnLimiter(s.maxConnections)})
+			}
+		}
+	}
+	if len(slots) == 0 {
+		<-ctx.Done()
+		return nil
+	}
 	return s.serve(ctx, slots)
+}
+
+func (s *Server) setStatus(e servicestatus.Entry) {
+	if s.status != nil {
+		s.status.Set(e)
+	}
 }
 
 // ServeListener serves on an existing listener (for tests).

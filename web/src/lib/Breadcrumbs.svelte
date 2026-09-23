@@ -9,7 +9,8 @@ const segmentLabel: Record<string, string> = {
   tenants: 'Tenants',
   domains: 'Domains',
   queue: 'Queue',
-  delivery: 'Delivery test'
+  delivery: 'Delivery test',
+  status: 'Services'
 }
 
 const crumbs = $derived.by((): Crumb[] => {

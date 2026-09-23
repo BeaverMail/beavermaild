@@ -11,6 +11,7 @@ import (
 
 	"github.com/BeaverMail/beaver/internal/directory"
 	"github.com/BeaverMail/beaver/internal/mail"
+	"github.com/BeaverMail/beaver/internal/servicestatus"
 	"github.com/BeaverMail/beaver/internal/smtp"
 	"github.com/BeaverMail/beaver/internal/storage"
 )
@@ -691,6 +692,24 @@ func (s *Server) handleQueueCancel(w http.ResponseWriter, r *http.Request) {
 type deliveryTestRequest struct {
 	To   string `json:"to"`
 	Mode string `json:"mode"`
+}
+
+// handleServicesStatus returns listener/component status for ops (admin only).
+func (s *Server) handleServicesStatus(w http.ResponseWriter, r *http.Request) {
+	p, ok := principal(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	if p.Role != directory.RoleAdmin {
+		writeError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+	entries := []servicestatus.Entry{}
+	if s.status != nil {
+		entries = s.status.List()
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"services": entries})
 }
 
 // handleDeliveryStatus reports outbound probe options (no secrets).

@@ -16,6 +16,7 @@ import (
 	"github.com/BeaverMail/beaver/internal/directory"
 	"github.com/BeaverMail/beaver/internal/mail"
 	"github.com/BeaverMail/beaver/internal/security"
+	"github.com/BeaverMail/beaver/internal/servicestatus"
 	"github.com/BeaverMail/beaver/internal/smtp"
 	"github.com/BeaverMail/beaver/internal/storage/blob"
 	"github.com/BeaverMail/beaver/internal/tlsload"
@@ -41,6 +42,8 @@ type Options struct {
 	Queue *mail.Queue
 	// Remote configures outbound delivery probes (nil/empty disables).
 	Remote *smtp.RemoteConfig
+	// Status is the process-wide service registry (nil disables /status).
+	Status *servicestatus.Registry
 	// UI is the embedded admin SPA (nil when not attached).
 	UI fs.FS
 }
@@ -57,6 +60,7 @@ type Server struct {
 	blobs    *blob.FS
 	queue    *mail.Queue
 	remote   *smtp.RemoteConfig
+	status   *servicestatus.Registry
 	ui       fs.FS
 	mux      *http.ServeMux
 }
@@ -97,6 +101,7 @@ func New(opts Options) (*Server, error) {
 		blobs:    opts.Blobs,
 		queue:    opts.Queue,
 		remote:   opts.Remote,
+		status:   opts.Status,
 		ui:       opts.UI,
 		mux:      http.NewServeMux(),
 	}
@@ -114,7 +119,24 @@ func (s *Server) Serve(ctx context.Context) error {
 		ln, err = net.Listen("tcp", s.listen)
 	}
 	if err != nil {
+		if s.status != nil {
+			s.status.Set(servicestatus.Entry{
+				ID:     "http",
+				Name:   "HTTP admin",
+				Listen: s.listen,
+				State:  servicestatus.StateError,
+				Error:  err.Error(),
+			})
+		}
 		return fmt.Errorf("httpapi: listen: %w", err)
+	}
+	if s.status != nil {
+		s.status.Set(servicestatus.Entry{
+			ID:     "http",
+			Name:   "HTTP admin",
+			Listen: ln.Addr().String(),
+			State:  servicestatus.StateUp,
+		})
 	}
 
 	srv := &http.Server{

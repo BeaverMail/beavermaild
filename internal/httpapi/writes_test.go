@@ -21,6 +21,7 @@ import (
 	"github.com/BeaverMail/beaver/internal/httpapi"
 	"github.com/BeaverMail/beaver/internal/mail"
 	"github.com/BeaverMail/beaver/internal/security"
+	"github.com/BeaverMail/beaver/internal/servicestatus"
 	"github.com/BeaverMail/beaver/internal/smtp"
 	"github.com/BeaverMail/beaver/internal/storage/blob"
 	"github.com/BeaverMail/beaver/internal/storage/sqlite"
@@ -522,6 +523,94 @@ type domainDTO struct {
 	ID       uint32 `json:"id"`
 	Name     string `json:"name"`
 	TenantID uint32 `json:"tenant_id"`
+}
+
+func TestServicesStatus(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, "file:"+t.TempDir()+"/store.sqlite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	dir := directory.NewLocal(store)
+	dom, _, err := dir.EnsureDomain(ctx, directory.DefaultTenantID, "api.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dir.CreateAccountRole(ctx, dom.ID, "admin", "secret", directory.RoleAdmin); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dir.CreateAccountRole(ctx, dom.ID, "user", "secret", directory.RoleUser); err != nil {
+		t.Fatal(err)
+	}
+
+	reg := servicestatus.New()
+	reg.Set(servicestatus.Entry{
+		ID:     "smtp_inbound",
+		Name:   "SMTP inbound",
+		Listen: "127.0.0.1:2525",
+		State:  servicestatus.StateUp,
+	})
+	reg.Set(servicestatus.Entry{
+		ID:     "imap",
+		Name:   "IMAP",
+		Listen: ":143",
+		State:  servicestatus.StateError,
+		Error:  "address already in use",
+	})
+
+	blobs := blob.NewFS(filepath.Join(t.TempDir(), "blobs"))
+	srv, err := httpapi.New(httpapi.Options{
+		Listen:   "127.0.0.1:0",
+		Dir:      dir,
+		AuthKey:  "0123456789abcdef0123456789abcdef",
+		AuthGate: security.NopGate{},
+		Blobs:    blobs,
+		Queue:    mail.NewQueue(store, blobs),
+		Status:   reg,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	adminTok := login(t, srv, "admin@api.test", "secret")
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/status", nil)
+	req.Header.Set("Authorization", "Bearer "+adminTok)
+	res := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status %d %s", res.Code, res.Body.String())
+	}
+	var out struct {
+		Services []struct {
+			ID     string `json:"id"`
+			State  string `json:"state"`
+			Listen string `json:"listen"`
+			Error  string `json:"error"`
+		} `json:"services"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Services) != 2 {
+		t.Fatalf("services %+v", out.Services)
+	}
+	if out.Services[0].ID != "imap" || out.Services[0].State != servicestatus.StateError {
+		t.Fatalf("want imap error first (sorted): %+v", out.Services[0])
+	}
+	if out.Services[1].ID != "smtp_inbound" || out.Services[1].Listen == "" {
+		t.Fatalf("smtp: %+v", out.Services[1])
+	}
+
+	userTok := login(t, srv, "user@api.test", "secret")
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/status", nil)
+	req.Header.Set("Authorization", "Bearer "+userTok)
+	res = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("user want 403 got %d", res.Code)
+	}
 }
 
 func newEmptyAPI(t *testing.T) (*httpapi.Server, *directory.Local) {

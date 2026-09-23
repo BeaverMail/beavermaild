@@ -12,6 +12,7 @@ import (
 	"github.com/BeaverMail/beaver/internal/mail"
 	"github.com/BeaverMail/beaver/internal/mailauth"
 	"github.com/BeaverMail/beaver/internal/security"
+	"github.com/BeaverMail/beaver/internal/servicestatus"
 	"github.com/BeaverMail/beaver/internal/tlsload"
 )
 
@@ -31,6 +32,7 @@ type Options struct {
 	ASNLookup       *ASNLookup
 	MaxConnections  int           // 0 = unlimited (tests); positive = per-listener cap
 	ReadTimeout     time.Duration // 0 = no idle read deadline
+	Status          *servicestatus.Registry
 }
 
 // Server accepts inbound SMTP connections.
@@ -56,6 +58,7 @@ type Server struct {
 	asnLookup           *ASNLookup
 	maxConnections      int
 	readTimeout         time.Duration
+	status              *servicestatus.Registry
 }
 
 // NewServer returns an SMTP server. submissionAddr is optional plain listener (e.g. :587).
@@ -91,6 +94,7 @@ func NewServer(log *slog.Logger, addr string, dir *directory.Local, inbox *mail.
 		asnLookup:           opts.ASNLookup,
 		maxConnections:      opts.MaxConnections,
 		readTimeout:         opts.ReadTimeout,
+		status:              opts.Status,
 	}
 }
 
@@ -110,39 +114,67 @@ type listenerSlot struct {
 }
 
 // Serve listens on configured addresses until ctx is canceled.
+// Each listener is independent: a bind failure is recorded and other listeners still start.
 func (s *Server) Serve(ctx context.Context) error {
 	var slots []listenerSlot
 	if s.inboundAddr != "" {
-		ln, err := net.Listen("tcp", s.inboundAddr)
-		if err != nil {
-			return err
+		if ln, ok := s.listenSlot(ctx, "smtp_inbound", "SMTP inbound", s.inboundAddr, false, false); ok {
+			slots = append(slots, ln)
 		}
-		slots = append(slots, listenerSlot{ln: ln, secure: false, submission: false, limiter: security.NewConnLimiter(s.maxConnections)})
-		s.log.Info("smtp listening", "addr", ln.Addr().String())
 	}
 	if s.submissionPlainAddr != "" {
-		ln, err := net.Listen("tcp", s.submissionPlainAddr)
-		if err != nil {
-			for _, slot := range slots {
-				_ = slot.ln.Close()
-			}
-			return err
+		if ln, ok := s.listenSlot(ctx, "smtp_submission", "SMTP submission", s.submissionPlainAddr, false, true); ok {
+			slots = append(slots, ln)
 		}
-		slots = append(slots, listenerSlot{ln: ln, secure: false, submission: true, limiter: security.NewConnLimiter(s.maxConnections)})
-		s.log.Info("smtp listening", "addr", ln.Addr().String(), "submission", true)
 	}
-	if s.submissionTLSAddr != "" && s.certs != nil {
-		tlsLn, err := s.certs.Listen("tcp", s.submissionTLSAddr)
-		if err != nil {
-			for _, slot := range slots {
-				_ = slot.ln.Close()
-			}
-			return err
+	if s.submissionTLSAddr != "" {
+		if s.certs == nil {
+			s.setStatus(servicestatus.Entry{
+				ID:     "smtp_submission_tls",
+				Name:   "SMTP submission TLS",
+				Listen: s.submissionTLSAddr,
+				State:  servicestatus.StateDisabled,
+				Error:  "tls not configured",
+			})
+		} else if ln, ok := s.listenTLSSlot(ctx, "smtp_submission_tls", "SMTP submission TLS", s.submissionTLSAddr); ok {
+			slots = append(slots, ln)
 		}
-		slots = append(slots, listenerSlot{ln: tlsLn, secure: true, submission: true, limiter: security.NewConnLimiter(s.maxConnections)})
-		s.log.Info("smtp tls listening", "addr", tlsLn.Addr().String(), "submission", true)
+	}
+	if len(slots) == 0 {
+		<-ctx.Done()
+		return nil
 	}
 	return s.serve(ctx, slots)
+}
+
+func (s *Server) listenSlot(_ context.Context, id, name, addr string, secure, submission bool) (listenerSlot, bool) {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		s.setStatus(servicestatus.Entry{ID: id, Name: name, Listen: addr, State: servicestatus.StateError, Error: err.Error()})
+		s.log.Warn("smtp listen failed", "id", id, "addr", addr, slog.Any("err", err))
+		return listenerSlot{}, false
+	}
+	s.setStatus(servicestatus.Entry{ID: id, Name: name, Listen: ln.Addr().String(), State: servicestatus.StateUp})
+	s.log.Info("smtp listening", "addr", ln.Addr().String(), "submission", submission, "tls", secure)
+	return listenerSlot{ln: ln, secure: secure, submission: submission, limiter: security.NewConnLimiter(s.maxConnections)}, true
+}
+
+func (s *Server) listenTLSSlot(_ context.Context, id, name, addr string) (listenerSlot, bool) {
+	ln, err := s.certs.Listen("tcp", addr)
+	if err != nil {
+		s.setStatus(servicestatus.Entry{ID: id, Name: name, Listen: addr, State: servicestatus.StateError, Error: err.Error()})
+		s.log.Warn("smtp tls listen failed", "id", id, "addr", addr, slog.Any("err", err))
+		return listenerSlot{}, false
+	}
+	s.setStatus(servicestatus.Entry{ID: id, Name: name, Listen: ln.Addr().String(), State: servicestatus.StateUp})
+	s.log.Info("smtp tls listening", "addr", ln.Addr().String(), "submission", true)
+	return listenerSlot{ln: ln, secure: true, submission: true, limiter: security.NewConnLimiter(s.maxConnections)}, true
+}
+
+func (s *Server) setStatus(e servicestatus.Entry) {
+	if s.status != nil {
+		s.status.Set(e)
+	}
 }
 
 // ServeListener serves inbound SMTP on an existing listener (for tests).

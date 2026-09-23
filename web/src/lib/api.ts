@@ -259,3 +259,17 @@ export async function runDeliveryTest(body: {
 }): Promise<DeliveryProbeResult> {
   return api<DeliveryProbeResult>('/delivery/test', { method: 'POST', body })
 }
+
+export type ServiceStatus = {
+  id: string
+  name: string
+  listen?: string
+  state: 'up' | 'down' | 'disabled' | 'error' | string
+  error?: string
+}
+
+/** Admin process/listener status. */
+export async function fetchServicesStatus(): Promise<ServiceStatus[]> {
+  const out = await api<{ services: ServiceStatus[] }>('/status')
+  return out.services ?? []
+}
