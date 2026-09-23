@@ -87,6 +87,9 @@ func (w *Worker) deliverEntry(ctx context.Context, e QueueEntry) error {
 	if pendingRecipients(msg) == 0 {
 		return w.queue.Delete(ctx, e.ID)
 	}
+	if IsHeld(msg) {
+		return nil
+	}
 
 	created := time.Unix(int64(msg.Created), 0)
 	now := time.Now()
@@ -192,15 +195,15 @@ func (w *Worker) maybeSendDSN(ctx context.Context, queueID uint32, msg storage.Q
 	}
 	status := dsnStatusFor(action, err)
 	opts := DSNBuildOpts{
-		ReturnPath: returnPath,
-		FinalRcpt:  rcpt.Address,
-		Orcpt:      rcpt.Orcpt,
-		Envid:      msg.Envid,
-		Ret:        RetMode(msg.Ret),
-		Action:     action,
-		Status:     status,
-		Diagnostic: diag,
-		QueueID:    queueID,
+		ReturnPath:  returnPath,
+		FinalRcpt:   rcpt.Address,
+		Orcpt:       rcpt.Orcpt,
+		Envid:       msg.Envid,
+		Ret:         RetMode(msg.Ret),
+		Action:      action,
+		Status:      status,
+		Diagnostic:  diag,
+		QueueID:     queueID,
 		OriginalRaw: raw,
 	}
 	bounce := BuildDSN(opts)

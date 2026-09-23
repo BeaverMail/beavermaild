@@ -9,6 +9,7 @@ import (
 
 	"github.com/BeaverMail/beaver/internal/directory"
 	"github.com/BeaverMail/beaver/internal/mail"
+	"github.com/BeaverMail/beaver/internal/storage"
 )
 
 // handleSetupStatus reports whether the greenfield wizard is still available.
@@ -512,6 +513,7 @@ type queueEntryDTO struct {
 	Size       uint64         `json:"size"`
 	Created    uint64         `json:"created"`
 	Pending    int            `json:"pending"`
+	Held       bool           `json:"held"`
 	Recipients []queueRcptDTO `json:"recipients"`
 }
 
@@ -569,8 +571,116 @@ func (s *Server) handleListQueue(w http.ResponseWriter, r *http.Request) {
 			Size:       e.Msg.Size,
 			Created:    e.Msg.Created,
 			Pending:    pending,
+			Held:       mail.IsHeld(e.Msg),
 			Recipients: rcpts,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"entries": out})
+}
+
+func (s *Server) requireQueueAdmin(w http.ResponseWriter, r *http.Request) (ok bool) {
+	p, authed := principal(r.Context())
+	if !authed {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return false
+	}
+	if p.Role != directory.RoleAdmin {
+		writeError(w, http.StatusForbidden, "forbidden")
+		return false
+	}
+	if s.queue == nil {
+		writeError(w, http.StatusServiceUnavailable, "queue unavailable")
+		return false
+	}
+	return true
+}
+
+func (s *Server) parseQueueID(w http.ResponseWriter, r *http.Request) (uint32, bool) {
+	id, err := parsePathUint32(r.PathValue("id"))
+	if err != nil || id == 0 {
+		writeError(w, http.StatusBadRequest, "invalid queue id")
+		return 0, false
+	}
+	return id, true
+}
+
+func (s *Server) handleQueueRetry(w http.ResponseWriter, r *http.Request) {
+	if !s.requireQueueAdmin(w, r) {
+		return
+	}
+	id, ok := s.parseQueueID(w, r)
+	if !ok {
+		return
+	}
+	address := strings.TrimSpace(r.URL.Query().Get("address"))
+	if err := s.queue.RetryNow(r.Context(), id, address); err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "queue entry not found")
+			return
+		}
+		s.log.Error("http queue retry", "err", err)
+		writeError(w, http.StatusInternalServerError, "queue retry failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleQueueHold(w http.ResponseWriter, r *http.Request) {
+	if !s.requireQueueAdmin(w, r) {
+		return
+	}
+	id, ok := s.parseQueueID(w, r)
+	if !ok {
+		return
+	}
+	if err := s.queue.Hold(r.Context(), id); err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "queue entry not found")
+			return
+		}
+		s.log.Error("http queue hold", "err", err)
+		writeError(w, http.StatusInternalServerError, "queue hold failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleQueueUnhold(w http.ResponseWriter, r *http.Request) {
+	if !s.requireQueueAdmin(w, r) {
+		return
+	}
+	id, ok := s.parseQueueID(w, r)
+	if !ok {
+		return
+	}
+	if err := s.queue.Unhold(r.Context(), id); err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "queue entry not found")
+			return
+		}
+		s.log.Error("http queue unhold", "err", err)
+		writeError(w, http.StatusInternalServerError, "queue unhold failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleQueueCancel(w http.ResponseWriter, r *http.Request) {
+	if !s.requireQueueAdmin(w, r) {
+		return
+	}
+	id, ok := s.parseQueueID(w, r)
+	if !ok {
+		return
+	}
+	if err := s.queue.Cancel(r.Context(), id); err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "queue entry not found")
+			return
+		}
+		s.log.Error("http queue cancel", "err", err)
+		writeError(w, http.StatusInternalServerError, "queue cancel failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }

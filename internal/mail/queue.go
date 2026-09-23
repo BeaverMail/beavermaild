@@ -19,6 +19,9 @@ const (
 
 	rcptDelivered     uint64 = 1 << 0
 	rcptPermanentFail uint64 = 1 << 1
+
+	// queueHeld marks a message paused by an admin (worker skips until Unhold).
+	queueHeld uint64 = 1 << 0
 )
 
 // QueueEntry is one pending outbound message.
@@ -118,6 +121,88 @@ func (q *Queue) ListPending(ctx context.Context) ([]QueueEntry, error) {
 // ListAll returns every queue entry still stored.
 func (q *Queue) ListAll(ctx context.Context) ([]QueueEntry, error) {
 	return q.list(ctx, false)
+}
+
+// Get loads one queue entry by id.
+func (q *Queue) Get(ctx context.Context, id uint32) (QueueEntry, error) {
+	key := storage.AppendKey(nil, storage.SubspaceQueue, queueAccountID, id, queueMsgCollection, nil)
+	wire, err := q.store.Get(ctx, key)
+	if err != nil {
+		return QueueEntry{}, err
+	}
+	var msg storage.QueueMessage
+	if err := storage.UnmarshalPersist(wire, &msg); err != nil {
+		return QueueEntry{}, err
+	}
+	return QueueEntry{ID: id, Msg: msg}, nil
+}
+
+// IsHeld reports whether the message is admin-held.
+func IsHeld(msg storage.QueueMessage) bool {
+	return msg.Flags&queueHeld != 0
+}
+
+// Hold pauses delivery attempts for the entry until Unhold.
+func (q *Queue) Hold(ctx context.Context, id uint32) error {
+	e, err := q.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	if IsHeld(e.Msg) {
+		return nil
+	}
+	e.Msg.Flags |= queueHeld
+	return q.Save(ctx, id, e.Msg)
+}
+
+// Unhold resumes delivery for a held entry.
+func (q *Queue) Unhold(ctx context.Context, id uint32) error {
+	e, err := q.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	if !IsHeld(e.Msg) {
+		return nil
+	}
+	e.Msg.Flags &^= queueHeld
+	return q.Save(ctx, id, e.Msg)
+}
+
+// RetryNow sets NextDue=0 for pending recipients (optional address filter) and clears hold.
+func (q *Queue) RetryNow(ctx context.Context, id uint32, address string) error {
+	e, err := q.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	address = strings.ToLower(strings.TrimSpace(address))
+	matched := 0
+	e.Msg.Flags &^= queueHeld
+	for i := range e.Msg.Recipients {
+		rcpt := &e.Msg.Recipients[i]
+		if !recipientPending(*rcpt) {
+			continue
+		}
+		if address != "" && rcpt.Address != address {
+			continue
+		}
+		rcpt.NextDue = 0
+		matched++
+	}
+	if matched == 0 {
+		if address != "" {
+			return fmt.Errorf("mail: no pending recipient %q: %w", address, storage.ErrNotFound)
+		}
+		return fmt.Errorf("mail: no pending recipients: %w", storage.ErrNotFound)
+	}
+	return q.Save(ctx, id, e.Msg)
+}
+
+// Cancel removes the queue entry without sending a DSN (admin discard).
+func (q *Queue) Cancel(ctx context.Context, id uint32) error {
+	if _, err := q.Get(ctx, id); err != nil {
+		return err
+	}
+	return q.Delete(ctx, id)
 }
 
 // RecipientStatus returns pending, delivered, or failed for one queue recipient.

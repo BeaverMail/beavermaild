@@ -2,7 +2,15 @@
 import { ListOrdered } from '@lucide/svelte'
 import { goto } from '$app/navigation'
 import { page } from '$app/state'
-import { ApiError, fetchQueue, type QueueEntry } from '$lib/api'
+import {
+  ApiError,
+  cancelQueueEntry,
+  fetchQueue,
+  holdQueueEntry,
+  type QueueEntry,
+  retryQueueEntry,
+  unholdQueueEntry
+} from '$lib/api'
 import { me } from '$lib/session'
 
 type Tab = 'pending' | 'completed'
@@ -10,6 +18,7 @@ type Tab = 'pending' | 'completed'
 let entries = $state<QueueEntry[]>([])
 let error = $state('')
 let loading = $state(true)
+let busyId = $state<number | null>(null)
 
 const isAdmin = $derived($me?.role === 'admin')
 const tab = $derived<Tab>(page.url.searchParams.get('tab') === 'completed' ? 'completed' : 'pending')
@@ -49,10 +58,29 @@ async function setTab(next: Tab) {
   await goto(`${url.pathname}${url.search}`, { replaceState: true, keepFocus: true, noScroll: true })
 }
 
+async function runAction(id: number, fn: () => Promise<void>) {
+  busyId = id
+  error = ''
+  try {
+    await fn()
+    await load(tab)
+  } catch (e) {
+    error = e instanceof ApiError ? e.message : 'queue action failed'
+  } finally {
+    busyId = null
+  }
+}
+
 function tabClass(active: boolean) {
   return active
     ? 'border-brand-700 text-brand-900'
     : 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-800'
+}
+
+function btnClass(danger = false) {
+  return danger
+    ? 'rounded-md border border-red-200 bg-white px-2 py-1 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-50'
+    : 'rounded-md border border-gray-200 bg-white px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50'
 }
 
 function formatMS(ms: number): string {
@@ -109,12 +137,58 @@ function formatCreated(sec: number): string {
   <div class="space-y-4">
     {#each entries as e (e.id)}
       <div class="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-        <div class="flex flex-wrap gap-x-4 gap-y-1 border-b border-gray-100 bg-gray-50 px-4 py-3 text-sm">
+        <div class="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-gray-100 bg-gray-50 px-4 py-3 text-sm">
           <span class="font-medium text-gray-900">#{e.id}</span>
           <span class="text-gray-600">from {e.return_path || '<>'}</span>
           <span class="text-gray-500">{e.size} bytes</span>
           <span class="text-gray-500">created {formatCreated(e.created)}</span>
           <span class="text-gray-500">pending {e.pending}</span>
+          {#if e.held}
+            <span class="rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-800">held</span>
+          {/if}
+          {#if tab === 'pending' && isAdmin}
+            <div class="ml-auto flex flex-wrap gap-2">
+              <button
+                type="button"
+                class={btnClass()}
+                disabled={busyId === e.id}
+                onclick={() => runAction(e.id, () => retryQueueEntry(e.id))}
+              >
+                Retry now
+              </button>
+              {#if e.held}
+                <button
+                  type="button"
+                  class={btnClass()}
+                  disabled={busyId === e.id}
+                  onclick={() => runAction(e.id, () => unholdQueueEntry(e.id))}
+                >
+                  Unhold
+                </button>
+              {:else}
+                <button
+                  type="button"
+                  class={btnClass()}
+                  disabled={busyId === e.id}
+                  onclick={() => runAction(e.id, () => holdQueueEntry(e.id))}
+                >
+                  Hold
+                </button>
+              {/if}
+              <button
+                type="button"
+                class={btnClass(true)}
+                disabled={busyId === e.id}
+                onclick={() => {
+                  if (confirm(`Cancel queue entry #${e.id}? No bounce will be sent.`)) {
+                    void runAction(e.id, () => cancelQueueEntry(e.id))
+                  }
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          {/if}
         </div>
         <table class="min-w-full divide-y divide-gray-100 text-sm">
           <thead>

@@ -199,6 +199,7 @@ export type QueueEntry = {
   size: number
   created: number
   pending: number
+  held: boolean
   recipients: QueueRecipient[]
 }
 
@@ -207,4 +208,21 @@ export async function fetchQueue(all = false): Promise<QueueEntry[]> {
   const q = all ? '?all=1' : ''
   const out = await api<{ entries: QueueEntry[] }>(`/queue${q}`)
   return out.entries ?? []
+}
+
+export async function retryQueueEntry(id: number, address?: string): Promise<void> {
+  const q = address ? `?address=${encodeURIComponent(address)}` : ''
+  await api(`/queue/${id}/retry${q}`, { method: 'POST', body: {} })
+}
+
+export async function holdQueueEntry(id: number): Promise<void> {
+  await api(`/queue/${id}/hold`, { method: 'POST', body: {} })
+}
+
+export async function unholdQueueEntry(id: number): Promise<void> {
+  await api(`/queue/${id}/unhold`, { method: 'POST', body: {} })
+}
+
+export async function cancelQueueEntry(id: number): Promise<void> {
+  await api(`/queue/${id}`, { method: 'DELETE' })
 }

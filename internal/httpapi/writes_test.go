@@ -310,7 +310,8 @@ func TestListQueue(t *testing.T) {
 	}
 	blobs := blob.NewFS(filepath.Join(t.TempDir(), "blobs"))
 	queue := mail.NewQueue(store, blobs)
-	if _, err := queue.Enqueue(ctx, "sender@api.test", []string{"rcpt@example.com"}, []byte("Subject: hi\r\n\r\nbody")); err != nil {
+	id, err := queue.Enqueue(ctx, "sender@api.test", []string{"rcpt@example.com"}, []byte("Subject: hi\r\n\r\nbody"))
+	if err != nil {
 		t.Fatal(err)
 	}
 	srv, err := httpapi.New(httpapi.Options{
@@ -348,6 +349,46 @@ func TestListQueue(t *testing.T) {
 	srv.Handler().ServeHTTP(res, req)
 	if res.Code != http.StatusForbidden {
 		t.Fatalf("user queue want 403 got %d", res.Code)
+	}
+
+	// hold → retry → cancel
+	req = authedJSON(t, http.MethodPost, "/api/v1/queue/"+itoa(id)+"/hold", adminTok, nil)
+	res = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("hold %d %s", res.Code, res.Body.String())
+	}
+	req = authedJSON(t, http.MethodGet, "/api/v1/queue", adminTok, nil)
+	res = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(res, req)
+	if err := json.Unmarshal(res.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if held, _ := out.Entries[0]["held"].(bool); !held {
+		t.Fatalf("want held after hold: %v", out.Entries[0])
+	}
+
+	req = authedJSON(t, http.MethodPost, "/api/v1/queue/"+itoa(id)+"/retry", adminTok, nil)
+	res = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("retry %d %s", res.Code, res.Body.String())
+	}
+
+	req = authedJSON(t, http.MethodDelete, "/api/v1/queue/"+itoa(id), adminTok, nil)
+	res = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("cancel %d %s", res.Code, res.Body.String())
+	}
+	req = authedJSON(t, http.MethodGet, "/api/v1/queue", adminTok, nil)
+	res = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(res, req)
+	if err := json.Unmarshal(res.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Entries) != 0 {
+		t.Fatalf("after cancel entries %v", out.Entries)
 	}
 }
 
