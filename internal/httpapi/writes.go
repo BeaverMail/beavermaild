@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/BeaverMail/beaver/internal/directory"
+	beaverlog "github.com/BeaverMail/beaver/internal/log"
 	"github.com/BeaverMail/beaver/internal/mail"
 	"github.com/BeaverMail/beaver/internal/servicestatus"
 	"github.com/BeaverMail/beaver/internal/smtp"
@@ -710,6 +711,60 @@ func (s *Server) handleServicesStatus(w http.ResponseWriter, r *http.Request) {
 		entries = s.status.List()
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"services": entries})
+}
+
+// handleLogs returns recent rotating JSON log records (admin only).
+func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
+	p, ok := principal(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	if p.Role != directory.RoleAdmin {
+		writeError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+	if s.logFile == "" {
+		writeError(w, http.StatusServiceUnavailable, "log file unavailable")
+		return
+	}
+	q := beaverlog.Query{Limit: 200}
+	if v := r.URL.Query().Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			writeError(w, http.StatusBadRequest, "invalid limit")
+			return
+		}
+		q.Limit = n
+	}
+	if v := r.URL.Query().Get("level"); v != "" {
+		lvl, ok := beaverlog.ParseLevelName(v)
+		if !ok {
+			writeError(w, http.StatusBadRequest, "invalid level")
+			return
+		}
+		q.MinLevel = lvl
+		q.LevelSet = true
+	}
+	q.Q = r.URL.Query().Get("q")
+	if v := r.URL.Query().Get("before"); v != "" {
+		t, err := time.Parse(time.RFC3339Nano, v)
+		if err != nil {
+			t, err = time.Parse(time.RFC3339, v)
+		}
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid before")
+			return
+		}
+		q.Before = t
+	}
+	entries, err := beaverlog.ReadHistory(s.logFile, s.logFileKeep, q)
+	if err != nil {
+		s.log.Error("http logs file", "err", err)
+		writeError(w, http.StatusInternalServerError, "read logs failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"entries": entries})
 }
 
 // handleDeliveryStatus reports outbound probe options (no secrets).

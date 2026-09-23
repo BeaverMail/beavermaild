@@ -33,6 +33,7 @@ func DefaultConfigPath() string {
 type Config struct {
 	DataDir  string         `json:"data_dir"`
 	LogLevel string         `json:"log_level"`
+	Log      LogConfig      `json:"log"`
 	Store    StoreConfig    `json:"store"`
 	Secrets  Secrets        `json:"secrets"`
 	TLS      TLSConfig      `json:"tls"`
@@ -44,6 +45,17 @@ type Config struct {
 	Quota    QuotaConfig    `json:"quota"`
 	Plugins  PluginsConfig  `json:"plugins"`
 	MailAuth MailAuthConfig `json:"mail_auth"`
+}
+
+// LogConfig holds rotating JSON ops log settings.
+type LogConfig struct {
+	// File is the JSON log path (relative to data_dir or absolute).
+	// Default logs/beaver.log. Use "off" to disable the file sink (admin /logs unavailable).
+	File string `json:"file"`
+	// MaxBytes is the rotate threshold (default 16 MiB).
+	MaxBytes int64 `json:"max_bytes"`
+	// Keep is how many rotated files to retain including the active file (default 5).
+	Keep int `json:"keep"`
 }
 
 // HTTPConfig enables the in-process admin/API listener (off by default).
@@ -304,6 +316,9 @@ func (c *Config) Validate() error {
 	if c.LogLevel == "" {
 		c.LogLevel = "info"
 	}
+	if err := c.validateLog(); err != nil {
+		return err
+	}
 	if err := c.validateStore(); err != nil {
 		return err
 	}
@@ -350,6 +365,63 @@ func (c *Config) Validate() error {
 		return err
 	}
 	return nil
+}
+
+func (c *Config) validateLog() error {
+	if c.Log.MaxBytes < 0 {
+		return errors.New("config: log.max_bytes must be >= 0")
+	}
+	if c.Log.Keep < 0 {
+		return errors.New("config: log.keep must be >= 0")
+	}
+	if c.Log.MaxBytes == 0 {
+		c.Log.MaxBytes = 16 << 20
+	}
+	if c.Log.Keep == 0 {
+		c.Log.Keep = 5
+	}
+	f := strings.TrimSpace(c.Log.File)
+	if f == "" {
+		c.Log.File = "logs/beaver.log"
+	}
+	return nil
+}
+
+// LogFileEnabled reports whether rotating JSON logs are written.
+func (c *Config) LogFileEnabled() bool {
+	f := strings.ToLower(strings.TrimSpace(c.Log.File))
+	return f != "off" && f != "false" && f != "disabled"
+}
+
+// LogFilePath returns the absolute rotating log path when enabled.
+func (c *Config) LogFilePath() string {
+	if !c.LogFileEnabled() {
+		return ""
+	}
+	path := strings.TrimSpace(c.Log.File)
+	if path == "" {
+		path = "logs/beaver.log"
+	}
+	if filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(c.DataDir, path)
+}
+
+// LogFileMaxBytes returns the rotation size threshold.
+func (c *Config) LogFileMaxBytes() int64 {
+	if c.Log.MaxBytes <= 0 {
+		return 16 << 20
+	}
+	return c.Log.MaxBytes
+}
+
+// LogFileKeep returns how many rotated files to retain.
+func (c *Config) LogFileKeep() int {
+	if c.Log.Keep <= 0 {
+		return 5
+	}
+	return c.Log.Keep
 }
 
 // validateHTTP checks listen/auth_key when the HTTP API is enabled.

@@ -36,6 +36,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST "+apiPrefix+"/delivery/test", s.requireAuth(s.requireSameOrigin(s.handleDeliveryTest)))
 	s.mux.HandleFunc("GET "+apiPrefix+"/delivery", s.requireAuth(s.handleDeliveryStatus))
 	s.mux.HandleFunc("GET "+apiPrefix+"/status", s.requireAuth(s.handleServicesStatus))
+	s.mux.HandleFunc("GET "+apiPrefix+"/logs", s.requireAuth(s.handleLogs))
 	if s.ui != nil {
 		s.mux.Handle("/", newSPAHandler(s.ui))
 	}

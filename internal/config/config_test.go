@@ -232,6 +232,39 @@ func TestNewMTASTSResolverEnvDisable(t *testing.T) {
 	}
 }
 
+func TestLogConfigDefaultsAndOff(t *testing.T) {
+	t.Parallel()
+	cfg := config.Default(t.TempDir())
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Log.File != "logs/beaver.log" || cfg.Log.MaxBytes != 16<<20 || cfg.Log.Keep != 5 {
+		t.Fatalf("defaults %+v", cfg.Log)
+	}
+	want := filepath.Join(cfg.DataDir, "logs", "beaver.log")
+	if cfg.LogFilePath() != want {
+		t.Fatalf("path %q want %q", cfg.LogFilePath(), want)
+	}
+
+	cfg.Log.File = "off"
+	if cfg.LogFileEnabled() || cfg.LogFilePath() != "" {
+		t.Fatal("expected file disabled")
+	}
+
+	cfg.Log.File = "/var/log/beaver/mail.log"
+	cfg.Log.MaxBytes = 1024
+	cfg.Log.Keep = 2
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.LogFilePath() != "/var/log/beaver/mail.log" {
+		t.Fatalf("abs path %q", cfg.LogFilePath())
+	}
+	if cfg.LogFileMaxBytes() != 1024 || cfg.LogFileKeep() != 2 {
+		t.Fatalf("custom %+v", cfg.Log)
+	}
+}
+
 func TestNewDKIMSigner(t *testing.T) {
 	cfg := config.Default(t.TempDir())
 	if _, err := cfg.NewDKIMSigner(); err != nil {

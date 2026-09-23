@@ -273,3 +273,26 @@ export async function fetchServicesStatus(): Promise<ServiceStatus[]> {
   const out = await api<{ services: ServiceStatus[] }>('/status')
   return out.services ?? []
 }
+
+export type LogEntry = {
+  time: string
+  level: string
+  msg: string
+  attrs?: Record<string, unknown>
+}
+
+/** Admin ops logs from rotating JSON file. */
+export async function fetchLogs(opts?: {
+  level?: string
+  q?: string
+  limit?: number
+  before?: string
+}): Promise<{ entries: LogEntry[] }> {
+  const params = new URLSearchParams()
+  if (opts?.level) params.set('level', opts.level)
+  if (opts?.q) params.set('q', opts.q)
+  if (opts?.limit) params.set('limit', String(opts.limit))
+  if (opts?.before) params.set('before', opts.before)
+  const qs = params.toString()
+  return api<{ entries: LogEntry[] }>(`/logs${qs ? `?${qs}` : ''}`)
+}

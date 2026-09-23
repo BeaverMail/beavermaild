@@ -13,6 +13,7 @@ import (
 	"github.com/BeaverMail/beaver/internal/directory"
 	"github.com/BeaverMail/beaver/internal/httpapi"
 	"github.com/BeaverMail/beaver/internal/imap"
+	beaverlog "github.com/BeaverMail/beaver/internal/log"
 	"github.com/BeaverMail/beaver/internal/mail"
 	"github.com/BeaverMail/beaver/internal/mailauth"
 	"github.com/BeaverMail/beaver/internal/pluginhost"
@@ -28,18 +29,19 @@ import (
 
 // App holds runtime resources opened by beaver serve.
 type App struct {
-	log    *slog.Logger
-	cfg    *config.Config
-	store  storage.Store
-	blobs  *blob.FS
-	dir    *directory.Local
-	inbox  *mail.Inbox
-	queue  *mail.Queue
-	smtp   *smtp.Server
-	imap   *imap.Server
-	http   *httpapi.Server
-	daemon *daemon.Manager
-	status *servicestatus.Registry
+	log     *slog.Logger
+	cfg     *config.Config
+	store   storage.Store
+	blobs   *blob.FS
+	dir     *directory.Local
+	inbox   *mail.Inbox
+	queue   *mail.Queue
+	smtp    *smtp.Server
+	imap    *imap.Server
+	http    *httpapi.Server
+	daemon  *daemon.Manager
+	status  *servicestatus.Registry
+	logFile *beaverlog.RotatingFile
 }
 
 // Open connects storage using cfg and returns an App.
@@ -106,6 +108,21 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 	status := servicestatus.New()
 	seedListenerStatus(status, cfg, certs != nil)
 
+	var logFile *beaverlog.RotatingFile
+	logPath := cfg.LogFilePath()
+	if logPath != "" {
+		var openErr error
+		logFile, openErr = beaverlog.OpenFile(logPath, beaverlog.FileOptions{
+			MaxBytes: cfg.LogFileMaxBytes(),
+			Keep:     cfg.LogFileKeep(),
+		})
+		if openErr != nil {
+			_ = store.Close()
+			return nil, fmt.Errorf("open log file: %w", openErr)
+		}
+		log = beaverlog.WithFile(log, logFile)
+	}
+
 	var httpSrv *httpapi.Server
 	if cfg.HTTPEnabled() {
 		var uiFS fs.FS
@@ -113,19 +130,24 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 			uiFS = assets
 		}
 		httpSrv, err = httpapi.New(httpapi.Options{
-			Listen:   cfg.HTTPListen(),
-			Dir:      dir,
-			Log:      log,
-			AuthKey:  cfg.Secrets.AuthKey,
-			Certs:    certs,
-			AuthGate: authGate,
-			Blobs:    blobs,
-			Queue:    queue,
-			Remote:   ptrRemote(remoteConfigFrom(cfg)),
-			Status:   status,
-			UI:       uiFS,
+			Listen:      cfg.HTTPListen(),
+			Dir:         dir,
+			Log:         log,
+			AuthKey:     cfg.Secrets.AuthKey,
+			Certs:       certs,
+			AuthGate:    authGate,
+			Blobs:       blobs,
+			Queue:       queue,
+			Remote:      ptrRemote(remoteConfigFrom(cfg)),
+			Status:      status,
+			LogFile:     logPath,
+			LogFileKeep: cfg.LogFileKeep(),
+			UI:          uiFS,
 		})
 		if err != nil {
+			if logFile != nil {
+				_ = logFile.Close()
+			}
 			_ = store.Close()
 			return nil, fmt.Errorf("http api: %w", err)
 		}
@@ -165,8 +187,9 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 			ReadTimeout:    imapReadTO,
 			Status:         status,
 		}),
-		http:   httpSrv,
-		status: status,
+		http:    httpSrv,
+		status:  status,
+		logFile: logFile,
 	}, nil
 }
 
@@ -349,6 +372,10 @@ func (a *App) Close() error {
 	if a.daemon != nil {
 		_ = a.daemon.Stop()
 		a.daemon = nil
+	}
+	if a.logFile != nil {
+		_ = a.logFile.Close()
+		a.logFile = nil
 	}
 	if a.store != nil {
 		return a.store.Close()

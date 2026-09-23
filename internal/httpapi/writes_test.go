@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/BeaverMail/beaver/internal/directory"
 	"github.com/BeaverMail/beaver/internal/httpapi"
+	beaverlog "github.com/BeaverMail/beaver/internal/log"
 	"github.com/BeaverMail/beaver/internal/mail"
 	"github.com/BeaverMail/beaver/internal/security"
 	"github.com/BeaverMail/beaver/internal/servicestatus"
@@ -605,6 +607,99 @@ func TestServicesStatus(t *testing.T) {
 
 	userTok := login(t, srv, "user@api.test", "secret")
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/status", nil)
+	req.Header.Set("Authorization", "Bearer "+userTok)
+	res = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("user want 403 got %d", res.Code)
+	}
+}
+
+func TestLogs(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, "file:"+t.TempDir()+"/store.sqlite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	dir := directory.NewLocal(store)
+	dom, _, err := dir.EnsureDomain(ctx, directory.DefaultTenantID, "api.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dir.CreateAccountRole(ctx, dom.ID, "admin", "secret", directory.RoleAdmin); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dir.CreateAccountRole(ctx, dom.ID, "user", "secret", directory.RoleUser); err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(t.TempDir(), "beaver.log")
+	rf, err := beaverlog.OpenFile(path, beaverlog.FileOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = rf.Close() })
+	var discard bytes.Buffer
+	logger := beaverlog.WithFile(slog.New(slog.NewTextHandler(&discard, nil)), rf)
+	logger.Info("older", "n", 1)
+	time.Sleep(2 * time.Millisecond)
+	logger.Info("smtp listening", "addr", "127.0.0.1:25")
+	_ = rf.Close()
+
+	blobs := blob.NewFS(filepath.Join(t.TempDir(), "blobs"))
+	srv, err := httpapi.New(httpapi.Options{
+		Listen:   "127.0.0.1:0",
+		Dir:      dir,
+		AuthKey:  "0123456789abcdef0123456789abcdef",
+		AuthGate: security.NopGate{},
+		Blobs:    blobs,
+		Queue:    mail.NewQueue(store, blobs),
+		LogFile:  path,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	adminTok := login(t, srv, "admin@api.test", "secret")
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/logs?q=smtp&limit=50", nil)
+	req.Header.Set("Authorization", "Bearer "+adminTok)
+	res := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("logs %d %s", res.Code, res.Body.String())
+	}
+	var out struct {
+		Entries []struct {
+			Msg  string    `json:"msg"`
+			Time time.Time `json:"time"`
+		} `json:"entries"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Entries) != 1 || out.Entries[0].Msg != "smtp listening" {
+		t.Fatalf("%+v", out.Entries)
+	}
+
+	before := out.Entries[0].Time.Format(time.RFC3339Nano)
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/logs?before="+url.QueryEscape(before)+"&limit=10", nil)
+	req.Header.Set("Authorization", "Bearer "+adminTok)
+	res = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("before %d %s", res.Code, res.Body.String())
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Entries) != 1 || out.Entries[0].Msg != "older" {
+		t.Fatalf("before page: %+v", out.Entries)
+	}
+
+	userTok := login(t, srv, "user@api.test", "secret")
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/logs", nil)
 	req.Header.Set("Authorization", "Bearer "+userTok)
 	res = httptest.NewRecorder()
 	srv.Handler().ServeHTTP(res, req)

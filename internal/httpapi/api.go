@@ -44,25 +44,31 @@ type Options struct {
 	Remote *smtp.RemoteConfig
 	// Status is the process-wide service registry (nil disables /status).
 	Status *servicestatus.Registry
+	// LogFile is the rotating JSON log path for /logs history (empty disables).
+	LogFile string
+	// LogFileKeep is the rotation file count for history reads (0 = default).
+	LogFileKeep int
 	// UI is the embedded admin SPA (nil when not attached).
 	UI fs.FS
 }
 
 // Server is the optional admin/API HTTP listener.
 type Server struct {
-	listen   string
-	dir      *directory.Local
-	log      *slog.Logger
-	authKey  []byte
-	certs    *tlsload.Certs
-	useTLS   bool
-	authGate security.AuthGate
-	blobs    *blob.FS
-	queue    *mail.Queue
-	remote   *smtp.RemoteConfig
-	status   *servicestatus.Registry
-	ui       fs.FS
-	mux      *http.ServeMux
+	listen      string
+	dir         *directory.Local
+	log         *slog.Logger
+	authKey     []byte
+	certs       *tlsload.Certs
+	useTLS      bool
+	authGate    security.AuthGate
+	blobs       *blob.FS
+	queue       *mail.Queue
+	remote      *smtp.RemoteConfig
+	status      *servicestatus.Registry
+	logFile     string
+	logFileKeep int
+	ui          fs.FS
+	mux         *http.ServeMux
 }
 
 // New builds an API server. Call Serve to bind listen.
@@ -91,19 +97,21 @@ func New(opts Options) (*Server, error) {
 		return nil, fmt.Errorf("httpapi: non-loopback listen %q requires TLS (tls.cert_file/key_file or tls.acme_hosts)", listen)
 	}
 	s := &Server{
-		listen:   listen,
-		dir:      opts.Dir,
-		log:      log,
-		authKey:  key,
-		certs:    opts.Certs,
-		useTLS:   useTLS,
-		authGate: gate,
-		blobs:    opts.Blobs,
-		queue:    opts.Queue,
-		remote:   opts.Remote,
-		status:   opts.Status,
-		ui:       opts.UI,
-		mux:      http.NewServeMux(),
+		listen:      listen,
+		dir:         opts.Dir,
+		log:         log,
+		authKey:     key,
+		certs:       opts.Certs,
+		useTLS:      useTLS,
+		authGate:    gate,
+		blobs:       opts.Blobs,
+		queue:       opts.Queue,
+		remote:      opts.Remote,
+		status:      opts.Status,
+		logFile:     strings.TrimSpace(opts.LogFile),
+		logFileKeep: opts.LogFileKeep,
+		ui:          opts.UI,
+		mux:         http.NewServeMux(),
 	}
 	s.routes()
 	return s, nil
