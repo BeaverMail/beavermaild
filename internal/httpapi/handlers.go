@@ -2,11 +2,13 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
 
 	"github.com/BeaverMail/beaver/internal/directory"
+	"github.com/BeaverMail/beaver/internal/storage"
 )
 
 // routes registers /api/v1 endpoints on the server mux.
@@ -23,6 +25,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE "+apiPrefix+"/tenants/{id}", s.requireAuth(s.requireSameOrigin(s.handleDeleteTenant)))
 	s.mux.HandleFunc("GET "+apiPrefix+"/domains", s.requireAuth(s.handleListDomains))
 	s.mux.HandleFunc("POST "+apiPrefix+"/domains", s.requireAuth(s.requireSameOrigin(s.handleCreateDomain)))
+	s.mux.HandleFunc("GET "+apiPrefix+"/domains/{domain}", s.requireAuth(s.handleGetDomain))
+	s.mux.HandleFunc("PATCH "+apiPrefix+"/domains/{domain}", s.requireAuth(s.requireSameOrigin(s.handlePatchDomain)))
 	s.mux.HandleFunc("DELETE "+apiPrefix+"/domains/{domain}", s.requireAuth(s.requireSameOrigin(s.handleDeleteDomain)))
 	s.mux.HandleFunc("GET "+apiPrefix+"/domains/{domain}/accounts", s.requireAuth(s.handleListAccounts))
 	s.mux.HandleFunc("POST "+apiPrefix+"/domains/{domain}/accounts", s.requireAuth(s.requireSameOrigin(s.handleCreateAccount)))
@@ -151,9 +155,75 @@ func (s *Server) handleListTenants(w http.ResponseWriter, r *http.Request) {
 }
 
 type domainDTO struct {
-	ID       uint32 `json:"id"`
-	Name     string `json:"name"`
-	TenantID uint32 `json:"tenant_id"`
+	ID            uint32 `json:"id"`
+	Name          string `json:"name"`
+	TenantID      uint32 `json:"tenant_id"`
+	CatchAll      string `json:"catch_all,omitempty"`
+	MailHostname  string `json:"mail_hostname,omitempty"`
+	SSLMode       string `json:"ssl_mode,omitempty"`
+	DKIMEnabled   bool   `json:"dkim_enabled,omitempty"`
+	DKIMSelector  string `json:"dkim_selector,omitempty"`
+	DKIMDNSName   string `json:"dkim_dns_name,omitempty"`
+	DKIMDNSValue  string `json:"dkim_dns_value,omitempty"`
+	AntiSpam      bool   `json:"antispam,omitempty"`
+	SendMax       int    `json:"send_max_messages,omitempty"`
+	SendWindow    string `json:"send_window,omitempty"`
+	StorageBytes  uint64 `json:"storage_bytes,omitempty"`
+	MessagesQuota uint32 `json:"messages_quota,omitempty"`
+	RelayHost     string `json:"relay_host,omitempty"`
+	RelayUser     string `json:"relay_user,omitempty"`
+	RelayStartTLS bool   `json:"relay_starttls,omitempty"`
+	AccountCount  int    `json:"account_count"`
+	StorageUsed   uint64 `json:"storage_used"`
+	SSLActive     bool   `json:"ssl_active"`
+	DKIMActive    bool   `json:"dkim_active"`
+	AntiSpamOn    bool   `json:"antispam_active"`
+}
+
+func (s *Server) domainToDTO(ctx context.Context, d storage.Domain) domainDTO {
+	dto := domainDTO{
+		ID:            d.ID,
+		Name:          d.Name,
+		TenantID:      d.TenantID,
+		CatchAll:      d.CatchAllLocal,
+		MailHostname:  d.MailHostname,
+		SSLMode:       d.SSLMode,
+		DKIMEnabled:   d.DKIMEnabled,
+		DKIMSelector:  d.DKIMSelector,
+		AntiSpam:      d.AntiSpam,
+		SendMax:       d.SendMaxMessages,
+		SendWindow:    d.SendWindow,
+		StorageBytes:  d.StorageBytes,
+		MessagesQuota: d.Messages,
+		RelayHost:     d.RelayHost,
+		RelayUser:     d.RelayUser,
+		RelayStartTLS: d.RelayStartTLS,
+	}
+	accounts, _, err := s.dir.ListAccounts(ctx, d.Name)
+	n := 0
+	var used uint64
+	if err == nil {
+		n = len(accounts)
+		if s.inbox != nil {
+			for _, a := range accounts {
+				st, err := s.inbox.QuotaStatus(ctx, a.ID)
+				if err == nil {
+					used += st.StorageUsed
+				}
+			}
+		}
+	}
+	st := s.dir.BuildDomainStats(d, n, used)
+	dto.AccountCount = st.AccountCount
+	dto.StorageUsed = st.StorageUsed
+	dto.SSLActive = st.SSLActive
+	dto.DKIMActive = st.DKIMActive
+	dto.AntiSpamOn = st.AntiSpam
+	if name, val, err := s.dir.DKIMDNSRecord(d); err == nil {
+		dto.DKIMDNSName = name
+		dto.DKIMDNSValue = val
+	}
+	return dto
 }
 
 // handleListDomains returns domains in the caller's scope.
@@ -171,11 +241,11 @@ func (s *Server) handleListDomains(w http.ResponseWriter, r *http.Request) {
 	out := make([]domainDTO, 0, len(domains))
 	for _, d := range domains {
 		if canListAllDomains(p) || canSeeDomainTenant(p, d.TenantID) {
-			out = append(out, domainDTO{ID: d.ID, Name: d.Name, TenantID: d.TenantID})
+			out = append(out, s.domainToDTO(r.Context(), d))
 			continue
 		}
 		if p.Role == directory.RoleUser && strings.EqualFold(p.DomainName, d.Name) {
-			out = append(out, domainDTO{ID: d.ID, Name: d.Name, TenantID: d.TenantID})
+			out = append(out, s.domainToDTO(r.Context(), d))
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"domains": out})

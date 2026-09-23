@@ -13,9 +13,10 @@ import (
 
 // Inbox stores received messages for an account.
 type Inbox struct {
-	store        storage.Store
-	blobs        *blob.FS
-	quotaDefault QuotaDefaults
+	store          storage.Store
+	blobs          *blob.FS
+	quotaDefault   QuotaDefaults
+	accountQuotaFn AccountQuotaDefaultsFunc
 }
 
 // NewInbox returns a delivery helper over store and blobs.
@@ -97,7 +98,7 @@ func (ib *Inbox) Deliver(ctx context.Context, accountID uint32, raw []byte) (uin
 
 func (ib *Inbox) nextEmailID(ctx context.Context, accountID uint32) (uint32, error) {
 	key := storage.AppendKey(nil, storage.SubspaceLookup, 0, 0, 0,
-		[]byte(fmt.Sprintf("meta/email/%d", accountID)))
+		fmt.Appendf(nil, "meta/email/%d", accountID))
 	wire, err := ib.store.Get(ctx, key)
 	var next uint32 = 1
 	if err == nil {
@@ -114,7 +115,7 @@ func (ib *Inbox) nextEmailID(ctx context.Context, accountID uint32) (uint32, err
 		return 0, err
 	}
 	batch := storage.NewBatch().WithAccount(0)
-	suffix := storage.BatchSuffix(0, 0, []byte(fmt.Sprintf("meta/email/%d", accountID)))
+	suffix := storage.BatchSuffix(0, 0, fmt.Appendf(nil, "meta/email/%d", accountID))
 	if err := batch.Set(storage.SubspaceLookup, suffix, encoded); err != nil {
 		return 0, err
 	}

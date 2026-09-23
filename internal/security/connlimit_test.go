@@ -10,8 +10,10 @@ import (
 func TestConnLimiterBlocksWhenFull(t *testing.T) {
 	t.Parallel()
 	lim := security.NewConnLimiter(2)
-	if !lim.Acquire() || !lim.Acquire() {
-		t.Fatal("expected acquire")
+	for i := 0; i < 2; i++ {
+		if !lim.Acquire() {
+			t.Fatalf("expected acquire %d/2", i+1)
+		}
 	}
 	if lim.Acquire() {
 		t.Fatal("expected full")

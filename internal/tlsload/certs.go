@@ -14,6 +14,14 @@ type Certs struct {
 	cfg *tls.Config
 }
 
+// FromConfig wraps an existing tls.Config (e.g. with GetCertificate).
+func FromConfig(cfg *tls.Config) *Certs {
+	if cfg == nil {
+		return nil
+	}
+	return &Certs{cfg: cfg}
+}
+
 // Load reads cert and key PEM files and builds a server tls.Config.
 func Load(certFile, keyFile, minVersion string) (*Certs, error) {
 	cert, err := tls.LoadX509KeyPair(certFile, keyFile)

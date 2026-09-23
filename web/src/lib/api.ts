@@ -9,7 +9,49 @@ export type Domain = {
   id: number
   name: string
   tenant_id: number
+  catch_all?: string
+  mail_hostname?: string
+  ssl_mode?: string
+  dkim_enabled?: boolean
+  dkim_selector?: string
+  dkim_dns_name?: string
+  dkim_dns_value?: string
+  antispam?: boolean
+  send_max_messages?: number
+  send_window?: string
+  storage_bytes?: number
+  messages_quota?: number
+  relay_host?: string
+  relay_user?: string
+  relay_starttls?: boolean
+  account_count: number
+  storage_used: number
+  ssl_active: boolean
+  dkim_active: boolean
+  antispam_active: boolean
 }
+
+export type CreateDomainInput = {
+  name: string
+  tenant_id?: number
+  catch_all?: string
+  mail_hostname?: string
+  ssl_mode?: string
+  cert_pem?: string
+  key_pem?: string
+  dkim_enabled?: boolean
+  antispam?: boolean
+  send_max_messages?: number
+  send_window?: string
+  storage_bytes?: number
+  messages_quota?: number
+  relay_host?: string
+  relay_user?: string
+  relay_password?: string
+  relay_starttls?: boolean
+}
+
+export type PatchDomainInput = Omit<CreateDomainInput, 'name' | 'tenant_id'>
 
 export type Tenant = {
   id: number
@@ -147,10 +189,42 @@ export async function fetchAccounts(domain: string): Promise<ListedAccount[]> {
   return out.accounts ?? []
 }
 
-export async function createDomain(name: string, tenantId?: number): Promise<Domain> {
-  const body: { name: string; tenant_id?: number } = { name }
-  if (tenantId !== undefined) body.tenant_id = tenantId
+export async function createDomain(input: CreateDomainInput): Promise<Domain> {
+  const body: Record<string, unknown> = { name: input.name }
+  if (input.tenant_id !== undefined) body.tenant_id = input.tenant_id
+  Object.assign(body, domainHostingBody(input))
   return api<Domain>('/domains', { body })
+}
+
+export async function fetchDomain(name: string): Promise<Domain> {
+  return api<Domain>(`/domains/${encodeURIComponent(name)}`)
+}
+
+export async function patchDomain(name: string, input: PatchDomainInput): Promise<Domain> {
+  return api<Domain>(`/domains/${encodeURIComponent(name)}`, {
+    method: 'PATCH',
+    body: domainHostingBody(input)
+  })
+}
+
+function domainHostingBody(input: PatchDomainInput): Record<string, unknown> {
+  const body: Record<string, unknown> = {}
+  body.catch_all = input.catch_all ?? ''
+  body.mail_hostname = input.mail_hostname ?? ''
+  body.ssl_mode = input.ssl_mode ?? 'none'
+  if (input.cert_pem) body.cert_pem = input.cert_pem
+  if (input.key_pem) body.key_pem = input.key_pem
+  body.dkim_enabled = !!input.dkim_enabled
+  body.antispam = !!input.antispam
+  if (input.send_max_messages) body.send_max_messages = input.send_max_messages
+  if (input.send_window) body.send_window = input.send_window
+  if (input.storage_bytes) body.storage_bytes = input.storage_bytes
+  if (input.messages_quota) body.messages_quota = input.messages_quota
+  body.relay_host = input.relay_host ?? ''
+  body.relay_user = input.relay_user ?? ''
+  if (input.relay_password) body.relay_password = input.relay_password
+  body.relay_starttls = !!input.relay_starttls
+  return body
 }
 
 export async function deleteDomain(name: string): Promise<void> {

@@ -218,6 +218,73 @@ func TestCookieMutationRequiresOrigin(t *testing.T) {
 	}
 }
 
+func TestCreateDomainHostingFields(t *testing.T) {
+	t.Parallel()
+	srv, dir := newTestAPI(t)
+	dataDir := t.TempDir()
+	dir.SetDataDir(dataDir)
+	tok := login(t, srv, "admin@api.test", "secret")
+
+	body, _ := json.Marshal(map[string]any{
+		"name":              "hosted.example.com",
+		"mail_hostname":     "mail.hosted.example.com",
+		"ssl_mode":          "acme",
+		"dkim_enabled":      true,
+		"antispam":          true,
+		"send_max_messages": 25,
+		"send_window":       "1h",
+		"storage_bytes":     2048,
+		"messages_quota":    10,
+	})
+	req := authedJSON(t, http.MethodPost, "/api/v1/domains", tok, body)
+	res := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("create %d %s", res.Code, res.Body.String())
+	}
+	var created domainDTO
+	if err := json.Unmarshal(res.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if !created.DKIMEnabled || !created.AntiSpam || created.SSLMode != "acme" {
+		t.Fatalf("created %+v", created)
+	}
+	if !created.DKIMActive || !created.SSLActive || !created.AntiSpamActive {
+		t.Fatalf("badges %+v", created)
+	}
+	if created.AccountCount != 0 {
+		t.Fatalf("account_count %d", created.AccountCount)
+	}
+
+	getReq := authedJSON(t, http.MethodGet, "/api/v1/domains/hosted.example.com", tok, nil)
+	getRes := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(getRes, getReq)
+	if getRes.Code != http.StatusOK {
+		t.Fatalf("get %d %s", getRes.Code, getRes.Body.String())
+	}
+
+	patchBody, _ := json.Marshal(map[string]any{
+		"mail_hostname": "mail2.hosted.example.com",
+		"ssl_mode":      "acme",
+		"dkim_enabled":  true,
+		"antispam":      false,
+		"catch_all":     "abuse",
+	})
+	patchReq := authedJSON(t, http.MethodPatch, "/api/v1/domains/hosted.example.com", tok, patchBody)
+	patchRes := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(patchRes, patchReq)
+	if patchRes.Code != http.StatusOK {
+		t.Fatalf("patch %d %s", patchRes.Code, patchRes.Body.String())
+	}
+	var patched domainDTO
+	if err := json.Unmarshal(patchRes.Body.Bytes(), &patched); err != nil {
+		t.Fatal(err)
+	}
+	if patched.AntiSpam || patched.AntiSpamActive {
+		t.Fatalf("antispam should be off: %+v", patched)
+	}
+}
+
 func TestTenantAPIWrites(t *testing.T) {
 	t.Parallel()
 	srv, dir := newTestAPI(t)
@@ -522,9 +589,17 @@ func itoa(id uint32) string {
 }
 
 type domainDTO struct {
-	ID       uint32 `json:"id"`
-	Name     string `json:"name"`
-	TenantID uint32 `json:"tenant_id"`
+	ID             uint32 `json:"id"`
+	Name           string `json:"name"`
+	TenantID       uint32 `json:"tenant_id"`
+	AccountCount   int    `json:"account_count"`
+	StorageUsed    uint64 `json:"storage_used"`
+	SSLActive      bool   `json:"ssl_active"`
+	DKIMActive     bool   `json:"dkim_active"`
+	AntiSpamActive bool   `json:"antispam_active"`
+	DKIMEnabled    bool   `json:"dkim_enabled"`
+	SSLMode        string `json:"ssl_mode"`
+	AntiSpam       bool   `json:"antispam"`
 }
 
 func TestServicesStatus(t *testing.T) {

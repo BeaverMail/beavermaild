@@ -7,12 +7,46 @@ type Tenant struct {
 	Name string `msgpack:"n"`
 }
 
-// Domain is a mail domain (e.g. example.com).
+// Domain is a mail domain (e.g. example.com) with optional hosting settings.
 type Domain struct {
 	ID       uint32 `msgpack:"id"`
 	TenantID uint32 `msgpack:"tid"`
 	Name     string `msgpack:"n"`
+
+	// CatchAllLocal is an existing mailbox local-part that receives unknown RCPT (empty = reject).
+	CatchAllLocal string `msgpack:"ca,omitempty"`
+	// MailHostname is the TLS/SNI name (e.g. mail.example.com); required for SSL modes other than none.
+	MailHostname string `msgpack:"mh,omitempty"`
+
+	// SSLMode is none (default), custom (PEM on disk), or acme (HTTP-01 Let's Encrypt).
+	SSLMode string `msgpack:"ssm,omitempty"`
+
+	DKIMEnabled  bool   `msgpack:"dk,omitempty"`
+	DKIMSelector string `msgpack:"dks,omitempty"`
+
+	AntiSpam bool `msgpack:"as,omitempty"`
+
+	// SendMaxMessages / SendWindow override global submission rate (0 / empty = global).
+	SendMaxMessages int    `msgpack:"smx,omitempty"`
+	SendWindow      string `msgpack:"sw,omitempty"`
+
+	// StorageBytes / Messages are default mailbox quotas for accounts on this domain (0 = global).
+	StorageBytes uint64 `msgpack:"qb,omitempty"`
+	Messages     uint32 `msgpack:"qm,omitempty"`
+
+	// Relay* override global outbound relay when RelayHost is set.
+	RelayHost     string `msgpack:"rh,omitempty"`
+	RelayUser     string `msgpack:"ru,omitempty"`
+	RelayPassword string `msgpack:"rp,omitempty"`
+	RelayStartTLS bool   `msgpack:"rt,omitempty"`
 }
+
+// Domain SSL modes.
+const (
+	DomainSSLNone   = "none"
+	DomainSSLCustom = "custom"
+	DomainSSLACME   = "acme"
+)
 
 // Account is a mailbox owner within a domain.
 type Account struct {

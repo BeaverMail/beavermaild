@@ -365,9 +365,16 @@ func (s *session) handleRcpt(ctx context.Context, arg string, mailBlocked bool) 
 	acc, _, err := s.dir.ResolveEmail(ctx, addr)
 	if err != nil {
 		if errors.Is(err, directory.ErrNotFound) {
-			return s.writef(replyUserUnknown)
+			acc, _, err = s.dir.ResolveCatchAll(ctx, domName)
+			if err != nil {
+				if errors.Is(err, directory.ErrNotFound) {
+					return s.writef(replyUserUnknown)
+				}
+				return err
+			}
+		} else {
+			return err
 		}
-		return err
 	}
 	if !acc.Active {
 		return s.writef(replyUserInactive)

@@ -43,6 +43,15 @@ func (ib *Inbox) SetQuotaDefaults(d QuotaDefaults) {
 	ib.quotaDefault = d
 }
 
+// AccountQuotaDefaultsFunc returns per-account defaults (e.g. from domain hosting settings).
+// ok=false keeps the process-wide SetQuotaDefaults values.
+type AccountQuotaDefaultsFunc func(ctx context.Context, accountID uint32) (QuotaDefaults, bool)
+
+// SetAccountQuotaDefaultsFunc overrides global defaults when first materializing a quota record.
+func (ib *Inbox) SetAccountQuotaDefaultsFunc(fn AccountQuotaDefaultsFunc) {
+	ib.accountQuotaFn = fn
+}
+
 // QuotaStatus returns RFC 2087 quota counters for accountID.
 func (ib *Inbox) QuotaStatus(ctx context.Context, accountID uint32) (QuotaStatus, error) {
 	rec, err := ib.loadQuotaRecord(ctx, accountID)
@@ -102,7 +111,7 @@ func (ib *Inbox) subQuotaUsage(ctx context.Context, accountID uint32, subBytes u
 
 func (ib *Inbox) quotaLookupKey(accountID uint32) []byte {
 	return storage.AppendKey(nil, storage.SubspaceLookup, 0, 0, 0,
-		[]byte(fmt.Sprintf("meta/quota/%d", accountID)))
+		fmt.Appendf(nil, "meta/quota/%d", accountID))
 }
 
 func (ib *Inbox) loadQuotaRecord(ctx context.Context, accountID uint32) (quotaRecord, error) {
@@ -122,9 +131,20 @@ func (ib *Inbox) loadQuotaRecord(ctx context.Context, accountID uint32) (quotaRe
 	if err != nil {
 		return quotaRecord{}, err
 	}
+	defaults := ib.quotaDefault
+	if ib.accountQuotaFn != nil {
+		if d, ok := ib.accountQuotaFn(ctx, accountID); ok {
+			if d.StorageBytes > 0 {
+				defaults.StorageBytes = d.StorageBytes
+			}
+			if d.Messages > 0 {
+				defaults.Messages = d.Messages
+			}
+		}
+	}
 	rec := quotaRecord{
-		StorageLimit: ib.quotaDefault.StorageBytes,
-		MessageLimit: ib.quotaDefault.Messages,
+		StorageLimit: defaults.StorageBytes,
+		MessageLimit: defaults.Messages,
 		StorageUsed:  usedStorage,
 		MessagesUsed: usedMessages,
 	}
@@ -140,7 +160,7 @@ func (ib *Inbox) saveQuotaRecord(ctx context.Context, accountID uint32, rec quot
 		return err
 	}
 	batch := storage.NewBatch().WithAccount(0)
-	suffix := storage.BatchSuffix(0, 0, []byte(fmt.Sprintf("meta/quota/%d", accountID)))
+	suffix := storage.BatchSuffix(0, 0, fmt.Appendf(nil, "meta/quota/%d", accountID))
 	if err := batch.Set(storage.SubspaceLookup, suffix, wire); err != nil {
 		return err
 	}

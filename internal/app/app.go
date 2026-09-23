@@ -7,10 +7,13 @@ import (
 	"io/fs"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/BeaverMail/beaver/internal/config"
 	"github.com/BeaverMail/beaver/internal/directory"
+	"github.com/BeaverMail/beaver/internal/dkimout"
+	"github.com/BeaverMail/beaver/internal/domaintls"
 	"github.com/BeaverMail/beaver/internal/httpapi"
 	"github.com/BeaverMail/beaver/internal/imap"
 	beaverlog "github.com/BeaverMail/beaver/internal/log"
@@ -18,6 +21,7 @@ import (
 	"github.com/BeaverMail/beaver/internal/mailauth"
 	"github.com/BeaverMail/beaver/internal/pluginhost"
 	"github.com/BeaverMail/beaver/internal/pluginhost/daemon"
+	"github.com/BeaverMail/beaver/internal/security"
 	"github.com/BeaverMail/beaver/internal/servicestatus"
 	"github.com/BeaverMail/beaver/internal/smtp"
 	"github.com/BeaverMail/beaver/internal/storage"
@@ -29,19 +33,21 @@ import (
 
 // App holds runtime resources opened by beaver serve.
 type App struct {
-	log     *slog.Logger
-	cfg     *config.Config
-	store   storage.Store
-	blobs   *blob.FS
-	dir     *directory.Local
-	inbox   *mail.Inbox
-	queue   *mail.Queue
-	smtp    *smtp.Server
-	imap    *imap.Server
-	http    *httpapi.Server
-	daemon  *daemon.Manager
-	status  *servicestatus.Registry
-	logFile *beaverlog.RotatingFile
+	log       *slog.Logger
+	cfg       *config.Config
+	store     storage.Store
+	blobs     *blob.FS
+	dir       *directory.Local
+	inbox     *mail.Inbox
+	queue     *mail.Queue
+	smtp      *smtp.Server
+	imap      *imap.Server
+	http      *httpapi.Server
+	daemon    *daemon.Manager
+	status    *servicestatus.Registry
+	logFile   *beaverlog.RotatingFile
+	dkim      *dkimout.Registry
+	domainTLS *domaintls.Manager
 }
 
 // Open connects storage using cfg and returns an App.
@@ -52,10 +58,18 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 	}
 	blobs := blob.NewFS(cfg.BlobDir())
 	dir := directory.NewLocal(store)
+	dir.SetDataDir(cfg.DataDir)
 	inbox := mail.NewInbox(store, blobs)
 	inbox.SetQuotaDefaults(mail.QuotaDefaults{
 		StorageBytes: cfg.Quota.DefaultStorageBytes,
 		Messages:     cfg.Quota.DefaultMessages,
+	})
+	inbox.SetAccountQuotaDefaultsFunc(func(ctx context.Context, accountID uint32) (mail.QuotaDefaults, bool) {
+		sb, msgs, ok := dir.DomainQuotaForAccount(ctx, accountID)
+		if !ok {
+			return mail.QuotaDefaults{}, false
+		}
+		return mail.QuotaDefaults{StorageBytes: sb, Messages: msgs}, true
 	})
 	queue := mail.NewQueue(store, blobs)
 
@@ -64,9 +78,34 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 		_ = store.Close()
 		return nil, err
 	}
+	var domainTLS *domaintls.Manager
+	if cfg.DataDir != "" {
+		if dm, err := domaintls.New(dir, cfg.DataDir, certs, cfg.TLS.MinVersion); err == nil {
+			domainTLS = dm
+			certs = dm.AsCerts()
+		} else {
+			log.Warn("domain tls manager", slog.Any("err", err))
+		}
+	}
 	tlsOpts := tlsOptions(cfg, certs)
 	authGate := cfg.NewAuthGate()
-	sendGate := cfg.NewSendGate()
+	sendGate := security.WrapDomainSendGate(cfg.NewSendGate(), func(principal string) (int, time.Duration, bool) {
+		at := strings.LastIndex(principal, "@")
+		if at < 0 {
+			return 0, 0, false
+		}
+		dom, err := dir.LookupDomain(context.Background(), principal[at+1:])
+		if err != nil || dom.SendMaxMessages <= 0 {
+			return 0, 0, false
+		}
+		var win time.Duration
+		if w := strings.TrimSpace(dom.SendWindow); w != "" {
+			if d, err := config.ParseDuration(w); err == nil {
+				win = d
+			}
+		}
+		return dom.SendMaxMessages, win, true
+	})
 	smtpMaxConn, smtpReadTO, err := cfg.SMTPListenerLimits()
 	if err != nil {
 		_ = store.Close()
@@ -123,6 +162,26 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 		log = beaverlog.WithFile(log, logFile)
 	}
 
+	fallback, err := cfg.NewDKIMSigner()
+	if err != nil {
+		if logFile != nil {
+			_ = logFile.Close()
+		}
+		_ = store.Close()
+		return nil, fmt.Errorf("dkim sign: %w", err)
+	}
+	dkimReg := dkimout.NewRegistry(fallback)
+	if domains, err := dir.ListDomains(ctx); err == nil {
+		for _, dom := range domains {
+			if !dom.DKIMEnabled || dom.DKIMSelector == "" || !directory.DomainDKIMKeyPresent(cfg.DataDir, dom.ID) {
+				continue
+			}
+			if err := dkimReg.LoadDomain(dom.Name, dom.DKIMSelector, directory.DomainDKIMKeyPath(cfg.DataDir, dom.ID)); err != nil {
+				log.Warn("dkim load domain", "domain", dom.Name, slog.Any("err", err))
+			}
+		}
+	}
+
 	var httpSrv *httpapi.Server
 	if cfg.HTTPEnabled() {
 		var uiFS fs.FS
@@ -138,6 +197,9 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 			AuthGate:    authGate,
 			Blobs:       blobs,
 			Queue:       queue,
+			Inbox:       inbox,
+			DKIM:        dkimReg,
+			DomainTLS:   domainTLS,
 			Remote:      ptrRemote(remoteConfigFrom(cfg)),
 			Status:      status,
 			LogFile:     logPath,
@@ -187,9 +249,11 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 			ReadTimeout:    imapReadTO,
 			Status:         status,
 		}),
-		http:    httpSrv,
-		status:  status,
-		logFile: logFile,
+		http:      httpSrv,
+		status:    status,
+		logFile:   logFile,
+		dkim:      dkimReg,
+		domainTLS: domainTLS,
 	}, nil
 }
 
@@ -319,14 +383,18 @@ func (a *App) Run(ctx context.Context) error {
 	if a.http != nil {
 		go func() { errCh <- a.http.Serve(ctx) }()
 	}
-	signer, err := a.cfg.NewDKIMSigner()
-	if err != nil {
-		return fmt.Errorf("dkim sign: %w", err)
+	signer := a.dkim
+	if signer == nil {
+		fb, err := a.cfg.NewDKIMSigner()
+		if err != nil {
+			return fmt.Errorf("dkim sign: %w", err)
+		}
+		signer = dkimout.NewRegistry(fb)
 	}
 	if a.status != nil {
 		a.status.Set(servicestatus.Entry{ID: "queue_worker", Name: "Queue worker", State: servicestatus.StateUp})
 	}
-	go mail.NewWorker(a.log, a.queue, a.inbox, a.dir, newRemoteDeliverer(a.cfg), signer, policy).Run(ctx)
+	go mail.NewWorker(a.log, a.queue, a.inbox, a.dir, newRemoteDeliverer(a.cfg, a.dir), signer, policy).Run(ctx)
 
 	_, _, tlsOn := a.cfg.TLSPair()
 	storeInfo := a.cfg.StorePath()

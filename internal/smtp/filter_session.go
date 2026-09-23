@@ -87,11 +87,17 @@ func (s *session) runFilter(ctx context.Context, phase string, to []string, body
 	if s.filter == nil {
 		return FilterOutcome{Action: FilterActionAccept}, nil
 	}
+	if s.skipAntiSpam(ctx, phase, to) {
+		return FilterOutcome{Action: FilterActionAccept}, nil
+	}
 	return s.filter.Filter(ctx, s.buildFilterRequest(phase, to, bodyPath))
 }
 
 func (s *session) filterEom(ctx context.Context, raw []byte) (FilterOutcome, error) {
 	if s.filter == nil {
+		return FilterOutcome{Action: FilterActionAccept}, nil
+	}
+	if s.skipAntiSpam(ctx, FilterPhaseEom, s.rcptAddresses()) {
 		return FilterOutcome{Action: FilterActionAccept}, nil
 	}
 	if s.filterTmpDir == "" {
@@ -114,6 +120,52 @@ func (s *session) filterEom(ctx context.Context, raw []byte) (FilterOutcome, err
 	req := s.buildFilterRequest(FilterPhaseEom, s.rcptAddresses(), path)
 	req.ID = id
 	return s.filter.Filter(ctx, req)
+}
+
+// skipAntiSpam reports whether per-domain AntiSpam is off for this filter phase.
+// CONNECT/HELO/MAIL stay global (domain unknown). RCPT/DATA/EOM honor domain flags.
+func (s *session) skipAntiSpam(ctx context.Context, phase string, to []string) bool {
+	if s.submission {
+		return false
+	}
+	switch phase {
+	case FilterPhaseRcpt:
+		if len(to) == 0 {
+			return false
+		}
+		return !s.domainAntiSpamOn(ctx, to[0])
+	case FilterPhaseData, FilterPhaseEom:
+		if len(s.rcpt) == 0 {
+			return false
+		}
+		for _, t := range s.rcpt {
+			if t.accountID == 0 {
+				return false
+			}
+			if s.domainAntiSpamOn(ctx, t.address) {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *session) domainAntiSpamOn(ctx context.Context, addr string) bool {
+	domName, err := DomainFromAddress(addr)
+	if err != nil {
+		return true
+	}
+	dom, err := s.dir.LookupDomain(ctx, domName)
+	if err != nil {
+		return true
+	}
+	// Legacy / plain CreateDomain leave SSLMode empty → keep global filters on.
+	if dom.SSLMode == "" {
+		return true
+	}
+	return dom.AntiSpam
 }
 
 func (s *session) rcptAddresses() []string {

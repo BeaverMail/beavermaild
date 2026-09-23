@@ -4,6 +4,7 @@ package directory
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/BeaverMail/beaver/internal/storage"
 	"github.com/BeaverMail/beaver/internal/storage/blob"
@@ -47,8 +48,14 @@ func (d *Local) DeleteDomain(ctx context.Context, name string, blobs *blob.FS) (
 	if err := batch.Delete(storage.SubspaceLookup, storage.BatchSuffix(0, 0, []byte("dom/"+dom.Name))); err != nil {
 		return DeleteDomainResult{}, err
 	}
+	if dom.MailHostname != "" {
+		_ = batch.Delete(storage.SubspaceLookup, storage.BatchSuffix(0, 0, []byte("mhost/"+dom.MailHostname)))
+	}
 	if err := d.store.Commit(ctx, batch); err != nil {
 		return DeleteDomainResult{}, err
+	}
+	if d.dataDir != "" {
+		_ = os.RemoveAll(DomainDir(d.dataDir, dom.ID))
 	}
 
 	return DeleteDomainResult{Domain: dom, AccountsDeleted: len(accounts)}, nil
@@ -85,10 +92,10 @@ func (d *Local) deleteAccount(ctx context.Context, acc storage.Account, domName 
 	if err := lookup.Delete(storage.SubspaceLookup, storage.BatchSuffix(0, 0, []byte("acc/"+email))); err != nil {
 		return DeleteAccountResult{}, err
 	}
-	if err := lookup.Delete(storage.SubspaceLookup, storage.BatchSuffix(0, 0, []byte(fmt.Sprintf("meta/email/%d", acc.ID)))); err != nil {
+	if err := lookup.Delete(storage.SubspaceLookup, storage.BatchSuffix(0, 0, fmt.Appendf(nil, "meta/email/%d", acc.ID))); err != nil {
 		return DeleteAccountResult{}, err
 	}
-	if err := lookup.Delete(storage.SubspaceLookup, storage.BatchSuffix(0, 0, []byte(fmt.Sprintf("meta/quota/%d", acc.ID)))); err != nil {
+	if err := lookup.Delete(storage.SubspaceLookup, storage.BatchSuffix(0, 0, fmt.Appendf(nil, "meta/quota/%d", acc.ID))); err != nil {
 		return DeleteAccountResult{}, err
 	}
 	if err := d.store.Commit(ctx, lookup); err != nil {

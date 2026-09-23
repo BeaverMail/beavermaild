@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/pem"
 	"fmt"
 	"os"
@@ -131,8 +132,8 @@ func hasSelectorSignature(raw []byte, selector string) bool {
 	return bytes.Contains(lower, []byte("s="+selector))
 }
 
-// GenerateTestKey writes a 2048-bit RSA private key PEM to path (tests only).
-func GenerateTestKey(path string) error {
+// GenerateKey writes a 2048-bit RSA private key PEM to path.
+func GenerateKey(path string) error {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		return err
@@ -144,4 +145,24 @@ func GenerateTestKey(path string) error {
 	}
 	defer f.Close()
 	return pem.Encode(f, &pem.Block{Type: "RSA PRIVATE KEY", Bytes: b})
+}
+
+// GenerateTestKey is an alias used by tests.
+func GenerateTestKey(path string) error { return GenerateKey(path) }
+
+// PublicKeyDNS returns a DKIM TXT value (v=DKIM1; k=rsa; p=...) for the private key at path.
+func PublicKeyDNS(path string) (string, error) {
+	key, err := loadPrivateKey(path)
+	if err != nil {
+		return "", err
+	}
+	rsaKey, ok := key.(*rsa.PrivateKey)
+	if !ok {
+		return "", fmt.Errorf("dkimout: need RSA key for DNS record")
+	}
+	pubDER, err := x509.MarshalPKIXPublicKey(&rsaKey.PublicKey)
+	if err != nil {
+		return "", err
+	}
+	return "v=DKIM1; k=rsa; p=" + base64.StdEncoding.EncodeToString(pubDER), nil
 }

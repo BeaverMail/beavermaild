@@ -1,10 +1,22 @@
 <script lang="ts">
-import { Plus, Trash2, Users } from '@lucide/svelte'
+import { Pencil, Plus, Trash2, Users, X } from '@lucide/svelte'
 import { page } from '$app/state'
-import { ApiError, createAccount, deleteAccount, fetchAccounts, type ListedAccount, patchAccount } from '$lib/api'
+import {
+  ApiError,
+  createAccount,
+  deleteAccount,
+  fetchAccounts,
+  fetchDomain,
+  type Domain,
+  type ListedAccount,
+  type PatchDomainInput,
+  patchAccount,
+  patchDomain
+} from '$lib/api'
 import { me } from '$lib/session'
 
 let accounts = $state<ListedAccount[]>([])
+let domainInfo = $state<Domain | null>(null)
 let error = $state('')
 let loading = $state(true)
 let localPart = $state('')
@@ -13,17 +25,56 @@ let role = $state('user')
 let busy = $state(false)
 let formError = $state('')
 
+let editOpen = $state(false)
+let editBusy = $state(false)
+let editError = $state('')
+let catchAll = $state('')
+let mailHostname = $state('')
+let sslMode = $state<'none' | 'custom' | 'acme'>('none')
+let certPem = $state('')
+let keyPem = $state('')
+let dkimEnabled = $state(true)
+let antispam = $state(true)
+let sendMax = $state('')
+let sendWindow = $state('1h')
+let storageAmount = $state('')
+let storageUnit = $state<'MB' | 'GB'>('MB')
+let messagesQuota = $state('')
+let relayEnabled = $state(false)
+let relayHost = $state('')
+let relayUser = $state('')
+let relayPassword = $state('')
+let relayStartTLS = $state(true)
+
 const domain = $derived(page.params.domain ?? '')
 const canWrite = $derived($me?.role === 'admin' || $me?.role === 'tenant_admin')
 const roleOptions = $derived($me?.role === 'admin' ? ['user', 'tenant_admin', 'admin'] : ['user', 'tenant_admin'])
+
+function storageToBytes(amount: string, unit: 'MB' | 'GB'): number | undefined {
+  const n = Number(amount)
+  if (!amount || !Number.isFinite(n) || n <= 0) return undefined
+  const mul = unit === 'GB' ? 1024 * 1024 * 1024 : 1024 * 1024
+  return Math.round(n * mul)
+}
+
+function bytesToStorage(bytes: number | undefined): { amount: string; unit: 'MB' | 'GB' } {
+  if (!bytes) return { amount: '', unit: 'MB' }
+  const gb = 1024 * 1024 * 1024
+  const mb = 1024 * 1024
+  if (bytes >= gb && bytes % gb === 0) return { amount: String(bytes / gb), unit: 'GB' }
+  if (bytes >= mb && bytes % mb === 0) return { amount: String(bytes / mb), unit: 'MB' }
+  return { amount: String(Math.round((bytes / mb) * 100) / 100), unit: 'MB' }
+}
 
 async function reload(name: string) {
   loading = true
   error = ''
   try {
-    accounts = await fetchAccounts(name)
+    const [list, info] = await Promise.all([fetchAccounts(name), fetchDomain(name)])
+    accounts = list
+    domainInfo = info
   } catch (e) {
-    error = e instanceof ApiError ? e.message : 'failed to load accounts'
+    error = e instanceof ApiError ? e.message : 'failed to load domain'
   } finally {
     loading = false
   }
@@ -35,13 +86,16 @@ $effect(() => {
   let cancelled = false
   loading = true
   error = ''
-  void fetchAccounts(name)
-    .then((list) => {
-      if (!cancelled) accounts = list
+  void Promise.all([fetchAccounts(name), fetchDomain(name)])
+    .then(([list, info]) => {
+      if (!cancelled) {
+        accounts = list
+        domainInfo = info
+      }
     })
     .catch((e) => {
       if (!cancelled) {
-        error = e instanceof ApiError ? e.message : 'failed to load accounts'
+        error = e instanceof ApiError ? e.message : 'failed to load domain'
       }
     })
     .finally(() => {
@@ -51,6 +105,66 @@ $effect(() => {
     cancelled = true
   }
 })
+
+function openEdit() {
+  if (!domainInfo) return
+  catchAll = domainInfo.catch_all ?? ''
+  mailHostname = domainInfo.mail_hostname ?? ''
+  sslMode = (domainInfo.ssl_mode as 'none' | 'custom' | 'acme') || 'none'
+  certPem = ''
+  keyPem = ''
+  dkimEnabled = !!domainInfo.dkim_enabled
+  antispam = !!domainInfo.antispam
+  sendMax = domainInfo.send_max_messages ? String(domainInfo.send_max_messages) : ''
+  sendWindow = domainInfo.send_window || '1h'
+  const st = bytesToStorage(domainInfo.storage_bytes)
+  storageAmount = st.amount
+  storageUnit = st.unit
+  messagesQuota = domainInfo.messages_quota ? String(domainInfo.messages_quota) : ''
+  relayEnabled = !!(domainInfo.relay_host ?? '')
+  relayHost = domainInfo.relay_host ?? ''
+  relayUser = domainInfo.relay_user ?? ''
+  relayPassword = ''
+  relayStartTLS = domainInfo.relay_starttls ?? true
+  editError = ''
+  editOpen = true
+}
+
+function closeEdit() {
+  if (editBusy) return
+  editOpen = false
+}
+
+async function onSaveEdit(e: Event) {
+  e.preventDefault()
+  editError = ''
+  editBusy = true
+  try {
+    const input: PatchDomainInput = {
+      catch_all: catchAll.trim() || undefined,
+      mail_hostname: mailHostname.trim() || undefined,
+      ssl_mode: sslMode,
+      cert_pem: sslMode === 'custom' && certPem.trim() ? certPem : undefined,
+      key_pem: sslMode === 'custom' && keyPem.trim() ? keyPem : undefined,
+      dkim_enabled: dkimEnabled,
+      antispam,
+      send_max_messages: sendMax ? Number(sendMax) : undefined,
+      send_window: sendMax ? sendWindow.trim() || undefined : undefined,
+      storage_bytes: storageToBytes(storageAmount, storageUnit),
+      messages_quota: messagesQuota ? Number(messagesQuota) : undefined,
+      relay_host: relayEnabled ? relayHost.trim() || undefined : undefined,
+      relay_user: relayEnabled ? relayUser.trim() || undefined : undefined,
+      relay_password: relayEnabled ? relayPassword || undefined : undefined,
+      relay_starttls: relayEnabled ? relayStartTLS : undefined
+    }
+    domainInfo = await patchDomain(domain, input)
+    editOpen = false
+  } catch (err) {
+    editError = err instanceof ApiError ? err.message : 'update failed'
+  } finally {
+    editBusy = false
+  }
+}
 
 async function onCreate(e: Event) {
   e.preventDefault()
@@ -124,10 +238,50 @@ async function onResetPassword(a: ListedAccount) {
 }
 </script>
 
-<div class="mb-6 flex items-center gap-2">
-  <Users class="size-5 text-gray-700" />
-  <h1 class="text-xl font-semibold text-gray-900">Accounts · {domain}</h1>
+<div class="mb-6 flex flex-wrap items-center justify-between gap-3">
+  <div class="flex items-center gap-2">
+    <Users class="size-5 text-gray-700" />
+    <h1 class="text-xl font-semibold text-gray-900">Accounts · {domain}</h1>
+  </div>
+  {#if canWrite && domainInfo}
+    <button
+      type="button"
+      onclick={openEdit}
+      class="inline-flex items-center gap-1 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-800 hover:bg-gray-50"
+    >
+      <Pencil class="size-4" />
+      Edit domain
+    </button>
+  {/if}
 </div>
+
+{#if domainInfo}
+  <div class="mb-6 flex flex-wrap gap-2 text-xs">
+    <span
+      class="rounded px-2 py-1 font-medium uppercase tracking-wide {domainInfo.antispam_active
+        ? 'bg-emerald-50 text-emerald-800'
+        : 'bg-gray-100 text-gray-500'}">AS</span
+    >
+    <span
+      class="rounded px-2 py-1 font-medium uppercase tracking-wide {domainInfo.dkim_active
+        ? 'bg-emerald-50 text-emerald-800'
+        : 'bg-gray-100 text-gray-500'}">DKIM</span
+    >
+    <span
+      class="rounded px-2 py-1 font-medium uppercase tracking-wide {domainInfo.ssl_active
+        ? 'bg-emerald-50 text-emerald-800'
+        : 'bg-gray-100 text-gray-500'}">SSL</span
+    >
+    {#if domainInfo.catch_all}
+      <span class="rounded bg-gray-100 px-2 py-1 text-gray-700">catch-all: {domainInfo.catch_all}@{domain}</span>
+    {/if}
+    {#if domainInfo.dkim_dns_name && domainInfo.dkim_dns_value}
+      <span class="max-w-full truncate rounded bg-gray-100 px-2 py-1 font-mono text-gray-600" title={domainInfo.dkim_dns_value}
+        >DNS: {domainInfo.dkim_dns_name}</span
+      >
+    {/if}
+  </div>
+{/if}
 
 {#if canWrite}
   <form
@@ -242,5 +396,213 @@ async function onResetPassword(a: ListedAccount) {
         {/each}
       </tbody>
     </table>
+  </div>
+{/if}
+
+{#if editOpen}
+  <div class="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-black/40 p-4 sm:p-8">
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="edit-domain-title"
+      class="my-4 w-full max-w-2xl rounded-xl border border-gray-200 bg-white shadow-lg"
+    >
+      <div class="flex items-center justify-between border-b border-gray-100 px-5 py-4">
+        <h2 id="edit-domain-title" class="text-lg font-semibold text-gray-900">Edit {domain}</h2>
+        <button type="button" class="rounded-lg p-1 text-gray-500 hover:bg-gray-100" onclick={closeEdit} aria-label="Close">
+          <X class="size-5" />
+        </button>
+      </div>
+      <form class="space-y-5 px-5 py-4" onsubmit={onSaveEdit}>
+        <div class="grid gap-4 sm:grid-cols-2">
+          <div>
+            <label for="catch-all" class="mb-1 block text-xs font-medium text-gray-600">Catch-all local-part</label>
+            <input
+              id="catch-all"
+              bind:value={catchAll}
+              placeholder="postmaster (optional)"
+              class="block w-full rounded-lg border-gray-200 px-3 py-2 text-sm focus:border-brand-600 focus:ring-brand-600/30"
+            >
+          </div>
+          <div>
+            <label for="mail-host" class="mb-1 block text-xs font-medium text-gray-600">Mail hostname</label>
+            <input
+              id="mail-host"
+              bind:value={mailHostname}
+              placeholder="mail.example.com"
+              class="block w-full rounded-lg border-gray-200 px-3 py-2 text-sm focus:border-brand-600 focus:ring-brand-600/30"
+            >
+          </div>
+        </div>
+
+        <fieldset class="space-y-3">
+          <legend class="text-xs font-semibold uppercase tracking-wide text-gray-500">SSL</legend>
+          <div class="flex flex-wrap gap-4 text-sm">
+            <label class="inline-flex items-center gap-2">
+              <input type="radio" bind:group={sslMode} value="none" />
+              None
+            </label>
+            <label class="inline-flex items-center gap-2">
+              <input type="radio" bind:group={sslMode} value="acme" />
+              Let's Encrypt (HTTP-01)
+            </label>
+            <label class="inline-flex items-center gap-2">
+              <input type="radio" bind:group={sslMode} value="custom" />
+              Custom PEM
+            </label>
+          </div>
+          {#if sslMode === 'custom'}
+            <p class="text-xs text-gray-500">Leave PEM empty to keep the current certificate.</p>
+            <div>
+              <label for="cert-pem" class="mb-1 block text-xs font-medium text-gray-600">Certificate PEM</label>
+              <textarea
+                id="cert-pem"
+                rows="4"
+                bind:value={certPem}
+                class="block w-full rounded-lg border-gray-200 font-mono text-xs focus:border-brand-600 focus:ring-brand-600/30"
+              ></textarea>
+            </div>
+            <div>
+              <label for="key-pem" class="mb-1 block text-xs font-medium text-gray-600">Private key PEM</label>
+              <textarea
+                id="key-pem"
+                rows="4"
+                bind:value={keyPem}
+                class="block w-full rounded-lg border-gray-200 font-mono text-xs focus:border-brand-600 focus:ring-brand-600/30"
+              ></textarea>
+            </div>
+          {/if}
+        </fieldset>
+
+        <fieldset class="grid gap-3 sm:grid-cols-2">
+          <legend class="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500 sm:col-span-2">Services</legend>
+          <label class="inline-flex items-center gap-2 text-sm">
+            <input type="checkbox" bind:checked={dkimEnabled} />
+            DKIM signing
+          </label>
+          <label class="inline-flex items-center gap-2 text-sm">
+            <input type="checkbox" bind:checked={antispam} />
+            AntiSpam for this domain
+          </label>
+        </fieldset>
+
+        <fieldset class="grid gap-3 sm:grid-cols-2">
+          <legend class="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500 sm:col-span-2">
+            Rate &amp; quota (optional overrides)
+          </legend>
+          <div>
+            <label for="send-max" class="mb-1 block text-xs font-medium text-gray-600">Send max messages</label>
+            <input
+              id="send-max"
+              type="number"
+              min="0"
+              bind:value={sendMax}
+              placeholder="global default"
+              class="block w-full rounded-lg border-gray-200 px-3 py-2 text-sm"
+            >
+          </div>
+          <div>
+            <label for="send-window" class="mb-1 block text-xs font-medium text-gray-600">Send window</label>
+            <input
+              id="send-window"
+              bind:value={sendWindow}
+              placeholder="1h"
+              class="block w-full rounded-lg border-gray-200 px-3 py-2 text-sm"
+            >
+          </div>
+          <div>
+            <label for="storage-amount" class="mb-1 block text-xs font-medium text-gray-600">Mailbox storage</label>
+            <div class="flex gap-2">
+              <input
+                id="storage-amount"
+                type="number"
+                min="0"
+                step="any"
+                bind:value={storageAmount}
+                placeholder="global default"
+                class="block min-w-0 flex-1 rounded-lg border-gray-200 px-3 py-2 text-sm"
+              >
+              <select aria-label="Storage unit" bind:value={storageUnit} class="appearance-none rounded-lg border-gray-200 px-3 py-2 text-sm">
+                <option value="MB">MB</option>
+                <option value="GB">GB</option>
+              </select>
+            </div>
+          </div>
+          <div>
+            <label for="messages-quota" class="mb-1 block text-xs font-medium text-gray-600">Mailbox message cap</label>
+            <input
+              id="messages-quota"
+              type="number"
+              min="0"
+              bind:value={messagesQuota}
+              placeholder="global default"
+              class="block w-full rounded-lg border-gray-200 px-3 py-2 text-sm"
+            >
+          </div>
+        </fieldset>
+
+        <fieldset class="space-y-3">
+          <legend class="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">SMTP relay</legend>
+          <label class="inline-flex items-center gap-2 text-sm">
+            <input type="checkbox" bind:checked={relayEnabled} />
+            Use custom SMTP relay for this domain
+          </label>
+          {#if relayEnabled}
+            <div class="grid gap-3 sm:grid-cols-2">
+              <div class="sm:col-span-2">
+                <label for="relay-host" class="mb-1 block text-xs font-medium text-gray-600">Relay host</label>
+                <input
+                  id="relay-host"
+                  required
+                  bind:value={relayHost}
+                  placeholder="smtp.relay.example:587"
+                  class="block w-full rounded-lg border-gray-200 px-3 py-2 text-sm"
+                >
+              </div>
+              <div>
+                <label for="relay-user" class="mb-1 block text-xs font-medium text-gray-600">Username</label>
+                <input id="relay-user" bind:value={relayUser} class="block w-full rounded-lg border-gray-200 px-3 py-2 text-sm">
+              </div>
+              <div>
+                <label for="relay-pass" class="mb-1 block text-xs font-medium text-gray-600">Password</label>
+                <input
+                  id="relay-pass"
+                  type="password"
+                  bind:value={relayPassword}
+                  placeholder="leave blank to keep"
+                  class="block w-full rounded-lg border-gray-200 px-3 py-2 text-sm"
+                >
+              </div>
+              <label class="inline-flex items-center gap-2 text-sm sm:col-span-2">
+                <input type="checkbox" bind:checked={relayStartTLS} />
+                STARTTLS
+              </label>
+            </div>
+          {/if}
+        </fieldset>
+
+        {#if editError}
+          <p class="text-sm text-red-600">{editError}</p>
+        {/if}
+
+        <div class="flex justify-end gap-2 border-t border-gray-100 pt-4">
+          <button
+            type="button"
+            onclick={closeEdit}
+            class="rounded-lg px-3 py-2 text-sm text-gray-700 hover:bg-gray-100"
+            disabled={editBusy}
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={editBusy}
+            class="rounded-lg bg-brand-700 px-3 py-2 text-sm font-medium text-white hover:bg-brand-800 disabled:opacity-50"
+          >
+            {editBusy ? 'Saving…' : 'Save changes'}
+          </button>
+        </div>
+      </form>
+    </div>
   </div>
 {/if}

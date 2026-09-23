@@ -39,3 +39,21 @@ func TestSendLimitGateWindowReset(t *testing.T) {
 		t.Fatal("expected allow after window")
 	}
 }
+
+func TestWrapDomainSendGateOverride(t *testing.T) {
+	t.Parallel()
+	base := security.NewSendLimitGate(security.SendLimitConfig{MaxMessages: 100, Window: time.Hour})
+	gate := security.WrapDomainSendGate(base, func(principal string) (int, time.Duration, bool) {
+		if principal == "alice@tight.test" {
+			return 1, time.Hour, true
+		}
+		return 0, 0, false
+	})
+	gate.RecordSend("alice@tight.test")
+	if gate.AllowSend("alice@tight.test") {
+		t.Fatal("domain override should block after 1")
+	}
+	if !gate.AllowSend("bob@loose.test") {
+		t.Fatal("other domain should use base and allow")
+	}
+}

@@ -59,3 +59,50 @@ func TestQuotaBlocksDeliverAndFreesOnDelete(t *testing.T) {
 		t.Fatalf("after delete deliver err=%v", err)
 	}
 }
+
+func TestQuotaUsesDomainDefaults(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, "file:"+t.TempDir()+"/store.sqlite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	dir := directory.NewLocal(store)
+	dom, err := dir.CreateDomainWithOpts(ctx, directory.DefaultTenantID, "quota.test", directory.DomainCreateOpts{
+		StorageBytes: 50,
+		Messages:     1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	acc, err := dir.CreateAccount(ctx, dom.ID, "u", "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	inbox := mail.NewInbox(store, blob.NewFS(t.TempDir()+"/blobs"))
+	inbox.SetQuotaDefaults(mail.QuotaDefaults{StorageBytes: 10_000, Messages: 100})
+	inbox.SetAccountQuotaDefaultsFunc(func(ctx context.Context, accountID uint32) (mail.QuotaDefaults, bool) {
+		sb, msgs, ok := dir.DomainQuotaForAccount(ctx, accountID)
+		if !ok {
+			return mail.QuotaDefaults{}, false
+		}
+		return mail.QuotaDefaults{StorageBytes: sb, Messages: msgs}, true
+	})
+
+	if _, err := inbox.Deliver(ctx, acc.ID, []byte("From: a@b\r\n\r\nok\r\n")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := inbox.Deliver(ctx, acc.ID, []byte("From: a@b\r\n\r\nno\r\n")); err != mail.ErrOverQuota {
+		t.Fatalf("want over quota got %v", err)
+	}
+	st, err := inbox.QuotaStatus(ctx, acc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.MessagesLimit != 1 || st.StorageLimit != 50 {
+		t.Fatalf("status %+v", st)
+	}
+}

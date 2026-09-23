@@ -2,6 +2,7 @@
 package security
 
 import (
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -100,4 +101,63 @@ func (g *SendLimitGate) countLocked(key string) int {
 
 func normalizePrincipal(principal string) string {
 	return strings.ToLower(strings.TrimSpace(principal))
+}
+
+// DomainSendLimitLookup returns a per-domain submission override for principal (email).
+// ok=false means use the wrapped base gate.
+type DomainSendLimitLookup func(principal string) (maxMessages int, window time.Duration, ok bool)
+
+// WrapDomainSendGate applies per-domain send limits when lookup returns ok.
+func WrapDomainSendGate(base SendGate, lookup DomainSendLimitLookup) SendGate {
+	if lookup == nil {
+		if base == nil {
+			return NopSendGate{}
+		}
+		return base
+	}
+	if base == nil {
+		base = NopSendGate{}
+	}
+	return &domainSendGate{
+		base:   base,
+		lookup: lookup,
+		byKey:  make(map[string]*SendLimitGate),
+	}
+}
+
+type domainSendGate struct {
+	base   SendGate
+	lookup DomainSendLimitLookup
+	mu     sync.Mutex
+	byKey  map[string]*SendLimitGate
+}
+
+func (g *domainSendGate) overrideGate(max int, window time.Duration) *SendLimitGate {
+	if window <= 0 {
+		window = DefaultSendLimitConfig().Window
+	}
+	key := strconv.Itoa(max) + "/" + strconv.FormatInt(int64(window), 10)
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if existing := g.byKey[key]; existing != nil {
+		return existing
+	}
+	sg := NewSendLimitGate(SendLimitConfig{MaxMessages: max, Window: window})
+	g.byKey[key] = sg
+	return sg
+}
+
+func (g *domainSendGate) AllowSend(principal string) bool {
+	if max, win, ok := g.lookup(principal); ok && max > 0 {
+		return g.overrideGate(max, win).AllowSend(principal)
+	}
+	return g.base.AllowSend(principal)
+}
+
+func (g *domainSendGate) RecordSend(principal string) {
+	if max, win, ok := g.lookup(principal); ok && max > 0 {
+		g.overrideGate(max, win).RecordSend(principal)
+		return
+	}
+	g.base.RecordSend(principal)
 }

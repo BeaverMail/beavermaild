@@ -184,3 +184,59 @@ func TestDeleteDomainNotFound(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+func TestCreateDomainWithOptsDKIMAndStats(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	d := openDir(t)
+	dataDir := t.TempDir()
+	d.SetDataDir(dataDir)
+
+	dom, err := d.CreateDomainWithOpts(ctx, directory.DefaultTenantID, "hosted.test", directory.DomainCreateOpts{
+		MailHostname:    "mail.hosted.test",
+		SSLMode:         "acme",
+		DKIMEnabled:     true,
+		AntiSpam:        true,
+		SendMaxMessages: 10,
+		SendWindow:      "1h",
+		StorageBytes:    1024,
+		Messages:        5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !dom.DKIMEnabled || dom.DKIMSelector != "beaver" || !dom.AntiSpam {
+		t.Fatalf("domain %+v", dom)
+	}
+	if !directory.DomainDKIMKeyPresent(dataDir, dom.ID) {
+		t.Fatal("dkim key missing")
+	}
+	st := d.BuildDomainStats(dom, 0, 0)
+	if !st.DKIMActive || !st.SSLActive || !st.AntiSpam {
+		t.Fatalf("stats %+v", st)
+	}
+	name, val, err := d.DKIMDNSRecord(dom)
+	if err != nil || name == "" || val == "" {
+		t.Fatalf("dns name=%q val=%q err=%v", name, val, err)
+	}
+
+	updated, err := d.UpdateDomainWithOpts(ctx, "hosted.test", directory.DomainCreateOpts{
+		MailHostname: "mail2.hosted.test",
+		SSLMode:      "acme",
+		DKIMEnabled:  true,
+		AntiSpam:     false,
+		CatchAllLocal: "postmaster",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.AntiSpam || updated.MailHostname != "mail2.hosted.test" || updated.CatchAllLocal != "postmaster" {
+		t.Fatalf("updated %+v", updated)
+	}
+	if _, err := d.LookupDomainByMailHost(ctx, "mail2.hosted.test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.LookupDomainByMailHost(ctx, "mail.hosted.test"); !errors.Is(err, directory.ErrNotFound) {
+		t.Fatalf("old mail host still mapped: %v", err)
+	}
+}

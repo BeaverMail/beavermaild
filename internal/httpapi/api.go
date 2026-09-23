@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/BeaverMail/beaver/internal/directory"
+	"github.com/BeaverMail/beaver/internal/dkimout"
+	"github.com/BeaverMail/beaver/internal/domaintls"
 	"github.com/BeaverMail/beaver/internal/mail"
 	"github.com/BeaverMail/beaver/internal/security"
 	"github.com/BeaverMail/beaver/internal/servicestatus"
@@ -40,6 +42,12 @@ type Options struct {
 	Blobs *blob.FS
 	// Queue is the outbound mail queue (nil disables queue endpoints).
 	Queue *mail.Queue
+	// Inbox is used for domain storage usage aggregates (nil → storage_used 0).
+	Inbox *mail.Inbox
+	// DKIM registry is updated when a domain is created with DKIM enabled.
+	DKIM *dkimout.Registry
+	// DomainTLS handles per-domain custom/ACME certs (nil disables ACME HTTP-01).
+	DomainTLS *domaintls.Manager
 	// Remote configures outbound delivery probes (nil/empty disables).
 	Remote *smtp.RemoteConfig
 	// Status is the process-wide service registry (nil disables /status).
@@ -63,6 +71,9 @@ type Server struct {
 	authGate    security.AuthGate
 	blobs       *blob.FS
 	queue       *mail.Queue
+	inbox       *mail.Inbox
+	dkim        *dkimout.Registry
+	domainTLS   *domaintls.Manager
 	remote      *smtp.RemoteConfig
 	status      *servicestatus.Registry
 	logFile     string
@@ -106,6 +117,9 @@ func New(opts Options) (*Server, error) {
 		authGate:    gate,
 		blobs:       opts.Blobs,
 		queue:       opts.Queue,
+		inbox:       opts.Inbox,
+		dkim:        opts.DKIM,
+		domainTLS:   opts.DomainTLS,
 		remote:      opts.Remote,
 		status:      opts.Status,
 		logFile:     strings.TrimSpace(opts.LogFile),
@@ -115,6 +129,13 @@ func New(opts Options) (*Server, error) {
 	}
 	s.routes()
 	return s, nil
+}
+
+func (s *Server) handler() http.Handler {
+	if s.domainTLS != nil {
+		return s.domainTLS.HTTPHandler(s.mux)
+	}
+	return s.mux
 }
 
 // Serve binds listen and serves until ctx is canceled.
@@ -148,7 +169,7 @@ func (s *Server) Serve(ctx context.Context) error {
 	}
 
 	srv := &http.Server{
-		Handler:           s.mux,
+		Handler:           s.handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {
@@ -166,8 +187,8 @@ func (s *Server) Serve(ctx context.Context) error {
 	return err
 }
 
-// Handler returns the mux for tests.
-func (s *Server) Handler() http.Handler { return s.mux }
+// Handler returns the HTTP handler for tests (includes ACME wrapper when configured).
+func (s *Server) Handler() http.Handler { return s.handler() }
 
 // TLSConfig exposes the TLS config when serving HTTPS (tests/inspection).
 func (s *Server) TLSConfig() *tls.Config {

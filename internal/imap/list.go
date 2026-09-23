@@ -8,14 +8,6 @@ import (
 	"github.com/BeaverMail/beaver/internal/mail"
 )
 
-func parseListArg(arg string) (ref, pattern string, ok bool) {
-	opt, ok := parseListOptions(arg)
-	if !ok {
-		return "", "", false
-	}
-	return opt.ref, opt.pattern, true
-}
-
 // listOptions captures LIST / LSUB reference, pattern, and LIST-EXTENDED flags.
 type listOptions struct {
 	ref            string

@@ -28,13 +28,22 @@ func (p Principal) Email() string {
 
 // Local is a filesystem-backed directory using the logical KV store.
 type Local struct {
-	store storage.Store
+	store   storage.Store
+	dataDir string // optional; required for TLS/DKIM domain asset paths
 }
 
 // NewLocal returns a directory over store.
 func NewLocal(store storage.Store) *Local {
 	return &Local{store: store}
 }
+
+// SetDataDir sets the data root used for per-domain TLS/DKIM files.
+func (d *Local) SetDataDir(dir string) {
+	d.dataDir = strings.TrimSpace(dir)
+}
+
+// DataDir returns the configured data root (may be empty).
+func (d *Local) DataDir() string { return d.dataDir }
 
 // Authenticate checks email and password and returns the principal.
 func (d *Local) Authenticate(ctx context.Context, email, password string) (Principal, error) {
