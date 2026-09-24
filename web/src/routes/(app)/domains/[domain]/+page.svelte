@@ -26,7 +26,7 @@
     let role = $state("user");
     let busy = $state(false);
     let dnsRecords = $state<DnsRecord[]>([]);
-    let copiedHost = $state("");
+    let copiedKey = $state("");
     let formError = $state("");
 
     let editOpen = $state(false);
@@ -246,9 +246,9 @@
     async function copyDnsValue(r: DnsRecord) {
         try {
             await navigator.clipboard.writeText(r.value);
-            copiedHost = r.host;
+            copiedKey = r.type + r.host;
             setTimeout(() => {
-                if (copiedHost === r.host) copiedHost = "";
+                if (copiedKey === r.type + r.host) copiedKey = "";
             }, 1500);
         } catch {
             /* clipboard unavailable */
@@ -469,7 +469,7 @@
                                 class="text-xs text-brand-700 hover:underline"
                                 onclick={() => copyDnsValue(r)}
                             >
-                                {copiedHost === r.host ? "Copied!" : "Copy"}
+                                {copiedKey === r.type + r.host ? "Copied!" : "Copy"}
                             </button>
                         </td>
                     </tr>
