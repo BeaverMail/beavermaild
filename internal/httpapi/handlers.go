@@ -26,6 +26,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET "+apiPrefix+"/domains", s.requireAuth(s.handleListDomains))
 	s.mux.HandleFunc("POST "+apiPrefix+"/domains", s.requireAuth(s.requireSameOrigin(s.handleCreateDomain)))
 	s.mux.HandleFunc("GET "+apiPrefix+"/domains/{domain}", s.requireAuth(s.handleGetDomain))
+	s.mux.HandleFunc("GET "+apiPrefix+"/domains/{domain}/dns-recommended", s.requireAuth(s.handleDomainDNSRecommended))
 	s.mux.HandleFunc("PATCH "+apiPrefix+"/domains/{domain}", s.requireAuth(s.requireSameOrigin(s.handlePatchDomain)))
 	s.mux.HandleFunc("DELETE "+apiPrefix+"/domains/{domain}", s.requireAuth(s.requireSameOrigin(s.handleDeleteDomain)))
 	s.mux.HandleFunc("GET "+apiPrefix+"/domains/{domain}/accounts", s.requireAuth(s.handleListAccounts))

@@ -370,3 +370,19 @@ export async function fetchLogs(opts?: {
   const qs = params.toString()
   return api<{ entries: LogEntry[] }>(`/logs${qs ? `?${qs}` : ''}`)
 }
+
+export type DnsRecord = {
+  type: string
+  host: string
+  value: string
+  placeholder?: boolean
+  note?: string
+}
+
+/** Recommended DNS records for a hosted domain (MX, SPF, DKIM, DMARC, MTA-STS, TLS-RPT, autoconfig). */
+export async function fetchDnsRecommended(domain: string): Promise<DnsRecord[]> {
+  const out = await api<{ records: DnsRecord[] }>(
+    `/domains/${encodeURIComponent(domain)}/dns-recommended`
+  )
+  return out.records ?? []
+}
