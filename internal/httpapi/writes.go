@@ -107,6 +107,10 @@ func (s *Server) handleCreateDomain(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "name required")
 		return
 	}
+	if strings.TrimSpace(req.MailHostname) == "" {
+		writeError(w, http.StatusBadRequest, "mail_hostname required")
+		return
+	}
 	tenantID := req.TenantID
 	switch p.Role {
 	case directory.RoleAdmin:
@@ -220,6 +224,10 @@ func (s *Server) handlePatchDomain(w http.ResponseWriter, r *http.Request) {
 	var req patchDomainRequest
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	if strings.TrimSpace(req.MailHostname) == "" {
+		writeError(w, http.StatusBadRequest, "mail_hostname required")
 		return
 	}
 	opts := directory.DomainCreateOpts{

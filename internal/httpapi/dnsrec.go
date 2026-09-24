@@ -1,4 +1,4 @@
-// Recommended DNS records for a hosted domain (MX, SPF, DKIM, DMARC, MTA-STS, TLS-RPT, autoconfig).
+// Recommended DNS records for a hosted domain (MX, SPF, DKIM, autoconfig).
 package httpapi
 
 import (
@@ -19,8 +19,9 @@ type dnsRecordDTO struct {
 }
 
 // dnsRecommendedRecords builds the publish-ready record list. dkimName/dkimVal come from
-// directory.DKIMDNSRecord: empty with dkimErr==nil means no key is generated, empty with
-// dkimErr!=nil means the key could not be read; every non-real value is flagged as
+// directory.DKIMDNSRecord: empty with dkimErr==nil means no key is generated and no row is
+// emitted (inactive features stay hidden), empty with dkimErr!=nil means the key could not
+// be read and the row stays with an honest note; every non-real value is flagged as
 // placeholder so nothing invented goes unmarked.
 func dnsRecommendedRecords(dom storage.Domain, dkimName, dkimVal string, dkimErr error) []dnsRecordDTO {
 	mailHost := dom.MailHostname
@@ -38,45 +39,27 @@ func dnsRecommendedRecords(dom storage.Domain, dkimName, dkimVal string, dkimErr
 		{Type: "TXT", Host: dom.Name, Value: "v=spf1 mx a:" + mailHost + " ~all", Placeholder: hostPlaceholder, Note: hostNote},
 	}
 
+	// Inactive features emit no row: no DKIM row while no key is generated, and no
+	// DMARC / MTA-STS / TLS-RPT rows while their rua/id values are not real yet.
 	switch {
 	case dkimName != "" && dkimVal != "":
 		recs = append(recs, dnsRecordDTO{Type: "TXT", Host: dkimName, Value: dkimVal})
-	default:
-		note := "placeholder: enable DKIM to generate the key and get the real value"
-		if dkimErr != nil {
-			note = "placeholder: the DKIM key could not be read (missing or unreadable, see server logs); the value below is not the real key"
-		}
+	case dkimErr != nil:
+		// DKIM is on but the key is unreadable: a real problem, not an inactive
+		// feature, so the row stays visible with an honest note instead of a fake key.
 		selector := dom.DKIMSelector
 		if selector == "" {
-			selector = "selector"
+			selector = "<selector>"
 		}
 		recs = append(recs, dnsRecordDTO{
 			Type: "TXT", Host: selector + "._domainkey." + dom.Name,
 			Value:       "v=DKIM1; k=rsa; p=<DKIM public key>",
 			Placeholder: true,
-			Note:        note,
+			Note:        "placeholder: the DKIM key could not be read (missing or unreadable, see server logs); the value below is not the real key",
 		})
 	}
 
 	recs = append(recs,
-		dnsRecordDTO{
-			Type: "TXT", Host: "_dmarc." + dom.Name,
-			Value:       "v=DMARC1; p=quarantine; rua=mailto:dmarc-reports@" + dom.Name,
-			Placeholder: true,
-			Note:        "placeholder: point rua at your report inbox (report addresses not configurable yet)",
-		},
-		dnsRecordDTO{
-			Type: "TXT", Host: "_mta-sts." + dom.Name,
-			Value:       "v=STSv1; id=<policy id>",
-			Placeholder: true,
-			Note:        "placeholder: set id to the policy version published at https://mta-sts." + dom.Name + "/.well-known/mta-sts.txt",
-		},
-		dnsRecordDTO{
-			Type: "TXT", Host: "_smtp._tls." + dom.Name,
-			Value:       "v=TLSRPTv1; rua=mailto:tls-reports@" + dom.Name,
-			Placeholder: true,
-			Note:        "placeholder: point rua at your report inbox (report addresses not configurable yet)",
-		},
 		dnsRecordDTO{Type: "CNAME", Host: "autoconfig." + dom.Name, Value: mailHost, Placeholder: hostPlaceholder, Note: hostNote},
 		dnsRecordDTO{Type: "CNAME", Host: "autodiscover." + dom.Name, Value: mailHost, Placeholder: hostPlaceholder, Note: hostNote},
 	)

@@ -1,4 +1,4 @@
-// Recommended DNS records endpoint: real DKIM value, marked placeholders, 401/403/404.
+// Recommended DNS records endpoint: real DKIM value, marked placeholders, hidden inactive rows, 401/403/404.
 package httpapi_test
 
 import (
@@ -74,11 +74,33 @@ func TestDomainDNSRecommended(t *testing.T) {
 		t.Fatalf("dkim record not the real key: %+v", dkim)
 	}
 
-	// DMARC / MTA-STS / TLS-RPT: values contain unconfigurable bits, so flagged with a note.
+	// DMARC / MTA-STS / TLS-RPT are inactive: placeholder-only rows must not be returned.
 	for _, host := range []string{"_dmarc.hosted.test", "_mta-sts.hosted.test", "_smtp._tls.hosted.test"} {
-		r := find("TXT", host)
-		if !r.Placeholder || r.Note == "" {
-			t.Fatalf("%s not marked placeholder: %+v", host, r)
+		for _, r := range out.Records {
+			if r.Host == host {
+				t.Fatalf("%s must be hidden while placeholder-only: %+v", host, r)
+			}
+		}
+	}
+
+	// DKIM not enabled: no key generated, so no _domainkey row at all (not even a placeholder).
+	if _, err := dir.CreateDomainWithOpts(ctx, directory.DefaultTenantID, "nodkim.test", directory.DomainCreateOpts{}); err != nil {
+		t.Fatal(err)
+	}
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/domains/nodkim.test/dns-recommended", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	res = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("nodkim %d %s", res.Code, res.Body.String())
+	}
+	out.Records = nil
+	if err := json.Unmarshal(res.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range out.Records {
+		if strings.Contains(r.Host, "_domainkey") {
+			t.Fatalf("dkim row must be hidden while no key is generated: %+v", r)
 		}
 	}
 

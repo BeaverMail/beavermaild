@@ -87,7 +87,7 @@ func TestDirectoryWrites(t *testing.T) {
 	tok := login(t, srv, "admin@api.test", "secret")
 
 	// create domain
-	body, _ := json.Marshal(map[string]any{"name": "new.example.com"})
+	body, _ := json.Marshal(map[string]any{"name": "new.example.com", "mail_hostname": "mail.new.example.com"})
 	req := authedJSON(t, http.MethodPost, "/api/v1/domains", tok, body)
 	res := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(res, req)
@@ -175,7 +175,7 @@ func TestTenantAdminCannotCreateAdminOrTouchOtherTenant(t *testing.T) {
 		t.Fatalf("assign admin want 403 got %d %s", res.Code, res.Body.String())
 	}
 
-	body, _ = json.Marshal(map[string]any{"name": "hijack.test", "tenant_id": directory.DefaultTenantID})
+	body, _ = json.Marshal(map[string]any{"name": "hijack.test", "tenant_id": directory.DefaultTenantID, "mail_hostname": "mail.hijack.test"})
 	req = authedJSON(t, http.MethodPost, "/api/v1/domains", taTok, body)
 	res = httptest.NewRecorder()
 	srv.Handler().ServeHTTP(res, req)
@@ -196,7 +196,7 @@ func TestCookieMutationRequiresOrigin(t *testing.T) {
 	srv, _ := newTestAPI(t)
 	tok := login(t, srv, "admin@api.test", "secret")
 
-	body, _ := json.Marshal(map[string]any{"name": "csrf.example.com"})
+	body, _ := json.Marshal(map[string]any{"name": "csrf.example.com", "mail_hostname": "mail.csrf.example.com"})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/domains", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.AddCookie(&http.Cookie{Name: "beaver_session", Value: tok})
@@ -282,6 +282,39 @@ func TestCreateDomainHostingFields(t *testing.T) {
 	}
 	if patched.AntiSpam || patched.AntiSpamActive {
 		t.Fatalf("antispam should be off: %+v", patched)
+	}
+}
+
+func TestDomainRequiresMailHostname(t *testing.T) {
+	t.Parallel()
+	srv, _ := newTestAPI(t)
+	tok := login(t, srv, "admin@api.test", "secret")
+
+	// create without mail hostname (missing or blank) is rejected
+	for _, host := range []string{"", "   "} {
+		body, _ := json.Marshal(map[string]any{"name": "nohost.example.com", "mail_hostname": host})
+		req := authedJSON(t, http.MethodPost, "/api/v1/domains", tok, body)
+		res := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(res, req)
+		if res.Code != http.StatusBadRequest {
+			t.Fatalf("create mail_hostname=%q want 400 got %d %s", host, res.Code, res.Body.String())
+		}
+	}
+
+	// create ok, then a patch that clears the mail hostname is rejected too
+	body, _ := json.Marshal(map[string]any{"name": "ok.example.com", "mail_hostname": "mail.ok.example.com"})
+	req := authedJSON(t, http.MethodPost, "/api/v1/domains", tok, body)
+	res := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("create %d %s", res.Code, res.Body.String())
+	}
+	patchBody, _ := json.Marshal(map[string]any{"mail_hostname": "  "})
+	patchReq := authedJSON(t, http.MethodPatch, "/api/v1/domains/ok.example.com", tok, patchBody)
+	patchRes := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(patchRes, patchReq)
+	if patchRes.Code != http.StatusBadRequest {
+		t.Fatalf("patch clearing mail_hostname want 400 got %d %s", patchRes.Code, patchRes.Body.String())
 	}
 }
 
