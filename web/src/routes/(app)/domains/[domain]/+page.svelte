@@ -536,6 +536,7 @@
                         >
                         <input
                             id="mail-host"
+                            required
                             bind:value={mailHostname}
                             placeholder="mail.example.com"
                             class="block w-full rounded-lg border-gray-200 px-3 py-2 text-sm focus:border-brand-600 focus:ring-brand-600/30"
