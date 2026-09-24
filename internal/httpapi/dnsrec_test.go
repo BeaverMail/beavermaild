@@ -1,4 +1,4 @@
-// Recommended DNS records endpoint: real DKIM value, marked placeholders, 404.
+// Recommended DNS records endpoint: real DKIM value, marked placeholders, 401/403/404.
 package httpapi_test
 
 import (
@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/BeaverMail/beaver/internal/directory"
@@ -87,5 +88,61 @@ func TestDomainDNSRecommended(t *testing.T) {
 	srv.Handler().ServeHTTP(res, req)
 	if res.Code != http.StatusNotFound {
 		t.Fatalf("unknown domain %d %s", res.Code, res.Body.String())
+	}
+
+	// DKIM read failure (key was generated but is unreadable now): the note must not
+	// claim DKIM is disabled.
+	dir.SetDataDir(t.TempDir())
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/domains/hosted.test/dns-recommended", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	res = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("dkim read fail %d %s", res.Code, res.Body.String())
+	}
+	out.Records = nil
+	if err := json.Unmarshal(res.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	dkim = find("TXT", dkimName)
+	if !dkim.Placeholder || !strings.Contains(dkim.Note, "could not be read") ||
+		strings.Contains(dkim.Note, "enable DKIM") {
+		t.Fatalf("dkim read-failure note misleading: %+v", dkim)
+	}
+}
+
+func TestDomainDNSRecommendedAuth(t *testing.T) {
+	t.Parallel()
+	srv, dir := newTestAPI(t)
+	dir.SetDataDir(t.TempDir())
+	ctx := context.Background()
+	if _, err := dir.CreateDomainWithOpts(ctx, directory.DefaultTenantID, "hosted.test", directory.DomainCreateOpts{DKIMEnabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	get := func(token string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/domains/hosted.test/dns-recommended", nil)
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		res := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(res, req)
+		return res
+	}
+
+	// 401: no credentials at all.
+	if res := get(""); res.Code != http.StatusUnauthorized {
+		t.Fatalf("no auth: want 401 got %d %s", res.Code, res.Body.String())
+	}
+
+	// 403: plain user of a different domain (same tenant).
+	dom, _, err := dir.EnsureDomain(ctx, directory.DefaultTenantID, "api.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dir.CreateAccount(ctx, dom.ID, "user", "secret"); err != nil {
+		t.Fatal(err)
+	}
+	if res := get(login(t, srv, "user@api.test", "secret")); res.Code != http.StatusForbidden {
+		t.Fatalf("user other domain: want 403 got %d %s", res.Code, res.Body.String())
 	}
 }

@@ -19,9 +19,10 @@ type dnsRecordDTO struct {
 }
 
 // dnsRecommendedRecords builds the publish-ready record list. dkimName/dkimVal come from
-// directory.DKIMDNSRecord and are empty when no key is generated; every non-real value is
-// flagged as placeholder so nothing invented goes unmarked.
-func dnsRecommendedRecords(dom storage.Domain, dkimName, dkimVal string) []dnsRecordDTO {
+// directory.DKIMDNSRecord: empty with dkimErr==nil means no key is generated, empty with
+// dkimErr!=nil means the key could not be read; every non-real value is flagged as
+// placeholder so nothing invented goes unmarked.
+func dnsRecommendedRecords(dom storage.Domain, dkimName, dkimVal string, dkimErr error) []dnsRecordDTO {
 	mailHost := dom.MailHostname
 	hostPlaceholder := mailHost == ""
 	if hostPlaceholder {
@@ -41,6 +42,10 @@ func dnsRecommendedRecords(dom storage.Domain, dkimName, dkimVal string) []dnsRe
 	case dkimName != "" && dkimVal != "":
 		recs = append(recs, dnsRecordDTO{Type: "TXT", Host: dkimName, Value: dkimVal})
 	default:
+		note := "placeholder: enable DKIM to generate the key and get the real value"
+		if dkimErr != nil {
+			note = "placeholder: the DKIM key could not be read (missing or unreadable, see server logs); the value below is not the real key"
+		}
 		selector := dom.DKIMSelector
 		if selector == "" {
 			selector = "selector"
@@ -49,7 +54,7 @@ func dnsRecommendedRecords(dom storage.Domain, dkimName, dkimVal string) []dnsRe
 			Type: "TXT", Host: selector + "._domainkey." + dom.Name,
 			Value:       "v=DKIM1; k=rsa; p=<DKIM public key>",
 			Placeholder: true,
-			Note:        "placeholder: enable DKIM to generate the key and get the real value",
+			Note:        note,
 		})
 	}
 
@@ -100,9 +105,9 @@ func (s *Server) handleDomainDNSRecommended(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusForbidden, "forbidden")
 		return
 	}
-	dkimName, dkimVal, _ := s.dir.DKIMDNSRecord(dom)
+	dkimName, dkimVal, dkimErr := s.dir.DKIMDNSRecord(dom)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"domain":  dom.Name,
-		"records": dnsRecommendedRecords(dom, dkimName, dkimVal),
+		"records": dnsRecommendedRecords(dom, dkimName, dkimVal, dkimErr),
 	})
 }

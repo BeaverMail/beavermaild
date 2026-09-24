@@ -26,6 +26,7 @@
     let role = $state("user");
     let busy = $state(false);
     let dnsRecords = $state<DnsRecord[]>([]);
+    let dnsError = $state("");
     let copiedKey = $state("");
     let formError = $state("");
 
@@ -92,12 +93,13 @@
         let cancelled = false;
         loading = true;
         error = "";
-        void Promise.all([fetchAccounts(name), fetchDomain(name), fetchDnsRecommended(name)])
-            .then(([list, info, dns]) => {
+        dnsError = "";
+        dnsRecords = [];
+        void Promise.all([fetchAccounts(name), fetchDomain(name)])
+            .then(([list, info]) => {
                 if (!cancelled) {
                     accounts = list;
                     domainInfo = info;
-                    dnsRecords = dns;
                 }
             })
             .catch((e) => {
@@ -107,6 +109,16 @@
             })
             .finally(() => {
                 if (!cancelled) loading = false;
+            });
+        // DNS records load separately: a failure here must not blank accounts/domain.
+        void fetchDnsRecommended(name)
+            .then((dns) => {
+                if (!cancelled) dnsRecords = dns;
+            })
+            .catch((e) => {
+                if (!cancelled) {
+                    dnsError = e instanceof ApiError ? e.message : "failed to load DNS records";
+                }
             });
         return () => {
             cancelled = true;
@@ -434,7 +446,10 @@
     </div>
 {/if}
 
-{#if dnsRecords.length > 0}
+{#if dnsError}
+    <h2 class="mb-3 mt-8 text-lg font-semibold text-gray-900">Recommended DNS records</h2>
+    <p class="text-sm text-red-600">{dnsError}</p>
+{:else if dnsRecords.length > 0}
     <h2 class="mb-3 mt-8 text-lg font-semibold text-gray-900">Recommended DNS records</h2>
     <div class="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
         <table class="min-w-full divide-y divide-gray-200 text-sm">
