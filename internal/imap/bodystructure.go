@@ -86,7 +86,8 @@ func formatMultipart(subtype string, params map[string]string, body []byte) stri
 	if sub == "" {
 		sub = "MIXED"
 	}
-	return "(" + strings.Join(parts, " ") + ` "` + sub + `" ` + formatIMAPParams(params) + ")"
+	// RFC 3501 body-type-mpart = 1*body SP media-subtype: child parts are written back to back.
+	return "(" + strings.Join(parts, "") + ` "` + sub + `" ` + formatIMAPParams(params) + ")"
 }
 
 func formatLeafPart(major, subtype string, params map[string]string, hdr map[string][]string, body []byte) string {
@@ -106,6 +107,11 @@ func formatLeafPart(major, subtype string, params map[string]string, hdr map[str
 	if major == "TEXT" {
 		lines := countLines(body)
 		return `("` + major + `" "` + subtype + `" ` + paramsStr + ` ` + id + ` ` + desc + ` "` + enc + `" ` + strconv.Itoa(size) + ` ` + strconv.Itoa(lines) + `)`
+	}
+	// body-type-msg: a message/rfc822 part also carries the inner ENVELOPE, BODYSTRUCTURE and line count.
+	if major == "MESSAGE" && subtype == "RFC822" {
+		return `("` + major + `" "` + subtype + `" ` + paramsStr + ` ` + id + ` ` + desc + ` "` + enc + `" ` + strconv.Itoa(size) +
+			` ` + formatEnvelope(body) + ` ` + formatBodyStructure(body) + ` ` + strconv.Itoa(countLines(body)) + `)`
 	}
 	return `("` + major + `" "` + subtype + `" ` + paramsStr + ` ` + id + ` ` + desc + ` "` + enc + `" ` + strconv.Itoa(size) + `)`
 }
