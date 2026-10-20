@@ -1,0 +1,50 @@
+# Example systemd unit for BeaverMail. Install:
+#   useradd --system --home-dir /var/lib/beavermail --shell /usr/sbin/nologin beavermail
+#   install -m 755 beaver /usr/local/bin/beaver
+#   install -d -o beavermail -g beavermail -m 750 /var/lib/beavermail /var/lib/beavermail/plugins
+#   install -m 755 beaver-plugin-antispam /var/lib/beavermail/plugins/
+#   BEAVER_CONFIG=/etc/beavermail/config.json beaver init -data-dir /var/lib/beavermail -hostname mx.example.com
+#   chown -R beavermail:beavermail /var/lib/beavermail /etc/beavermail
+#   cp beaver.service /etc/systemd/system/ && systemctl daemon-reload && systemctl enable --now beaver
+# Logs: journalctl -u beaver (stderr) and log.file under the data dir.
+
+[Unit]
+Description=BeaverMail mail server (SMTP, IMAP, admin UI)
+Documentation=https://github.com/BeaverMail/beaver
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=beavermail
+Group=beavermail
+ExecStart=/usr/local/bin/beaver serve -c /etc/beavermail/config.json
+Restart=on-failure
+RestartSec=5s
+# SIGTERM drains sessions (IMAP BYE, SMTP 421) for up to ~7 s before exit.
+KillSignal=SIGTERM
+TimeoutStopSec=15s
+
+# Bind 25/80/143/443/465/587/993 without running as root.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+LimitNOFILE=65536
+
+# Hardening: only the data dir is writable; config is read-only.
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/beavermail
+ReadOnlyPaths=/etc/beavermail
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

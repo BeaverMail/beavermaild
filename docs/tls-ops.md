@@ -91,6 +91,7 @@ Either:
     "required": true
   },
   "smtp": {
+    "hostname": "mx.example.com",
     "listen": "0.0.0.0:25",
     "submission_listen": "0.0.0.0:587",
     "submission_tls_listen": "0.0.0.0:465"
@@ -101,6 +102,8 @@ Either:
   }
 }
 ```
+
+`smtp.hostname` is the SMTP banner and outbound EHLO name, and the authserv-id of `Authentication-Results`. It must match the PTR record of the server IP (receivers such as Gmail compare them). Unset, it falls back to the first `tls.acme_hosts` entry, then the machine hostname; `beaver init -hostname` sets it.
 
 MUA tip: prefer submission `:465` or `:587`+STARTTLS, and IMAP `:993` or `:143`+STARTTLS. Keep `:25` for server-to-server inbound.
 
