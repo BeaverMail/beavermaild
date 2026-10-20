@@ -227,8 +227,10 @@ func (s *Server) serve(ctx context.Context, slots []listenerSlot) error {
 
 func (s *Server) serveConn(ctx context.Context, conn net.Conn, secure, submission bool, lim *security.ConnLimiter) {
 	defer lim.Release()
-	defer conn.Close()
 	sess := newSession(s.log, conn, s.dir, s.inbox, s.queue, s.certs, secure, s.tlsRequired, s.vrfyEnabled, submission, s.dataLimits, s.filter, s.filterTmpDir, s.filterTimeoutMs, s.mailAuth, s.authGate, s.sendGate, s.greylist, s.asnLookup, s.readTimeout)
+	// Close the session's current conn: after STARTTLS it is the TLS conn, whose Close sends
+	// close_notify (closing only the raw TCP conn makes peers log "TLS not properly terminated").
+	defer func() { _ = sess.conn.Close() }()
 	if s.hostname != "" {
 		sess.hostname = s.hostname
 	}

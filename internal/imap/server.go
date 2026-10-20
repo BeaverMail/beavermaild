@@ -152,8 +152,9 @@ func (s *Server) serve(ctx context.Context, slots []listenerSlot) error {
 
 func (s *Server) serveConn(ctx context.Context, conn net.Conn, secure bool, lim *security.ConnLimiter) {
 	defer lim.Release()
-	defer conn.Close()
 	sess := newSession(s.log, conn, s.dir, s.inbox, s.certs, secure, s.tlsRequired, s.authGate, s.readTimeout)
+	// After STARTTLS sess.conn is the TLS conn; closing it sends close_notify.
+	defer func() { _ = sess.conn.Close() }()
 	if err := sess.run(ctx); err != nil && ctx.Err() == nil {
 		s.log.Debug("imap session", slog.Any("err", err))
 	}
