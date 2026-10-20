@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net"
+	"runtime/debug"
 	"time"
 
 	"github.com/BeaverMail/beaver/internal/directory"
@@ -231,6 +232,12 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn, secure, submissio
 	// Close the session's current conn: after STARTTLS it is the TLS conn, whose Close sends
 	// close_notify (closing only the raw TCP conn makes peers log "TLS not properly terminated").
 	defer func() { _ = sess.conn.Close() }()
+	// A bug on one message must not take down the whole server (and every other session).
+	defer func() {
+		if r := recover(); r != nil {
+			s.log.Error("smtp session panic", "panic", r, "stack", string(debug.Stack()))
+		}
+	}()
 	if s.hostname != "" {
 		sess.hostname = s.hostname
 	}

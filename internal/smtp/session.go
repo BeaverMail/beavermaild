@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"strings"
@@ -57,6 +58,7 @@ type session struct {
 	greylist    *Greylist
 	readTimeout time.Duration
 	hostname    string // banner and EHLO name
+	curCmd      string // command being answered, for reply logging (MAIL/RCPT keep their argument)
 
 	mailFrom  string
 	mailRet   mail.RetMode
@@ -122,6 +124,7 @@ func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *ma
 }
 
 func (s *session) run(ctx context.Context) error {
+	s.log.Debug("smtp connect", "ip", s.clientIP(), "submission", s.submission)
 	if err := s.writef("220 %s ESMTP BeaverMail", s.hostname); err != nil {
 		return err
 	}
@@ -144,6 +147,11 @@ func (s *session) run(ctx context.Context) error {
 		}
 		mailBlocked := false
 		for _, c := range cmds {
+			// Never keep other arguments: AUTH carries credentials.
+			s.curCmd = c.cmd
+			if c.cmd == "MAIL" || c.cmd == "RCPT" {
+				s.curCmd = c.cmd + " " + c.arg
+			}
 			stop, blockMail, err := s.dispatch(ctx, c.cmd, c.arg, mailBlocked)
 			if blockMail {
 				mailBlocked = true
@@ -711,6 +719,7 @@ func (s *session) finishDelivery(ctx context.Context, raw []byte) error {
 	if s.submission && s.principal.AccountID != 0 {
 		s.sendGate.RecordSend(s.principal.Email())
 	}
+	s.log.Info("smtp accepted", "ip", s.clientIP(), "from", s.mailFrom, "rcpts", s.rcptAddresses(), "size", len(raw), "submission", s.submission)
 	if err := s.writef(replyOK); err != nil {
 		return err
 	}
@@ -787,7 +796,12 @@ func (s *session) bumpReadDeadline() {
 }
 
 func (s *session) writef(format string, args ...any) error {
-	_, err := fmt.Fprintf(s.conn, format+"\r\n", args...)
+	line := fmt.Sprintf(format+"\r\n", args...)
+	// Rejections are otherwise invisible to the operator (greylist, unknown user, filter, auth).
+	if line[0] == '4' || line[0] == '5' {
+		s.log.Info("smtp reply", "ip", s.clientIP(), "cmd", s.curCmd, "from", s.mailFrom, "reply", strings.TrimRight(line, "\r\n"), "submission", s.submission)
+	}
+	_, err := io.WriteString(s.conn, line)
 	return err
 }
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net"
+	"runtime/debug"
 	"time"
 
 	"github.com/BeaverMail/beaver/internal/directory"
@@ -155,6 +156,12 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn, secure bool, lim 
 	sess := newSession(s.log, conn, s.dir, s.inbox, s.certs, secure, s.tlsRequired, s.authGate, s.readTimeout)
 	// After STARTTLS sess.conn is the TLS conn; closing it sends close_notify.
 	defer func() { _ = sess.conn.Close() }()
+	// A bug on one message must not take down the whole server (and every other session).
+	defer func() {
+		if r := recover(); r != nil {
+			s.log.Error("imap session panic", "panic", r, "stack", string(debug.Stack()))
+		}
+	}()
 	if err := sess.run(ctx); err != nil && ctx.Err() == nil {
 		s.log.Debug("imap session", slog.Any("err", err))
 	}
