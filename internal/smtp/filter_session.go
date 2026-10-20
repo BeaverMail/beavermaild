@@ -235,6 +235,13 @@ func appendFilterHeaders(raw []byte, headers map[string]string) []byte {
 }
 
 func (s *session) deliverAfterFilter(ctx context.Context, raw []byte) error {
+	if countReceived(raw) > maxReceivedHops {
+		if err := s.writef(replyMailLoop); err != nil {
+			return err
+		}
+		s.reset()
+		return nil
+	}
 	out, err := s.filterEom(ctx, raw)
 	if err != nil {
 		s.log.Warn("smtp filter error", slog.Any("err", err))
@@ -261,54 +268,24 @@ func (s *session) deliverAfterFilter(ctx context.Context, raw []byte) error {
 	if s.authDone && !s.submission {
 		raw = prependAuthResults(raw, s.hostname, mailauth.AuthResults(s.hostname, s.mailFrom, s.heloDomain, s.authState))
 	}
+	// RFC 5321 §4.4: every SMTP server that accepts a message records its hop on top.
+	raw = prependHeader(raw, "Received", s.receivedField(time.Now()))
 	return s.finishDelivery(ctx, raw)
 }
 
 // prependAuthResults removes Authentication-Results fields that claim our authserv-id
-// (RFC 8601 §5: a sender could forge them) and puts ours at the top, using the message's
-// own line ending.
+// (RFC 8601 §5: a sender could forge them) and puts ours at the top.
 func prependAuthResults(raw []byte, authservID, value string) []byte {
-	nl := "\r\n"
-	if !bytes.Contains(raw, []byte("\r\n")) {
-		nl = "\n"
-	}
-	header := "Authentication-Results: " + strings.ReplaceAll(value, "\r\n", nl) + nl
-	return append([]byte(header), stripAuthResults(raw, authservID)...)
+	return prependHeader(stripAuthResults(raw, authservID), "Authentication-Results", value)
 }
 
-// stripAuthResults drops header fields "Authentication-Results: <authservID>[ version];...",
-// including their folded continuation lines; the body is left untouched.
+// stripAuthResults drops "Authentication-Results: <authservID>[ version];..." fields.
 func stripAuthResults(raw []byte, authservID string) []byte {
-	out := make([]byte, 0, len(raw))
-	dropping := false
-	rest := raw
-	for len(rest) > 0 {
-		line := rest
-		if i := bytes.IndexByte(rest, '\n'); i >= 0 {
-			line = rest[:i+1]
-		}
-		rest = rest[len(line):]
-		if len(bytes.TrimRight(line, "\r\n")) == 0 { // end of header
-			out = append(out, line...)
-			return append(out, rest...)
-		}
-		if line[0] == ' ' || line[0] == '\t' {
-			if !dropping {
-				out = append(out, line...)
-			}
-			continue
-		}
-		dropping = false
-		if name, val, ok := bytes.Cut(line, []byte(":")); ok && strings.EqualFold(strings.TrimSpace(string(name)), "Authentication-Results") {
-			id, _, _ := strings.Cut(strings.TrimSpace(string(val)), ";")
-			if fields := strings.Fields(id); len(fields) > 0 && strings.EqualFold(fields[0], authservID) {
-				dropping = true
-				continue
-			}
-		}
-		out = append(out, line...)
-	}
-	return out
+	return stripHeaderFields(raw, "Authentication-Results", func(val string) bool {
+		id, _, _ := strings.Cut(strings.TrimSpace(val), ";")
+		fields := strings.Fields(id)
+		return len(fields) > 0 && strings.EqualFold(fields[0], authservID)
+	})
 }
 
 // authApplies reports whether SPF/DKIM/DMARC describe this transaction. Not on submission:

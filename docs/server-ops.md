@@ -19,6 +19,19 @@ No `smtp connect` line at all for a sender (with `log_level: debug`) means its m
 
 A panic while serving one session is logged as `smtp session panic` / `imap session panic` with a stack trace; only that session ends.
 
+## Trace headers (RFC 5321 §4.4)
+
+Every accepted message (inbound and submission) gets this hop on top:
+
+```text
+Received: from client.example.org (client.example.org [192.0.2.10])
+	by mx.example.com (BeaverMail) with ESMTPS id 18e0319b67a8bbd0.1defb.3
+	(version=TLS 1.3 cipher=TLS_AES_128_GCM_SHA256)
+	for <user@example.com>; Tue, 20 Oct 2026 12:00:02 +0200
+```
+
+`with` is `SMTP` (HELO), `ESMTP`, `ESMTPS` (TLS), `ESMTPA`/`ESMTPSA` (authenticated); `id` is the transaction id also used on the filter wire; `for` appears for a single recipient. Copies delivered to a local mailbox also get `Return-Path: <envelope sender>` (any `Return-Path` the message carried is replaced); relayed copies do not. A message already carrying more than 50 `Received` fields is rejected with `554 5.4.6` (mail loop).
+
 ## Queue history
 
 `queue.keep_completed` (default `7d`, `"0"` deletes at once) keeps delivered and failed entries in the admin UI Completed tab and in `beaver queue list -all`. Each recipient shows `last_diag`: the last error, or the accepting server's reply once delivered (e.g. `mx.example.org:25: 250 2.0.0 OK ...`).

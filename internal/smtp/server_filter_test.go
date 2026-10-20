@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -374,8 +375,12 @@ func TestSMTPAddsAuthenticationResults(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := string(raw)
-	if !strings.HasPrefix(got, "Authentication-Results: mx.example.net;") || !strings.Contains(got, "spf=fail smtp.mailfrom=sender@example.com") {
-		t.Fatalf("missing our Authentication-Results:\n%s", got)
+	// Top of a locally delivered message: Return-Path, our Received, our Authentication-Results.
+	rp := strings.Index(got, "Return-Path: <sender@example.com>")
+	rcv := strings.Index(got, "Received: from helo.example")
+	ar := strings.Index(got, "Authentication-Results: mx.example.net;")
+	if rp != 0 || rcv <= rp || ar <= rcv || !strings.Contains(got, "spf=fail smtp.mailfrom=sender@example.com") {
+		t.Fatalf("trace/auth headers missing or out of order:\n%s", got)
 	}
 	if strings.Count(got, "Authentication-Results:") != 1 {
 		t.Fatalf("forged Authentication-Results kept:\n%s", got)
@@ -436,5 +441,82 @@ func TestSMTPSubmissionSkipsMailAuth(t *testing.T) {
 		if a := filter.authAt(phase); a != nil {
 			t.Fatalf("%s: submission got auth results %+v", phase, a)
 		}
+	}
+}
+
+// RFC 5321: a message with too many Received hops is rejected as a loop, and the local copy
+// gets our Return-Path in place of any the sender put in.
+func TestSMTPLoopDetectionAndReturnPath(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	_, inbox, dir := openSMTPTestStore(t, ctx)
+	acc, _, err := dir.ResolveEmail(ctx, "alice@localhost")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := smtp.NewServer(log.New("error"), ln.Addr().String(), dir, inbox, nil, "", "", smtp.Options{Hostname: "mx.example.net"})
+	sctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() { _ = srv.ServeListener(sctx, ln) }()
+	time.Sleep(20 * time.Millisecond)
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	read := bufio.NewReader(conn)
+	expect(t, read, "220")
+	send(t, conn, "EHLO client.example")
+	readEHLO(t, read, "PIPELINING")
+
+	deliver := func(headers []string) string {
+		t.Helper()
+		send(t, conn, "MAIL FROM:<sender@example.com>")
+		expect(t, read, "250")
+		send(t, conn, "RCPT TO:<alice@localhost>")
+		expect(t, read, "250")
+		send(t, conn, "DATA")
+		expect(t, read, "354")
+		for _, h := range headers {
+			send(t, conn, h)
+		}
+		send(t, conn, "Subject: hi")
+		send(t, conn, "")
+		send(t, conn, "body")
+		send(t, conn, ".")
+		line, err := read.ReadString('\n')
+		if err != nil {
+			t.Fatal(err)
+		}
+		return line
+	}
+
+	loop := make([]string, 51)
+	for i := range loop {
+		loop[i] = "Received: from hop" + strconv.Itoa(i) + " by relay; Tue, 20 Oct 2026 10:00:00 +0000"
+	}
+	if got := deliver(loop); !strings.HasPrefix(got, "554 5.4.6") {
+		t.Fatalf("51 hops: %q, want 554 5.4.6", got)
+	}
+	if got := deliver([]string{"Return-Path: <forged@example.org>"}); !strings.HasPrefix(got, "250") {
+		t.Fatalf("normal message: %q", got)
+	}
+
+	msgs, err := inbox.List(ctx, acc.ID, mail.InboxMailboxID)
+	if err != nil || len(msgs) != 1 {
+		t.Fatalf("inbox %d, %v (the looping message must not be stored)", len(msgs), err)
+	}
+	raw, err := inbox.LoadRaw(ctx, msgs[0].Meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(raw)
+	if !strings.HasPrefix(got, "Return-Path: <sender@example.com>") || strings.Contains(got, "forged@") ||
+		!strings.Contains(got, "by mx.example.net (BeaverMail) with ESMTP id ") {
+		t.Fatalf("stored message:\n%s", got)
 	}
 }

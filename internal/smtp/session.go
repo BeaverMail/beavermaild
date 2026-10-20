@@ -670,6 +670,9 @@ func (s *session) finishDelivery(ctx context.Context, raw []byte) error {
 		}
 	}
 	var remotes []string
+	// Final delivery (RFC 5321 §4.4): local copies carry the envelope sender as Return-Path,
+	// replacing any the message brought along; relayed copies get none (the last hop adds it).
+	local := prependHeader(stripHeaderFields(raw, "Return-Path", nil), "Return-Path", "<"+s.mailFrom+">")
 	for _, t := range s.rcpt {
 		if t.report != "" {
 			if err := s.storeReport(ctx, t, raw); err != nil {
@@ -686,7 +689,7 @@ func (s *session) finishDelivery(ctx context.Context, raw []byte) error {
 			remotes = append(remotes, t.address)
 			continue
 		}
-		if _, err := s.inbox.Deliver(ctx, t.accountID, raw); err != nil {
+		if _, err := s.inbox.Deliver(ctx, t.accountID, local); err != nil {
 			if errors.Is(err, mail.ErrOverQuota) {
 				if err := s.writef(replyMailboxFull); err != nil {
 					return err
