@@ -3,31 +3,39 @@ package imap
 
 import (
 	"bytes"
-	"net/mail"
 	"strings"
 )
 
-// extractHeaderFields returns requested RFC 822 header lines (CRLF separated).
+// extractHeaderFields returns the requested header lines exactly as stored (original order,
+// name case and folding) followed by the delimiting blank line, per RFC 3501 HEADER.FIELDS.
 func extractHeaderFields(raw []byte, fields []string) []byte {
-	msg, err := mail.ReadMessage(bytes.NewReader(raw))
-	if err != nil {
-		return nil
-	}
 	want := make(map[string]struct{}, len(fields))
 	for _, f := range fields {
 		want[strings.ToUpper(strings.TrimSpace(f))] = struct{}{}
 	}
-	var b strings.Builder
-	for key, vals := range msg.Header {
-		if _, ok := want[strings.ToUpper(key)]; !ok {
-			continue
+	hdr, _ := splitHeaderBody(raw)
+	var out []byte
+	keep := false
+	for len(hdr) > 0 {
+		line := hdr
+		if i := bytes.IndexByte(hdr, '\n'); i >= 0 {
+			line = hdr[:i+1]
 		}
-		for _, v := range vals {
-			b.WriteString(key)
-			b.WriteString(": ")
-			b.WriteString(v)
-			b.WriteString("\r\n")
+		hdr = hdr[len(line):]
+		if len(bytes.TrimRight(line, "\r\n")) == 0 {
+			break // blank line ends the header
+		}
+		if line[0] != ' ' && line[0] != '\t' { // not a folded continuation: a new field starts
+			name, _, ok := bytes.Cut(line, []byte(":"))
+			_, wanted := want[strings.ToUpper(strings.TrimSpace(string(name)))]
+			keep = ok && wanted
+		}
+		if keep {
+			out = append(out, line...)
+			if line[len(line)-1] != '\n' {
+				out = append(out, '\r', '\n')
+			}
 		}
 	}
-	return []byte(b.String())
+	return append(out, '\r', '\n')
 }

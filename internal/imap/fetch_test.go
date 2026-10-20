@@ -69,6 +69,18 @@ func TestExtractHeaderFields(t *testing.T) {
 	}
 }
 
+// HEADER.FIELDS keeps stored order, name case and folding, and ends with the blank line (RFC 3501).
+func TestExtractHeaderFieldsVerbatim(t *testing.T) {
+	t.Parallel()
+
+	raw := []byte("From: a@b.com\r\nTo: c@d.com\r\nSubject: a long\r\n subject\r\nMessage-ID: <1@b.com>\r\n\r\nbody\r\n")
+	got := string(extractHeaderFields(raw, []string{"MESSAGE-ID", "SUBJECT", "FROM"}))
+	want := "From: a@b.com\r\nSubject: a long\r\n subject\r\nMessage-ID: <1@b.com>\r\n\r\n"
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
+
 func TestFormatEnvelope(t *testing.T) {
 	t.Parallel()
 

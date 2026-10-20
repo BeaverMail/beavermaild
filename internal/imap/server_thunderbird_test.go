@@ -42,19 +42,30 @@ func TestIMAPThunderbirdSync(t *testing.T) {
 	expectPrefix(t, read, "* FLAGS")
 	expectPrefix(t, read, "* 1 EXISTS")
 	expectPrefix(t, read, "* 1 RECENT")
-	line, err := read.ReadString('\n')
-	if err != nil {
-		t.Fatal(err)
+	// One response code per "* OK" line (RFC 3501 resp-text), all before the tagged reply.
+	var okLines []string
+	for {
+		line, err := read.ReadString('\n')
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.HasPrefix(line, "t3 OK") {
+			break
+		}
+		if strings.Count(line, "[") != 1 {
+			t.Fatalf("select line %q must carry exactly one response code", line)
+		}
+		okLines = append(okLines, line)
 	}
-	for _, want := range []string{"UIDVALIDITY", "UIDNEXT 2", "UNSEEN", "HIGHESTMODSEQ", `PERMANENTFLAGS (\Answered \Flagged \Deleted \Seen \Draft \*)`} {
-		if !strings.Contains(line, want) {
-			t.Fatalf("select ok %q missing %q", line, want)
+	all := strings.Join(okLines, "")
+	for _, want := range []string{"[UIDVALIDITY ", "[UIDNEXT 2]", "[UNSEEN 1]", "[HIGHESTMODSEQ ", `[PERMANENTFLAGS (\Answered \Flagged \Deleted \Seen \Draft \*)]`} {
+		if !strings.Contains(all, want) {
+			t.Fatalf("select ok lines %q missing %q", okLines, want)
 		}
 	}
-	expectPrefix(t, read, "t3 OK")
 
 	send(t, conn, "t4 UID FETCH 1:* (UID FLAGS INTERNALDATE RFC822.SIZE BODYSTRUCTURE ENVELOPE MODSEQ)")
-	line, err = read.ReadString('\n')
+	line, err := read.ReadString('\n')
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +105,7 @@ func TestIMAPBetterbirdFlagsFetch(t *testing.T) {
 	expectPrefix(t, read, "* FLAGS")
 	expectPrefix(t, read, "* 3 EXISTS")
 	expectPrefix(t, read, "* ")
-	expectPrefix(t, read, "* OK")
+	expectSelectOK(t, read)
 	expectPrefix(t, read, "b2 OK")
 
 	send(t, conn, "b3 UID FETCH 1:* (FLAGS)")
@@ -136,7 +147,7 @@ func TestIMAPBetterbirdHeaderFetch(t *testing.T) {
 	expectPrefix(t, read, "* FLAGS")
 	expectPrefix(t, read, "* 1 EXISTS")
 	expectPrefix(t, read, "* ")
-	expectPrefix(t, read, "* OK")
+	expectSelectOK(t, read)
 	expectPrefix(t, read, "h2 OK")
 
 	send(t, conn, "h3 UID FETCH 1 (UID RFC822.SIZE FLAGS BODY.PEEK[HEADER.FIELDS (From Subject)])")
@@ -145,19 +156,13 @@ func TestIMAPBetterbirdHeaderFetch(t *testing.T) {
 		t.Fatal(err)
 	}
 	if strings.Contains(line, "MODSEQ") || strings.Contains(line, "BODY.PEEK") {
-		t.Fatalf("metadata fetch must not include MODSEQ or BODY: %q", line)
+		t.Fatalf("fetch must not include MODSEQ or BODY.PEEK: %q", line)
 	}
-	for _, want := range []string{"UID 1", "RFC822.SIZE", "FLAGS"} {
+	// Single response: UID and metadata on the same line as the header literal.
+	for _, want := range []string{"UID 1", "RFC822.SIZE", "FLAGS", "BODY[HEADER.FIELDS", "{"} {
 		if !strings.Contains(line, want) {
-			t.Fatalf("metadata fetch %q missing %q", line, want)
+			t.Fatalf("fetch %q missing %q", line, want)
 		}
-	}
-	line, err = read.ReadString('\n')
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(line, "BODY[HEADER.FIELDS") || strings.Contains(line, "BODY.PEEK") || !strings.Contains(line, "{") {
-		t.Fatalf("header prelude %q", line)
 	}
 	n, err := literalSize(line)
 	if err != nil {
@@ -200,24 +205,17 @@ func TestIMAPBetterbirdFullHeaderFields(t *testing.T) {
 	expectPrefix(t, read, "* FLAGS")
 	expectPrefix(t, read, "* 1 EXISTS")
 	expectPrefix(t, read, "* ")
-	expectPrefix(t, read, "* OK")
+	expectSelectOK(t, read)
 	expectPrefix(t, read, "f2 OK")
 
 	cmd := "f3 UID FETCH 1 (UID RFC822.SIZE FLAGS BODY.PEEK[HEADER.FIELDS (From To Cc Bcc Subject Date Message-ID Priority X-Priority References Newsgroups In-Reply-To Content-Type Reply-To)])"
 	send(t, conn, cmd)
-	meta, err := read.ReadString('\n')
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(meta, "BODY.PEEK") || strings.Contains(meta, "{") {
-		t.Fatalf("metadata line must not include body literal: %q", meta)
-	}
 	line, err := read.ReadString('\n')
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(line, "BODY[HEADER.FIELDS") || strings.Contains(line, "BODY.PEEK") || !strings.Contains(line, "{") {
-		t.Fatalf("body prelude %q", line)
+	if !strings.HasPrefix(line, "* 1 FETCH (UID 1 ") || !strings.Contains(line, "BODY[HEADER.FIELDS") || strings.Contains(line, "BODY.PEEK") || !strings.Contains(line, "{") {
+		t.Fatalf("fetch %q", line)
 	}
 	n, err := literalSize(line)
 	if err != nil {

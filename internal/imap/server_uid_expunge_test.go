@@ -34,7 +34,7 @@ func TestIMAPUIDExpunge(t *testing.T) {
 	expectPrefix(t, read, "* FLAGS")
 	expectPrefix(t, read, "* 3 EXISTS")
 	expectPrefix(t, read, "* ")
-	expectPrefix(t, read, "* OK")
+	expectSelectOK(t, read)
 	expectPrefix(t, read, "u2 OK")
 
 	send(t, conn, "u3 UID STORE 1,3 +FLAGS (\\Deleted)")
@@ -105,7 +105,7 @@ func TestIMAPUIDExpungeAll(t *testing.T) {
 	expectPrefix(t, read, "* FLAGS")
 	expectPrefix(t, read, "* 2 EXISTS")
 	expectPrefix(t, read, "* ")
-	expectPrefix(t, read, "* OK")
+	expectSelectOK(t, read)
 	expectPrefix(t, read, "a2 OK")
 
 	send(t, conn, "a3 STORE 1 +FLAGS (\\Deleted)")

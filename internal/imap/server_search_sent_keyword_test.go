@@ -32,7 +32,7 @@ func TestIMAPSearchSentKeyword(t *testing.T) {
 	expectPrefix(t, read, "* FLAGS")
 	expectPrefix(t, read, "* 1 EXISTS")
 	expectPrefix(t, read, "* 1 RECENT")
-	expectPrefix(t, read, "* OK [UIDVALIDITY")
+	expectSelectOK(t, read)
 	expectPrefix(t, read, "k2 OK")
 
 	send(t, conn, `k3 SEARCH SENTON 10-Jun-2024`)

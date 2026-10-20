@@ -39,11 +39,14 @@ func TestIMAPCondstoreSelectAndStore(t *testing.T) {
 	expectPrefix(t, read, "* FLAGS")
 	expectPrefix(t, read, "* 1 EXISTS")
 	expectPrefix(t, read, "* 1 RECENT")
-	line, _ = read.ReadString('\n')
-	if !strings.Contains(line, "HIGHESTMODSEQ") {
-		t.Fatalf("select ok %q", line)
+	var selectLines string
+	for !strings.HasPrefix(line, "c3 OK") {
+		line, _ = read.ReadString('\n')
+		selectLines += line
 	}
-	expectPrefix(t, read, "c3 OK")
+	if !strings.Contains(selectLines, "[HIGHESTMODSEQ ") {
+		t.Fatalf("select ok %q", selectLines)
+	}
 
 	send(t, conn, "c4 FETCH 1 (FLAGS MODSEQ)")
 	line, err = read.ReadString('\n')

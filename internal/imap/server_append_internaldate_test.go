@@ -33,7 +33,7 @@ func TestIMAPAppendInternalDate(t *testing.T) {
 	expectPrefix(t, read, "* FLAGS")
 	expectPrefix(t, read, "* 0 EXISTS")
 	expectPrefix(t, read, "* ")
-	expectPrefix(t, read, "* OK")
+	expectSelectOK(t, read)
 	expectPrefix(t, read, "d2 OK")
 
 	if _, err := fmt.Fprintf(conn, "d3 APPEND Drafts %s {%d}\r\n", internalDate, len(raw)); err != nil {
@@ -50,7 +50,7 @@ func TestIMAPAppendInternalDate(t *testing.T) {
 	expectPrefix(t, read, "* FLAGS")
 	expectPrefix(t, read, "* 1 EXISTS")
 	expectPrefix(t, read, "* ")
-	expectPrefix(t, read, "* OK")
+	expectSelectOK(t, read)
 	expectPrefix(t, read, "d4 OK")
 
 	send(t, conn, "d5 FETCH 1 (INTERNALDATE)")

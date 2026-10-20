@@ -467,7 +467,7 @@ func (s *session) openMailbox(ctx context.Context, tag, name string, examine boo
 	if err != nil {
 		return err
 	}
-	_, unseen, highestMod := mail.MailboxSelectState(msgs, highest)
+	_, _, highestMod := mail.MailboxSelectState(msgs, highest)
 	mbox.HighestModSeq = highestMod
 	s.messages = msgs
 	s.mbox = mbox
@@ -483,14 +483,26 @@ func (s *session) openMailbox(ctx context.Context, tag, name string, examine boo
 	if err := s.untagged(fmt.Sprintf("%d RECENT", recent)); err != nil {
 		return err
 	}
-	okLine := fmt.Sprintf("OK [UIDVALIDITY %d] [UIDNEXT %d] [UNSEEN %d] [PERMANENTFLAGS %s]",
-		mbox.UIDValidity, uidNext, unseen, mail.IMAPPermanentFlags)
-	if s.condstore {
-		okLine = fmt.Sprintf("OK [UIDVALIDITY %d] [UIDNEXT %d] [UNSEEN %d] [HIGHESTMODSEQ %d] [PERMANENTFLAGS %s]",
-			mbox.UIDValidity, uidNext, unseen, highestMod, mail.IMAPPermanentFlags)
+	// RFC 3501 resp-text carries one response code, so each goes on its own "* OK" line.
+	okLines := []string{
+		fmt.Sprintf("OK [UIDVALIDITY %d] UIDs valid", mbox.UIDValidity),
+		fmt.Sprintf("OK [UIDNEXT %d] Predicted next UID", uidNext),
 	}
-	if err := s.untagged(okLine); err != nil {
-		return err
+	// UNSEEN is the sequence number of the first unseen message, omitted when all are seen.
+	for i, m := range msgs {
+		if m.Meta.Flags&mail.FlagSeen == 0 {
+			okLines = append(okLines, fmt.Sprintf("OK [UNSEEN %d] First unseen", i+1))
+			break
+		}
+	}
+	if s.condstore {
+		okLines = append(okLines, fmt.Sprintf("OK [HIGHESTMODSEQ %d] Highest", highestMod))
+	}
+	okLines = append(okLines, fmt.Sprintf("OK [PERMANENTFLAGS %s] Limited", mail.IMAPPermanentFlags))
+	for _, line := range okLines {
+		if err := s.untagged(line); err != nil {
+			return err
+		}
 	}
 	if examine {
 		return s.tagged(tag, "OK [READ-ONLY] EXAMINE completed")
@@ -828,23 +840,22 @@ func (s *session) writeFetch(ctx context.Context, seq int, msg mail.Message, ite
 		parts = append(parts, formatModSeq(modSeq))
 	}
 
-	hasLiteral := len(items.bodySections) > 0
-	if !hasLiteral {
+	if len(items.bodySections) == 0 {
 		return s.untagged(fmt.Sprintf("%d FETCH (%s)", seq, strings.Join(parts, " ")))
 	}
-
-	// Thunderbird rejects a FETCH prelude that mixes UID/FLAGS/SIZE with a literal on one line.
-	if len(parts) > 0 {
-		if err := s.untagged(fmt.Sprintf("%d FETCH (%s)", seq, strings.Join(parts, " "))); err != nil {
-			return err
-		}
-	}
-	return s.writeFetchBodyLiterals(seq, items.bodySections, raw)
+	// One FETCH response per message, literals after the other items (as Dovecot/Gmail do):
+	// a UID FETCH response must carry UID, so splitting the literals into a second response
+	// left them without one and strict clients dropped the headers.
+	return s.writeFetchWithLiterals(seq, parts, items.bodySections, raw)
 }
 
-// writeFetchBodyLiterals emits BODY section literals; PEEK is omitted per RFC 3501.
-func (s *session) writeFetchBodyLiterals(seq int, sections []bodySectionFetch, raw []byte) error {
-	if _, err := fmt.Fprintf(s.conn, "* %d FETCH (", seq); err != nil {
+// writeFetchWithLiterals emits one FETCH response: the plain items, then BODY section literals (PEEK omitted per RFC 3501).
+func (s *session) writeFetchWithLiterals(seq int, parts []string, sections []bodySectionFetch, raw []byte) error {
+	prefix := ""
+	if len(parts) > 0 {
+		prefix = strings.Join(parts, " ") + " "
+	}
+	if _, err := fmt.Fprintf(s.conn, "* %d FETCH (%s", seq, prefix); err != nil {
 		return err
 	}
 	sep := ""

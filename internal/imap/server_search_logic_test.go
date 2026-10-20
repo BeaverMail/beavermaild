@@ -35,7 +35,7 @@ func TestIMAPSearchOrNot(t *testing.T) {
 	expectPrefix(t, read, "* FLAGS")
 	expectPrefix(t, read, "* 2 EXISTS")
 	expectPrefix(t, read, "* 2 RECENT")
-	expectPrefix(t, read, "* OK [UIDVALIDITY")
+	expectSelectOK(t, read)
 	expectPrefix(t, read, "s2 OK")
 
 	send(t, conn, `s3 SEARCH OR FROM alice@example.com SUBJECT beta`)

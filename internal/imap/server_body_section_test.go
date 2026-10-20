@@ -36,7 +36,7 @@ func TestIMAPBodySectionFetch(t *testing.T) {
 	expectPrefix(t, read, "* FLAGS")
 	expectPrefix(t, read, "* 1 EXISTS")
 	expectPrefix(t, read, "* 1 RECENT")
-	expectPrefix(t, read, "* OK [UIDVALIDITY")
+	expectSelectOK(t, read)
 	expectPrefix(t, read, "f2 OK")
 
 	send(t, conn, "f3 FETCH 1 (BODY.PEEK[2])")

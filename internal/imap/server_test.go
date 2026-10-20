@@ -69,22 +69,16 @@ func TestIMAPFetchInbox(t *testing.T) {
 	expectPrefix(t, read, "* FLAGS")
 	expectPrefix(t, read, "* 1 EXISTS")
 	expectPrefix(t, read, "* 1 RECENT")
-	expectPrefix(t, read, "* OK [UIDVALIDITY")
+	expectSelectOK(t, read)
 	expectPrefix(t, read, "a3 OK")
 	send(t, conn, "a4 FETCH 1 (UID RFC822.SIZE BODY[])")
 	line, err := read.ReadString('\n')
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(line, "UID 1") || !strings.Contains(line, "RFC822.SIZE") || strings.Contains(line, "BODY[]") {
-		t.Fatalf("fetch metadata %q", line)
-	}
-	line, err = read.ReadString('\n')
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.HasPrefix(line, "* 1 FETCH") || !strings.Contains(line, "BODY[]") {
-		t.Fatalf("fetch body prelude %q", line)
+	// One FETCH response: plain items then the literal (RFC 3501; as Dovecot/Gmail).
+	if !strings.HasPrefix(line, "* 1 FETCH (UID 1 RFC822.SIZE ") || !strings.Contains(line, " BODY[] {") {
+		t.Fatalf("fetch %q", line)
 	}
 	n, err := literalSize(line)
 	if err != nil {
@@ -133,7 +127,7 @@ func TestIMAPFetchInbox(t *testing.T) {
 	expectPrefix(t, read, "* FLAGS")
 	expectPrefix(t, read, "* 0 EXISTS")
 	expectPrefix(t, read, "* 0 RECENT")
-	expectPrefix(t, read, "* OK [UIDVALIDITY")
+	expectSelectOK(t, read)
 	expectPrefix(t, read, "ab OK")
 	send(t, conn, "ac STATUS INBOX (MESSAGES UNSEEN UIDNEXT UIDVALIDITY)")
 	expectPrefix(t, read, "* STATUS INBOX (MESSAGES 1 UNSEEN 0 UIDNEXT 2 UIDVALIDITY 1)")
@@ -144,7 +138,7 @@ func TestIMAPFetchInbox(t *testing.T) {
 	expectPrefix(t, read, "* FLAGS")
 	expectPrefix(t, read, "* 1 EXISTS")
 	expectPrefix(t, read, "* 0 RECENT")
-	expectPrefix(t, read, "* OK [UIDVALIDITY")
+	expectSelectOK(t, read)
 	expectPrefix(t, read, "ae OK")
 	send(t, conn, "af MOVE 1 Trash")
 	expectPrefix(t, read, "af OK")
@@ -152,19 +146,19 @@ func TestIMAPFetchInbox(t *testing.T) {
 	expectPrefix(t, read, "* FLAGS")
 	expectPrefix(t, read, "* 0 EXISTS")
 	expectPrefix(t, read, "* 0 RECENT")
-	expectPrefix(t, read, "* OK [UIDVALIDITY")
+	expectSelectOK(t, read)
 	expectPrefix(t, read, "ag OK")
 	send(t, conn, "ah SELECT Trash")
 	expectPrefix(t, read, "* FLAGS")
 	expectPrefix(t, read, "* 1 EXISTS")
 	expectPrefix(t, read, "* 0 RECENT")
-	expectPrefix(t, read, "* OK [UIDVALIDITY")
+	expectSelectOK(t, read)
 	expectPrefix(t, read, "ah OK")
 	send(t, conn, "ai EXAMINE Trash")
 	expectPrefix(t, read, "* FLAGS")
 	expectPrefix(t, read, "* 1 EXISTS")
 	expectPrefix(t, read, "* 0 RECENT")
-	expectPrefix(t, read, "* OK [UIDVALIDITY")
+	expectSelectOK(t, read)
 	expectPrefix(t, read, "ai OK [READ-ONLY]")
 	send(t, conn, "aj LOGOUT")
 }
@@ -210,7 +204,7 @@ func TestIMAPAppendCreatesMailbox(t *testing.T) {
 	expectPrefix(t, read, "* FLAGS")
 	expectPrefix(t, read, "* 0 EXISTS")
 	expectPrefix(t, read, "* 0 RECENT")
-	expectPrefix(t, read, "* OK [UIDVALIDITY")
+	expectSelectOK(t, read)
 	expectPrefix(t, read, "a2 OK")
 
 	raw := []byte("From: a@b\r\nSubject: queued\r\n\r\noutbox\r\n")
@@ -231,7 +225,7 @@ func TestIMAPAppendCreatesMailbox(t *testing.T) {
 	expectPrefix(t, read, "* FLAGS")
 	expectPrefix(t, read, "* 1 EXISTS")
 	expectPrefix(t, read, "* 1 RECENT")
-	expectPrefix(t, read, "* OK [UIDVALIDITY")
+	expectSelectOK(t, read)
 	expectPrefix(t, read, "a4 OK")
 }
 
@@ -281,7 +275,7 @@ func TestIMAPExpungeDeleted(t *testing.T) {
 	expectPrefix(t, read, "* FLAGS")
 	expectPrefix(t, read, "* 1 EXISTS")
 	expectPrefix(t, read, "* 1 RECENT")
-	expectPrefix(t, read, "* OK [UIDVALIDITY")
+	expectSelectOK(t, read)
 	expectPrefix(t, read, "b2 OK")
 	send(t, conn, "b3 STORE 1 +FLAGS (\\Deleted)")
 	line, err := read.ReadString('\n')
@@ -296,7 +290,7 @@ func TestIMAPExpungeDeleted(t *testing.T) {
 	expectPrefix(t, read, "* FLAGS")
 	expectPrefix(t, read, "* 0 EXISTS")
 	expectPrefix(t, read, "* 0 RECENT")
-	expectPrefix(t, read, "* OK [UIDVALIDITY")
+	expectSelectOK(t, read)
 	expectPrefix(t, read, "b5 OK")
 }
 
@@ -314,6 +308,21 @@ func send(t *testing.T, conn net.Conn, line string) {
 	t.Helper()
 	if _, err := fmt.Fprintf(conn, "%s\r\n", line); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// expectSelectOK consumes the untagged "* OK [code]" lines a SELECT/EXAMINE sends before its tagged reply.
+func expectSelectOK(t *testing.T, r *bufio.Reader) {
+	t.Helper()
+	expectPrefix(t, r, "* OK [UIDVALIDITY")
+	for {
+		b, err := r.Peek(6)
+		if err != nil || string(b) != "* OK [" {
+			return
+		}
+		if _, err := r.ReadString('\n'); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

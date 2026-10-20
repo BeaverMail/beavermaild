@@ -125,7 +125,7 @@ func TestIMAPRename(t *testing.T) {
 	expectPrefix(t, read, "* FLAGS")
 	expectPrefix(t, read, "* 0 EXISTS")
 	expectPrefix(t, read, "* 0 RECENT")
-	expectPrefix(t, read, "* OK [UIDVALIDITY")
+	expectSelectOK(t, read)
 	expectPrefix(t, read, "r4 OK")
 	send(t, conn, "r5 RENAME INBOX Archive")
 	expectPrefix(t, read, "r5 NO")
@@ -151,7 +151,7 @@ func TestIMAPAppendLiteralPlus(t *testing.T) {
 	expectPrefix(t, read, "* FLAGS")
 	expectPrefix(t, read, "* 0 EXISTS")
 	expectPrefix(t, read, "* 0 RECENT")
-	expectPrefix(t, read, "* OK [UIDVALIDITY")
+	expectSelectOK(t, read)
 	expectPrefix(t, read, "p2 OK")
 
 	raw := []byte("From: a@b\r\nSubject: literal+\r\n\r\nbody\r\n")
@@ -185,7 +185,7 @@ func TestIMAPIdleDone(t *testing.T) {
 	expectPrefix(t, read, "* FLAGS")
 	expectPrefix(t, read, "* 0 EXISTS")
 	expectPrefix(t, read, "* 0 RECENT")
-	expectPrefix(t, read, "* OK [UIDVALIDITY")
+	expectSelectOK(t, read)
 	expectPrefix(t, read, "i2 OK")
 
 	send(t, conn, "i3 IDLE")
@@ -214,7 +214,7 @@ func TestIMAPIdleExistsUpdate(t *testing.T) {
 	expectPrefix(t, read, "* FLAGS")
 	expectPrefix(t, read, "* 0 EXISTS")
 	expectPrefix(t, read, "* 0 RECENT")
-	expectPrefix(t, read, "* OK [UIDVALIDITY")
+	expectSelectOK(t, read)
 	expectPrefix(t, read, "i2 OK")
 
 	idleStarted := make(chan struct{})

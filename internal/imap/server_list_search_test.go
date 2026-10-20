@@ -61,7 +61,7 @@ func TestIMAPListPatternAndSpecialUse(t *testing.T) {
 	expectPrefix(t, read, "* FLAGS")
 	expectPrefix(t, read, "* 1 EXISTS")
 	expectPrefix(t, read, "* 1 RECENT")
-	expectPrefix(t, read, "* OK [UIDVALIDITY")
+	expectSelectOK(t, read)
 	expectPrefix(t, read, "l5 OK")
 
 	send(t, conn, `l6 SEARCH SUBJECT list`)
