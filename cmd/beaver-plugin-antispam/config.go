@@ -57,6 +57,14 @@ type rblConfig struct {
 	MaxChecksPerMessage int               `json:"max_checks_per_message"`
 	TagPrefix           string            `json:"tag_prefix"`
 	TagAliases          map[string]string `json:"tag_aliases"`
+	// SpamhausDQSKey queries *.spamhaus.org zones through Spamhaus DQS
+	// (<key>.<zone>.dq.spamhaus.net), which works from public resolvers. Tags keep the
+	// public zone name (RBL_ZEN), so the key never reaches message headers.
+	SpamhausDQSKey string `json:"spamhaus_dqs_key"`
+	// ZoneCodes limits which A records count as a listing, per zone (public name, e.g.
+	// "dbl.spamhaus.org"). Entries are "127.0.1.2" or a last-octet range "127.0.2.2-24".
+	// Zones without an entry count any 127.x reply. Merged with the Spamhaus defaults.
+	ZoneCodes map[string][]string `json:"zone_codes"`
 }
 
 // forScope returns a config with the scope-specific zones or legacy zones.
@@ -131,6 +139,14 @@ func defaultConfig() pluginConfig {
 			OnDNSFail:         "accept",
 			CacheTTLListedSec: 3600,
 			CacheTTLMissSec:   86400,
+			ZoneCodes: map[string][]string{
+				// SBL, SBL CSS, XBL, DROP, PBL (dynamic/end-user ranges).
+				"zen.spamhaus.org": {"127.0.0.2", "127.0.0.3", "127.0.0.4-7", "127.0.0.9", "127.0.0.10", "127.0.0.11"},
+				// Spam, phish, malware, botnet C&C; not 127.0.1.102-106 (abused legit domains).
+				"dbl.spamhaus.org": {"127.0.1.2", "127.0.1.4", "127.0.1.5", "127.0.1.6"},
+				// Zero Reputation Domains: registered 2-24 hours ago.
+				"zrd.spamhaus.org": {"127.0.2.2-24"},
+			},
 		},
 		Scores: map[string]float64{
 			// Weights from Stalwart spam-filter-rules catalog; operator scores merge on reload.

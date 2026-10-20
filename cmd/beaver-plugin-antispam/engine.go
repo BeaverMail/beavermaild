@@ -79,7 +79,9 @@ func (e *engine) handleConnect(req filterReq, cfg pluginConfig) filterResp {
 			return filterResp{ID: req.ID, Action: "reject", Tags: []string{cfg.Static.tag("client_ip")}}
 		}
 	}
-	if cfg.RBL.Enabled {
+	// Submission clients connect from home/mobile IPs (Spamhaus PBL) and are not yet
+	// authenticated here: an IP RBL would lock every user out of sending.
+	if cfg.RBL.Enabled && req.Listener != "submission" {
 		listed, tag, dnsFail := e.rbl.checkIPStr(req.ClientIP, cfg.RBL.forScope("client_ip"))
 		if dnsFail && cfg.RBL.OnDNSFail == "tempfail" {
 			return filterResp{ID: req.ID, Action: "tempfail"}

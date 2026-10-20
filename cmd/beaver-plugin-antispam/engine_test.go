@@ -191,6 +191,41 @@ func TestRBLCheckerUsesInjectedLookup(t *testing.T) {
 	}
 }
 
+// DQS rewrites spamhaus.org zones to <key>.<zone>.dq.spamhaus.net, keeping the public tag.
+func TestRBLSpamhausDQS(t *testing.T) {
+	checker := newRBLChecker()
+	checker.lookupIP = func(_ context.Context, _, host string) ([]net.IP, error) {
+		if host != "4.3.2.1.k3y.zen.dq.spamhaus.net" {
+			t.Fatalf("lookup host=%q", host)
+		}
+		return []net.IP{net.IPv4(127, 0, 0, 2)}, nil
+	}
+	cfg := rblConfig{Enabled: true, Zones: []string{"zen.spamhaus.org"}, SpamhausDQSKey: "k3y"}
+	listed, tag, failed := checker.checkIP(net.IPv4(1, 2, 3, 4), cfg)
+	if !listed || failed || tag != "RBL_ZEN" {
+		t.Fatalf("listed=%v tag=%q failed=%v", listed, tag, failed)
+	}
+}
+
+// DNSBL error replies (public resolver, rate limit, DBL queried with an IP) are never listings.
+func TestRBLErrorCodesAreNotListings(t *testing.T) {
+	for _, reply := range []net.IP{net.IPv4(127, 255, 255, 254), net.IPv4(127, 255, 255, 255), net.IPv4(127, 0, 1, 255)} {
+		checker := newRBLChecker()
+		checker.lookupIP = func(context.Context, string, string) ([]net.IP, error) { return []net.IP{reply}, nil }
+		cfg := rblConfig{Enabled: true, Zones: []string{"dbl.spamhaus.org"}}
+		listed, _, failed := checker.checkDomain("example.com", cfg)
+		if listed || !failed {
+			t.Fatalf("reply %s: listed=%v failed=%v, want an error, not a listing", reply, listed, failed)
+		}
+	}
+	// A real DBL listing still counts.
+	checker := newRBLChecker()
+	checker.lookupIP = func(context.Context, string, string) ([]net.IP, error) { return []net.IP{net.IPv4(127, 0, 1, 2)}, nil }
+	if listed, tag, _ := checker.checkDomain("example.com", rblConfig{Enabled: true, Zones: []string{"dbl.spamhaus.org"}}); !listed || tag != "RBL_DBL" {
+		t.Fatalf("listing: listed=%v tag=%q", listed, tag)
+	}
+}
+
 func TestRBLBudgetSharedAcrossAnalyzers(t *testing.T) {
 	budget := newRBLBudget(2)
 	if !budget.take() {

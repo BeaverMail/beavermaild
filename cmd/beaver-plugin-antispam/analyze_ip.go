@@ -39,6 +39,9 @@ func analyzeIP(ctx *classifyCtx, res *classifyResult, eng *engine) {
 		res.addTag(ctx.cfg.Static.tag("client_ip"))
 		return
 	}
+	if ctx.req.Listener == "submission" { // PBL lists end-user IPs: expected for submission
+		return
+	}
 	if ctx.rblBudget == nil || !ctx.rblBudget.take() {
 		return
 	}

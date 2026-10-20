@@ -9,13 +9,17 @@
     "enabled": false,
     "zones": ["zen.spamhaus.org"],
     "client_ip_zones": ["zen.spamhaus.org"],
-    "domain_zones": [],
+    "domain_zones": ["dbl.spamhaus.org", "zrd.spamhaus.org"],
     "url_zones": [],
     "timeout_ms": 500,
     "on_dns_fail": "accept",
     "cache_ttl_listed_sec": 3600,
     "cache_ttl_miss_sec": 86400,
-    "max_checks_per_message": 20
+    "max_checks_per_message": 20,
+    "spamhaus_dqs_key": "",
+    "zone_codes": {
+      "zrd.spamhaus.org": ["127.0.2.2-6"]
+    }
   },
   "static": {
     "deny_client_ip": ["deny-ip.txt"],

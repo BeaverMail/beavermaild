@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -47,7 +48,7 @@ func (r *rblChecker) checkDomain(domain string, cfg rblConfig) (listed bool, tag
 		timeout = 500 * time.Millisecond
 	}
 	for _, zone := range cfg.Zones {
-		qname := domain + "." + strings.TrimSuffix(zone, ".")
+		qname := domain + "." + queryZone(zone, cfg)
 		if hit, t, fail := r.query(qname, zone, timeout, cfg); fail {
 			return false, "", true
 		} else if hit {
@@ -73,7 +74,7 @@ func (r *rblChecker) checkIP(ip net.IP, cfg rblConfig) (listed bool, tag string,
 		timeout = 500 * time.Millisecond
 	}
 	for _, zone := range cfg.Zones {
-		qname := rev + "." + strings.TrimSuffix(zone, ".")
+		qname := rev + "." + queryZone(zone, cfg)
 		if hit, t, fail := r.query(qname, zone, timeout, cfg); fail {
 			return false, "", true
 		} else if hit {
@@ -106,7 +107,10 @@ func (r *rblChecker) query(qname, zone string, timeout time.Duration, cfg rblCon
 		if v4 == nil {
 			continue
 		}
-		if v4[0] == 127 {
+		if isDNSBLError(v4) {
+			return false, "", true
+		}
+		if v4[0] == 127 && rblCodeListed(zone, v4, cfg) {
 			tag = rblTag(zone, cfg)
 			r.store(qname, true, tag, cfg.CacheTTLListedSec)
 			return true, tag, false
@@ -123,6 +127,50 @@ func (r *rblChecker) store(key string, listed bool, tag string, ttlSec int) {
 	r.mu.Lock()
 	r.cache[key] = cacheEntry{listed: listed, tag: tag, expire: time.Now().Add(time.Duration(ttlSec) * time.Second)}
 	r.mu.Unlock()
+}
+
+// isDNSBLError reports DNSBL error replies, which are not listings: 127.255.255.x
+// (Spamhaus: query via public/open resolver, rate limited, unknown zone) and 127.0.1.255
+// (Spamhaus DBL: IP address queried as a domain). Counting them would reject all mail.
+func isDNSBLError(v4 net.IP) bool {
+	return v4[0] == 127 && ((v4[1] == 255 && v4[2] == 255) || (v4[1] == 0 && v4[2] == 1 && v4[3] == 255))
+}
+
+// rblCodeListed reports whether reply v4 counts as a listing for zone (see rblConfig.ZoneCodes).
+func rblCodeListed(zone string, v4 net.IP, cfg rblConfig) bool {
+	codes, ok := cfg.ZoneCodes[strings.TrimSuffix(zone, ".")]
+	if !ok {
+		return true
+	}
+	for _, spec := range codes {
+		base, hi, isRange := strings.Cut(strings.TrimSpace(spec), "-")
+		ip := net.ParseIP(base).To4()
+		if ip == nil {
+			continue
+		}
+		if !isRange {
+			if ip.Equal(v4) {
+				return true
+			}
+			continue
+		}
+		top, err := strconv.Atoi(hi)
+		if err == nil && ip[0] == v4[0] && ip[1] == v4[1] && ip[2] == v4[2] && int(v4[3]) >= int(ip[3]) && int(v4[3]) <= top {
+			return true
+		}
+	}
+	return false
+}
+
+// queryZone returns the DNS zone to query: a *.spamhaus.org zone goes through DQS
+// when a key is configured, any other zone is used as is.
+func queryZone(zone string, cfg rblConfig) string {
+	zone = strings.TrimSuffix(zone, ".")
+	key := strings.TrimSpace(cfg.SpamhausDQSKey)
+	if name, ok := strings.CutSuffix(zone, ".spamhaus.org"); ok && key != "" {
+		return key + "." + name + ".dq.spamhaus.net"
+	}
+	return zone
 }
 
 func rblTag(zone string, cfg rblConfig) string {
