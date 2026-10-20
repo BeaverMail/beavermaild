@@ -10,6 +10,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/BeaverMail/beaver/internal/directory"
@@ -39,7 +40,8 @@ type session struct {
 	readOnly        bool
 	mbox            mail.Mailbox
 	messages        []mail.Message
-	idleWatchModSeq uint64 // mailbox HighestModSeq at last IDLE sync
+	idleWatchModSeq uint64       // mailbox HighestModSeq at last IDLE sync
+	stopping        *atomic.Bool // server shutdown flag (nil when not served by a Server)
 }
 
 func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *mail.Inbox, certs *tlsload.Certs, secure, tlsRequired bool, gate security.AuthGate, readTimeout time.Duration) *session {
@@ -67,6 +69,10 @@ func (s *session) run(ctx context.Context) error {
 	for {
 		line, err := s.readLine()
 		if err != nil {
+			if s.isStopping() {
+				_ = s.untagged("BYE [UNAVAILABLE] Server shutting down")
+				return nil
+			}
 			return err
 		}
 		if line == "" {
@@ -935,7 +941,14 @@ func (s *session) tagged(tag, resp string) error {
 	return err
 }
 
+func (s *session) isStopping() bool { return s.stopping != nil && s.stopping.Load() }
+
+// bumpReadDeadline restores the idle timeout, or expires reads at once during shutdown.
 func (s *session) bumpReadDeadline() {
+	if s.isStopping() {
+		_ = s.conn.SetReadDeadline(time.Now())
+		return
+	}
 	if s.readTimeout > 0 {
 		_ = s.conn.SetReadDeadline(time.Now().Add(s.readTimeout))
 	}
@@ -943,6 +956,11 @@ func (s *session) bumpReadDeadline() {
 
 func (s *session) readLine() (string, error) {
 	s.bumpReadDeadline()
+	return s.readLineNoDeadline()
+}
+
+// readLineNoDeadline reads one line under whatever read deadline the caller set.
+func (s *session) readLineNoDeadline() (string, error) {
 	line, err := s.r.ReadString('\n')
 	if err != nil {
 		return "", err

@@ -9,6 +9,7 @@ import (
 	"runtime/debug"
 	"time"
 
+	"github.com/BeaverMail/beaver/internal/connset"
 	"github.com/BeaverMail/beaver/internal/directory"
 	"github.com/BeaverMail/beaver/internal/mail"
 	"github.com/BeaverMail/beaver/internal/mailauth"
@@ -62,6 +63,7 @@ type Server struct {
 	readTimeout         time.Duration
 	status              *servicestatus.Registry
 	hostname            string
+	sessions            connset.Set
 }
 
 // NewServer returns an SMTP server. submissionAddr is optional plain listener (e.g. :587).
@@ -223,8 +225,14 @@ func (s *Server) serve(ctx context.Context, slots []listenerSlot) error {
 	for _, slot := range slots {
 		_ = slot.ln.Close()
 	}
+	if !s.sessions.Drain(drainTimeout) {
+		s.log.Warn("smtp shutdown: sessions still open after drain timeout", "open", s.sessions.Len())
+	}
 	return nil
 }
+
+// drainTimeout bounds how long Serve waits for sessions to close on shutdown.
+const drainTimeout = 5 * time.Second
 
 func (s *Server) serveConn(ctx context.Context, conn net.Conn, secure, submission bool, lim *security.ConnLimiter) {
 	defer lim.Release()
@@ -241,7 +249,12 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn, secure, submissio
 	if s.hostname != "" {
 		sess.hostname = s.hostname
 	}
-	if err := sess.run(ctx); err != nil && ctx.Err() == nil {
+	sess.stopping = &s.sessions.Stopping
+	s.sessions.Add(sess, conn)
+	defer s.sessions.Remove(sess)
+	// Transactions in flight during shutdown must finish (and reply 421 after): the stopping
+	// flag, not ctx cancellation, ends the session.
+	if err := sess.run(context.WithoutCancel(ctx)); err != nil && ctx.Err() == nil {
 		s.log.Debug("smtp session", slog.Any("err", err))
 	}
 }

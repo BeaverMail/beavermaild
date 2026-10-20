@@ -368,10 +368,16 @@ func (a *App) Run(ctx context.Context) error {
 		}
 	}
 
-	go func() { errCh <- a.smtp.Serve(ctx) }()
-	go func() { errCh <- a.imap.Serve(ctx) }()
+	// Listeners get their own context so they can drain (IMAP BYE, SMTP 421, close_notify)
+	// before storage is closed, both on SIGTERM and when one of them fails.
+	srvCtx, stopServers := context.WithCancel(ctx)
+	defer stopServers()
+	running := 2
+	go func() { errCh <- a.smtp.Serve(srvCtx) }()
+	go func() { errCh <- a.imap.Serve(srvCtx) }()
 	if a.http != nil {
-		go func() { errCh <- a.http.Serve(ctx) }()
+		running++
+		go func() { errCh <- a.http.Serve(srvCtx) }()
 	}
 	signer := a.dkim
 	if signer == nil {
@@ -410,20 +416,37 @@ func (a *App) Run(ctx context.Context) error {
 		"tls", tlsOn,
 	)
 
+	var runErr error
 	select {
 	case <-ctx.Done():
 		a.log.Info("shutting down")
-		return a.Close()
-	case err := <-errCh:
-		closeErr := a.Close()
-		if err != nil {
-			a.log.Error("server stopped", slog.Any("err", err))
-			// Non-zero exit so a supervisor (systemd Restart=on-failure) notices.
-			return err
+	case runErr = <-errCh:
+		running--
+		if runErr != nil {
+			a.log.Error("server stopped", slog.Any("err", runErr))
 		}
-		return closeErr
 	}
+	stopServers()
+	grace := time.After(shutdownGrace)
+wait:
+	for ; running > 0; running-- {
+		select {
+		case <-errCh:
+		case <-grace:
+			a.log.Warn("shutdown grace elapsed", "servers_running", running)
+			break wait
+		}
+	}
+	closeErr := a.Close()
+	if runErr != nil {
+		// Non-zero exit so a supervisor (systemd Restart=on-failure) notices.
+		return runErr
+	}
+	return closeErr
 }
+
+// shutdownGrace bounds the wait for listeners to drain (their own drain is 5s).
+const shutdownGrace = 7 * time.Second
 
 func ptrRemote(cfg smtp.RemoteConfig) *smtp.RemoteConfig {
 	return &cfg

@@ -9,6 +9,7 @@ import (
 	"runtime/debug"
 	"time"
 
+	"github.com/BeaverMail/beaver/internal/connset"
 	"github.com/BeaverMail/beaver/internal/directory"
 	"github.com/BeaverMail/beaver/internal/mail"
 	"github.com/BeaverMail/beaver/internal/security"
@@ -40,6 +41,7 @@ type Server struct {
 	maxConnections int
 	readTimeout    time.Duration
 	status         *servicestatus.Registry
+	sessions       connset.Set
 }
 
 // NewServer returns an IMAP server bound to plainAddr; tlsAddr enables implicit TLS on :993.
@@ -148,12 +150,18 @@ func (s *Server) serve(ctx context.Context, slots []listenerSlot) error {
 	for _, slot := range slots {
 		_ = slot.ln.Close()
 	}
+	if !s.sessions.Drain(drainTimeout) {
+		s.log.Warn("imap shutdown: sessions still open after drain timeout", "open", s.sessions.Len())
+	}
 	return nil
 }
 
 func (s *Server) serveConn(ctx context.Context, conn net.Conn, secure bool, lim *security.ConnLimiter) {
 	defer lim.Release()
 	sess := newSession(s.log, conn, s.dir, s.inbox, s.certs, secure, s.tlsRequired, s.authGate, s.readTimeout)
+	sess.stopping = &s.sessions.Stopping
+	s.sessions.Add(sess, conn)
+	defer s.sessions.Remove(sess)
 	// After STARTTLS sess.conn is the TLS conn; closing it sends close_notify.
 	defer func() { _ = sess.conn.Close() }()
 	// A bug on one message must not take down the whole server (and every other session).
@@ -162,7 +170,9 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn, secure bool, lim 
 			s.log.Error("imap session panic", "panic", r, "stack", string(debug.Stack()))
 		}
 	}()
-	if err := sess.run(ctx); err != nil && ctx.Err() == nil {
+	// Commands in flight during shutdown must finish (and say BYE): the stopping flag, not
+	// ctx cancellation, ends the session.
+	if err := sess.run(context.WithoutCancel(ctx)); err != nil && ctx.Err() == nil {
 		s.log.Debug("imap session", slog.Any("err", err))
 	}
 }

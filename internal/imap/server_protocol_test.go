@@ -217,32 +217,31 @@ func TestIMAPIdleExistsUpdate(t *testing.T) {
 	expectSelectOK(t, read)
 	expectPrefix(t, read, "i2 OK")
 
-	idleStarted := make(chan struct{})
-	go func() {
-		send(t, conn, "i3 IDLE")
-		expectPrefix(t, read, "+ idling")
-		close(idleStarted)
-		time.Sleep(700 * time.Millisecond)
-		send(t, conn, "DONE")
-		expectPrefix(t, read, "i3 OK IDLE terminated")
-	}()
-
-	<-idleStarted
+	// Sequential on purpose: reading the same bufio.Reader from two goroutines (and failing
+	// from one after the test returned) made this test flaky.
+	send(t, conn, "i3 IDLE")
+	expectPrefix(t, read, "+ idling")
 	if _, err := inbox.Deliver(ctx, accID, []byte("From: a@b\r\n\r\nidle\r\n")); err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	for {
+		line, err := read.ReadString('\n')
+		if err != nil {
+			t.Fatalf("waiting for EXISTS during IDLE: %v", err)
+		}
+		if strings.HasPrefix(line, "* 1 EXISTS") {
+			break
+		}
+	}
+	send(t, conn, "DONE")
+	for {
 		line, err := read.ReadString('\n')
 		if err != nil {
 			t.Fatal(err)
 		}
-		if strings.HasPrefix(line, "* 1 EXISTS") {
+		if strings.HasPrefix(line, "i3 OK IDLE terminated") {
 			return
 		}
-		if strings.HasPrefix(line, "i3 OK") {
-			t.Fatal("IDLE ended before EXISTS update")
-		}
 	}
-	t.Fatal("timeout waiting for EXISTS during IDLE")
 }

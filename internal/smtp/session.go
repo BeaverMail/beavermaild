@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/BeaverMail/beaver/internal/directory"
@@ -57,8 +58,9 @@ type session struct {
 	sendGate    security.SendGate
 	greylist    *Greylist
 	readTimeout time.Duration
-	hostname    string // banner and EHLO name
-	curCmd      string // command being answered, for reply logging (MAIL/RCPT keep their argument)
+	hostname    string       // banner and EHLO name
+	curCmd      string       // command being answered, for reply logging (MAIL/RCPT keep their argument)
+	stopping    *atomic.Bool // server shutdown flag (nil when not served by a Server)
 
 	mailFrom  string
 	mailRet   mail.RetMode
@@ -806,9 +808,19 @@ func (s *session) writef(format string, args ...any) error {
 }
 
 func (s *session) readLine() (string, error) {
-	s.bumpReadDeadline()
+	// Only the wait for a command is cut short on shutdown; DATA/BDAT keep their deadline.
+	stopping := s.stopping != nil && s.stopping.Load()
+	if stopping {
+		_ = s.conn.SetReadDeadline(time.Now())
+	} else {
+		s.bumpReadDeadline()
+	}
 	line, err := s.r.ReadString('\n')
 	if err != nil {
+		if stopping || (s.stopping != nil && s.stopping.Load()) {
+			_ = s.writef("421 4.3.2 %s Service shutting down", s.hostname)
+			return "", fmt.Errorf("smtp: server shutting down")
+		}
 		return "", err
 	}
 	line = strings.TrimRight(line, "\r\n")

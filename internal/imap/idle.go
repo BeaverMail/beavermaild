@@ -28,9 +28,19 @@ func (s *session) cmdIdle(ctx context.Context, tag string) error {
 		_ = s.conn.SetReadDeadline(time.Time{})
 	}()
 
+	started := time.Now()
 	for {
+		if s.readTimeout > 0 && time.Since(started) > s.readTimeout {
+			return fmt.Errorf("imap: idle exceeded %s without DONE", s.readTimeout) // RFC 2177 allows closing after 30m
+		}
+		if s.isStopping() {
+			_ = s.untagged("BYE [UNAVAILABLE] Server shutting down")
+			return errShuttingDown
+		}
+		// readLine would replace this short poll deadline with the session idle timeout,
+		// so IDLE would never wake up to push new mail when a timeout is configured.
 		_ = s.conn.SetReadDeadline(time.Now().Add(idlePollInterval))
-		line, err := s.readLine()
+		line, err := s.readLineNoDeadline()
 		if err == nil {
 			if strings.EqualFold(strings.TrimSpace(line), "DONE") {
 				return s.tagged(tag, "OK IDLE terminated")

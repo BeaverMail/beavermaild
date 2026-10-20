@@ -87,3 +87,45 @@ func TestSMTPLogsRejectionsAndAccepted(t *testing.T) {
 		}
 	}
 }
+
+// On shutdown a session waiting for a command gets 421 before the conn closes.
+func TestSMTPShutdownSends421(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, "file:"+t.TempDir()+"/store.sqlite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	dir := directory.NewLocal(store)
+	inbox := mail.NewInbox(store, blob.NewFS(t.TempDir()+"/blobs"))
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := smtp.NewServer(slog.New(slog.NewTextHandler(&lockedBuf{}, nil)), ln.Addr().String(), dir, inbox, nil, "", "", smtp.Options{ReadTimeout: 5 * time.Minute})
+	sctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() { _ = srv.ServeListener(sctx, ln); close(done) }()
+	time.Sleep(20 * time.Millisecond)
+
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	read := bufio.NewReader(conn)
+	expect(t, read, "220")
+	send(t, conn, "HELO test")
+	expect(t, read, "250")
+
+	cancel()
+	expect(t, read, "421")
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Serve did not return")
+	}
+}
