@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"time"
 )
@@ -196,13 +197,22 @@ func appendFilterHeaders(raw []byte, headers map[string]string) []byte {
 	if len(headers) == 0 {
 		return raw
 	}
-	var prefix []byte
-	for k, v := range headers {
-		prefix = append(prefix, fmt.Sprintf("%s: %s\r\n", k, v)...)
+	keys := make([]string, 0, len(headers))
+	for k := range headers {
+		keys = append(keys, k)
 	}
+	sort.Strings(keys)
+	var prefix []byte
+	for _, k := range keys {
+		prefix = append(prefix, fmt.Sprintf("%s: %s\r\n", k, headers[k])...)
+	}
+	// Insert after the last header's line ending, not before it: otherwise the new
+	// header is glued onto the last one (e.g. corrupting a multipart boundary).
 	idx := bytes.Index(raw, []byte("\r\n\r\n"))
-	if idx < 0 {
-		idx = bytes.Index(raw, []byte("\n\n"))
+	if idx >= 0 {
+		idx += 2
+	} else if idx = bytes.Index(raw, []byte("\n\n")); idx >= 0 {
+		idx++
 	}
 	if idx >= 0 {
 		out := make([]byte, 0, len(prefix)+len(raw))
