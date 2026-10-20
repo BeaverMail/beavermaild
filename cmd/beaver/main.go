@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -102,6 +103,10 @@ func runInit(args []string) int {
 		return cli.ExitError
 	}
 	fmt.Fprintf(os.Stderr, "initialized %s (config %s)\n", cfg.DataDir, cfg.ConfigPath())
+	// Other commands read DefaultConfigPath, not data_dir/config.json; tell the operator how to point at this one.
+	if def := config.DefaultConfigPath(); filepath.Clean(def) != filepath.Clean(cfg.ConfigPath()) {
+		fmt.Fprintf(os.Stderr, "note: commands read %s by default; use: export BEAVER_CONFIG=%s (or -c)\n", def, cfg.ConfigPath())
+	}
 
 	// Apply KV schema for the configured driver (sqlite file or MySQL/MariaDB tables).
 	ctx := context.Background()
