@@ -28,7 +28,7 @@ func Load(certFile, keyFile, minVersion string) (*Certs, error) {
 	if err != nil {
 		return nil, fmt.Errorf("tlsload: load key pair: %w", err)
 	}
-	ver, err := parseMinVersion(minVersion)
+	ver, err := ParseMinVersion(minVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -60,7 +60,8 @@ func (c *Certs) WrapServer(conn net.Conn) *tls.Conn {
 	return tls.Server(conn, c.cfg)
 }
 
-func parseMinVersion(v string) (uint16, error) {
+// ParseMinVersion maps tls.min_version ("", "1.2", "1.3") to a crypto/tls version.
+func ParseMinVersion(v string) (uint16, error) {
 	switch strings.TrimSpace(strings.ToLower(v)) {
 	case "", "1.2":
 		return tls.VersionTLS12, nil

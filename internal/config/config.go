@@ -62,6 +62,8 @@ type LogConfig struct {
 type HTTPConfig struct {
 	Enabled bool   `json:"enabled"`
 	Listen  string `json:"listen"` // e.g. 127.0.0.1:8080; non-loopback requires TLS certs
+	// PlainListen is an optional cleartext listener (e.g. :80) for ACME HTTP-01 and HTTPS redirects only.
+	PlainListen string `json:"plain_listen"`
 }
 
 // StoreDriverSQLite is the default embedded KV backend.
@@ -585,6 +587,11 @@ func (c *Config) IMAPTLSListen() string {
 // SMTPSubmissionTLSListen returns the implicit-TLS submission bind address (may be empty).
 func (c *Config) SMTPSubmissionTLSListen() string {
 	return strings.TrimSpace(c.SMTP.SubmissionTLSListen)
+}
+
+// HTTPPlainListen returns the cleartext ACME/redirect bind address (empty if disabled).
+func (c *Config) HTTPPlainListen() string {
+	return strings.TrimSpace(c.HTTP.PlainListen)
 }
 
 // HTTPEnabled reports whether the admin/API HTTP listener should start.

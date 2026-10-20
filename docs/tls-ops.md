@@ -11,11 +11,15 @@ How Beaver loads certificates and where TLS is required or optional on IMAP/SMTP
 | SMTP inbound | `smtp.listen` (default `127.0.0.1:2525`) | Optional STARTTLS when certs loaded |
 | SMTP submission | `smtp.submission_listen` (e.g. `:587`) | STARTTLS; **AUTH and MAIL require TLS** |
 | SMTP submission implicit | `smtp.submission_tls_listen` (e.g. `:465`) | TLS from first byte |
+| HTTP admin/API | `http.listen` | TLS unless loopback |
+| HTTP cleartext | `http.plain_listen` (e.g. `:80`) | Plain; ACME HTTP-01 + 301 to HTTPS only |
 | Outbound MX | queue worker | Opportunistic STARTTLS + PKIX verify (default) |
 | Outbound relay | `smtp.relay` | Optional STARTTLS (`relay_starttls`) |
 | MTA-STS | outbound MX | When policy is `enforce`: mandatory STARTTLS + PKIX |
 
-Without `tls.cert_file`/`tls.key_file` or `tls.acme_hosts`, STARTTLS is not advertised and implicit TLS listeners do not start.
+STARTTLS and implicit TLS listeners are always available: without `tls.cert_file`/`tls.key_file`, Beaver serves a self-signed certificate generated once under `<data_dir>/tls/self/`. Fine for server-to-server STARTTLS (opportunistic, unverified); mail clients will warn, so give them a real certificate.
+
+Certificate choice per connection (by SNI): per-domain custom PEM → issued ACME cert → `tls.cert_file` → self-signed.
 
 ## Certificates
 
@@ -33,23 +37,39 @@ Without `tls.cert_file`/`tls.key_file` or `tls.acme_hosts`, STARTTLS is not adve
 
 Paths are relative to `data_dir` unless absolute. `min_version` accepts `1.2` or `1.3` (default `1.2`).
 
-### ACME (TLS-ALPN-01)
+The files are re-read when their mtime changes (checked at most once a minute), so a certificate renewed by Caddy, certbot or similar is picked up without a restart. A broken file at startup is fatal; a broken file during a reload is logged and the previous certificate stays.
+
+### ACME
+
+One ACME manager covers `tls.acme_hosts` plus the mail hostname of every domain with `ssl_mode: acme` (read from the directory, so new domains need no restart).
 
 ```json
 {
-  "tls": {
-    "acme_hosts": ["mail.example.com"],
-    "acme_cache_dir": "tls/acme",
-    "min_version": "1.2"
-  }
+  "tls": { "acme_hosts": ["mail.example.com"], "acme_cache_dir": "tls/acme" },
+  "http": { "enabled": true, "listen": "0.0.0.0:443", "plain_listen": "0.0.0.0:80" }
 }
 ```
 
-- Challenge: **TLS-ALPN-01** only (no HTTP-01 listener).
+- Issuance runs in the background: at startup, after a domain is created or edited, and hourly (new hosts, retries). Renewal is automatic. A failure is logged and never stops Beaver; the host keeps the fallback certificate until issuance succeeds.
+- Handshakes never trigger issuance, so clients are not blocked and Let's Encrypt is not hammered.
+- Challenges: **HTTP-01** on `http.plain_listen` (or `http.listen` behind a proxy), **TLS-ALPN-01** on any TLS listener reachable on 443.
 - Cache default: `<data_dir>/tls/acme`.
-- The host must reach Beaver on **443** for the ACME hostname (or terminate TLS-ALPN elsewhere and present the same certs as PEM).
 
-Do not set both PEM and ACME unless you intend ACME to win (app prefers ACME when `acme_hosts` is non-empty).
+#### Dedicated server
+
+Beaver owns 80/443: set `http.plain_listen: ":80"` and `http.listen: ":443"` as above.
+
+#### Behind Caddy (or another web server on 80/443)
+
+Either:
+
+1. Let Beaver issue: enable `http` on loopback (`127.0.0.1:8080`, no `plain_listen`) and proxy the challenge path to it. The `http://` site address keeps Caddy from managing a certificate for that host itself.
+   ```
+   http://mail.example.com {
+       reverse_proxy /.well-known/acme-challenge/* 127.0.0.1:8080
+   }
+   ```
+2. Reuse the proxy's certificate: point `tls.cert_file`/`tls.key_file` at the files it renews; Beaver reloads them on change. Leave `acme_hosts` empty.
 
 ## `tls.required`
 
@@ -137,7 +157,6 @@ Not implemented: publishing an inbound MTA-STS policy, TLS-RPT, or treating poli
 |------|--------|
 | DANE (RFC 7672) | Needs DNSSEC; backlog `smtp-dane` |
 | REQUIRETLS (RFC 8689) | Not advertised until enforced |
-| ACME HTTP-01 | Use TLS-ALPN-01 or external PEM |
 | Force TLS on SMTP `:25` via `tls.required` | Use network policy or wait for a dedicated inbound flag |
 
 ## Smoke

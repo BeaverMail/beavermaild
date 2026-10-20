@@ -73,20 +73,20 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 	})
 	queue := mail.NewQueue(store, blobs)
 
-	certs, err := openTLSCerts(cfg)
+	certFile, keyFile, _ := cfg.TLSPair()
+	domainTLS, err := domaintls.New(dir, cfg.DataDir, domaintls.Options{
+		CertFile:     certFile,
+		KeyFile:      keyFile,
+		ACMEHosts:    cfg.ACMEHosts(),
+		ACMECacheDir: cfg.ACMECacheDir(),
+		MinVersion:   cfg.TLS.MinVersion,
+		Log:          log,
+	})
 	if err != nil {
 		_ = store.Close()
-		return nil, err
+		return nil, fmt.Errorf("tls: %w", err)
 	}
-	var domainTLS *domaintls.Manager
-	if cfg.DataDir != "" {
-		if dm, err := domaintls.New(dir, cfg.DataDir, certs, cfg.TLS.MinVersion); err == nil {
-			domainTLS = dm
-			certs = dm.AsCerts()
-		} else {
-			log.Warn("domain tls manager", slog.Any("err", err))
-		}
-	}
+	certs := domainTLS.AsCerts()
 	tlsOpts := tlsOptions(cfg, certs)
 	authGate := cfg.NewAuthGate()
 	sendGate := security.WrapDomainSendGate(cfg.NewSendGate(), func(principal string) (int, time.Duration, bool) {
@@ -190,6 +190,7 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 		}
 		httpSrv, err = httpapi.New(httpapi.Options{
 			Listen:      cfg.HTTPListen(),
+			PlainListen: cfg.HTTPPlainListen(),
 			Dir:         dir,
 			Log:         log,
 			AuthKey:     cfg.Secrets.AuthKey,
@@ -313,24 +314,6 @@ func tlsOptions(cfg *config.Config, certs *tlsload.Certs) tlsRuntime {
 	return r
 }
 
-func openTLSCerts(cfg *config.Config) (*tlsload.Certs, error) {
-	if certFile, keyFile, ok := cfg.TLSPair(); ok {
-		certs, err := tlsload.Load(certFile, keyFile, cfg.TLS.MinVersion)
-		if err != nil {
-			return nil, fmt.Errorf("load tls: %w", err)
-		}
-		return certs, nil
-	}
-	if hosts := cfg.ACMEHosts(); len(hosts) > 0 {
-		certs, err := tlsload.LoadACME(cfg.ACMECacheDir(), hosts, cfg.TLS.MinVersion)
-		if err != nil {
-			return nil, fmt.Errorf("load acme: %w", err)
-		}
-		return certs, nil
-	}
-	return nil, nil
-}
-
 // Store returns the KV store.
 func (a *App) Store() storage.Store { return a.store }
 
@@ -394,6 +377,7 @@ func (a *App) Run(ctx context.Context) error {
 	if a.status != nil {
 		a.status.Set(servicestatus.Entry{ID: "queue_worker", Name: "Queue worker", State: servicestatus.StateUp})
 	}
+	go a.domainTLS.Run(ctx)
 	go mail.NewWorker(a.log, a.queue, a.inbox, a.dir, newRemoteDeliverer(a.cfg, a.dir), signer, policy).Run(ctx)
 
 	_, _, tlsOn := a.cfg.TLSPair()

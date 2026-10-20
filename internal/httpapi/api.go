@@ -32,12 +32,14 @@ const (
 
 // Options configures the HTTP API server.
 type Options struct {
-	Listen   string
-	Dir      *directory.Local
-	Log      *slog.Logger
-	AuthKey  string
-	Certs    *tlsload.Certs
-	AuthGate security.AuthGate
+	Listen string
+	// PlainListen is an optional cleartext listener serving only ACME HTTP-01 and redirects to HTTPS.
+	PlainListen string
+	Dir         *directory.Local
+	Log         *slog.Logger
+	AuthKey     string
+	Certs       *tlsload.Certs
+	AuthGate    security.AuthGate
 	// Blobs is required for domain/account delete (mail purge).
 	Blobs *blob.FS
 	// Queue is the outbound mail queue (nil disables queue endpoints).
@@ -63,6 +65,7 @@ type Options struct {
 // Server is the optional admin/API HTTP listener.
 type Server struct {
 	listen      string
+	plainListen string
 	dir         *directory.Local
 	log         *slog.Logger
 	authKey     []byte
@@ -107,8 +110,13 @@ func New(opts Options) (*Server, error) {
 	if useTLS && (opts.Certs == nil || opts.Certs.Config() == nil) {
 		return nil, fmt.Errorf("httpapi: non-loopback listen %q requires TLS (tls.cert_file/key_file or tls.acme_hosts)", listen)
 	}
+	plainListen := strings.TrimSpace(opts.PlainListen)
+	if plainListen != "" && !useTLS {
+		return nil, fmt.Errorf("httpapi: plain_listen %q needs a TLS listen to redirect to", plainListen)
+	}
 	s := &Server{
 		listen:      listen,
+		plainListen: plainListen,
 		dir:         opts.Dir,
 		log:         log,
 		authKey:     key,
@@ -168,8 +176,34 @@ func (s *Server) Serve(ctx context.Context) error {
 		})
 	}
 
+	if s.plainListen != "" {
+		pln, err := net.Listen("tcp", s.plainListen)
+		if err != nil {
+			_ = ln.Close()
+			return fmt.Errorf("httpapi: plain listen: %w", err)
+		}
+		s.log.Info("http plain listening", "listen", s.plainListen)
+		// Either listener stopping takes the other down, so Serve's error reaches the app and stops all services.
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		errCh := make(chan error, 2)
+		go func() { errCh <- serveHTTP(ctx, pln, s.PlainHandler()) }()
+		go func() { errCh <- serveHTTP(ctx, ln, s.handler()) }()
+		s.log.Info("http api listening", "listen", s.listen, "tls", s.useTLS, "web_ui", s.ui != nil)
+		if err := <-errCh; err != nil {
+			return err
+		}
+		return <-errCh
+	}
+
+	s.log.Info("http api listening", "listen", s.listen, "tls", s.useTLS, "web_ui", s.ui != nil)
+	return serveHTTP(ctx, ln, s.handler())
+}
+
+// serveHTTP serves h on ln until ctx is canceled.
+func serveHTTP(ctx context.Context, ln net.Listener, h http.Handler) error {
 	srv := &http.Server{
-		Handler:           s.handler(),
+		Handler:           h,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {
@@ -178,13 +212,30 @@ func (s *Server) Serve(ctx context.Context) error {
 		defer cancel()
 		_ = srv.Shutdown(shutdownCtx)
 	}()
-
-	s.log.Info("http api listening", "listen", s.listen, "tls", s.useTLS, "web_ui", s.ui != nil)
-	err = srv.Serve(ln)
+	err := srv.Serve(ln)
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}
 	return err
+}
+
+// PlainHandler serves ACME HTTP-01 challenges and redirects everything else to the HTTPS listener.
+func (s *Server) PlainHandler() http.Handler {
+	_, port, _ := net.SplitHostPort(s.listen)
+	redirect := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host := r.Host
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		}
+		if port != "" && port != "443" {
+			host = net.JoinHostPort(host, port)
+		}
+		http.Redirect(w, r, "https://"+host+r.URL.RequestURI(), http.StatusMovedPermanently)
+	})
+	if s.domainTLS != nil {
+		return s.domainTLS.HTTPHandler(redirect)
+	}
+	return redirect
 }
 
 // Handler returns the HTTP handler for tests (includes ACME wrapper when configured).
