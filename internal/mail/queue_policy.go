@@ -22,6 +22,7 @@ type QueuePolicy struct {
 	MaxLifetime      time.Duration
 	RunDelay         time.Duration
 	DelayNotifyAfter time.Duration // 0 = notify on first transient failure
+	KeepCompleted    time.Duration // how long finished entries stay listed; 0 = delete at once
 }
 
 // DefaultQueuePolicy returns production defaults (3d message lifetime).
@@ -31,6 +32,7 @@ func DefaultQueuePolicy() QueuePolicy {
 		MaxLifetime:      3 * 24 * time.Hour,
 		RunDelay:         time.Second,
 		DelayNotifyAfter: 30 * time.Minute,
+		KeepCompleted:    7 * 24 * time.Hour,
 	}
 }
 

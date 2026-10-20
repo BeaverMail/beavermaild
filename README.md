@@ -48,7 +48,7 @@ Outbound mail uses a queue drained by `beaver serve` (local recipients go to INB
 ./beaver send -from sender@example.com -to alice@localhost hello via queue
 ```
 
-Queue retry uses a fixed interval table (`queue.retry_intervals`): `2m, 5m, 10m, 15m, 30m, 1h, 2h, 24h, 3d` by default; `max_lifetime` 3d; worker poll `run_delay` 1s. Override in `config.json`:
+Queue retry uses a fixed interval table (`queue.retry_intervals`): `2m, 5m, 10m, 15m, 30m, 1h, 2h, 24h, 3d` by default; `max_lifetime` 3d; worker poll `run_delay` 1s; delivered/failed entries stay listed (with the remote server's reply or last error) for `keep_completed` 7d (`"0"` deletes them at once). Override in `config.json`:
 
 ```json
 "queue": { "run_delay": "5s" }

@@ -531,8 +531,8 @@ func runQueueList(args []string) int {
 		fmt.Fprintf(os.Stderr, "queue_id=%d return_path=%s size=%d created=%d recipients=%d pending=%d\n",
 			e.ID, e.Msg.ReturnPath, e.Msg.Size, e.Msg.Created, len(e.Msg.Recipients), pending)
 		for _, rcpt := range e.Msg.Recipients {
-			fmt.Fprintf(os.Stderr, "  to=%s retry=%d status=%s next_due_ms=%d last_attempt_ms=%d\n",
-				rcpt.Address, rcpt.Retry, mail.RecipientStatus(rcpt), rcpt.NextDue, rcpt.LastAttempt)
+			fmt.Fprintf(os.Stderr, "  to=%s retry=%d status=%s next_due_ms=%d last_attempt_ms=%d last_diag=%q\n",
+				rcpt.Address, rcpt.Retry, mail.RecipientStatus(rcpt), rcpt.NextDue, rcpt.LastAttempt, rcpt.LastDiag)
 		}
 	}
 	return cli.ExitOK
@@ -552,6 +552,7 @@ type queueRcptJSON struct {
 	Status        string `json:"status"`
 	NextDueMS     int64  `json:"next_due_ms"`
 	LastAttemptMS int64  `json:"last_attempt_ms"`
+	LastDiag      string `json:"last_diag,omitempty"`
 }
 
 func queueEntryJSON(e mail.QueueEntry) queueJSON {
@@ -563,6 +564,7 @@ func queueEntryJSON(e mail.QueueEntry) queueJSON {
 			Status:        mail.RecipientStatus(rcpt),
 			NextDueMS:     rcpt.NextDue,
 			LastAttemptMS: rcpt.LastAttempt,
+			LastDiag:      rcpt.LastDiag,
 		}
 	}
 	return queueJSON{

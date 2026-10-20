@@ -142,7 +142,11 @@ function formatCreated(sec: number): string {
           <span class="text-gray-600">from {e.return_path || '<>'}</span>
           <span class="text-gray-500">{e.size} bytes</span>
           <span class="text-gray-500">created {formatCreated(e.created)}</span>
-          <span class="text-gray-500">pending {e.pending}</span>
+          {#if e.completed_ms}
+            <span class="text-gray-500">completed {formatMS(e.completed_ms)}</span>
+          {:else}
+            <span class="text-gray-500">pending {e.pending}</span>
+          {/if}
           {#if e.held}
             <span class="rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-800">held</span>
           {/if}
@@ -209,6 +213,16 @@ function formatCreated(sec: number): string {
                 <td class="px-4 py-2 text-gray-500">{formatMS(r.next_due_ms)}</td>
                 <td class="px-4 py-2 text-gray-500">{formatMS(r.last_attempt_ms)}</td>
               </tr>
+              {#if r.last_diag}
+                <tr>
+                  <td
+                    colspan="5"
+                    class="px-4 pb-2 pt-0 font-mono text-xs break-all {r.status === 'delivered' ? 'text-gray-500' : 'text-red-700'}"
+                  >
+                    {r.last_diag}
+                  </td>
+                </tr>
+              {/if}
             {/each}
           </tbody>
         </table>

@@ -20,11 +20,11 @@ type stubRemote struct {
 	ok  bool
 }
 
-func (s stubRemote) DeliverRemote(ctx context.Context, mailFrom, rcptTo string, data []byte) error {
+func (s stubRemote) DeliverRemote(ctx context.Context, mailFrom, rcptTo string, data []byte) (string, error) {
 	if s.ok {
-		return nil
+		return "250 OK", nil
 	}
-	return s.err
+	return "", s.err
 }
 
 func TestWorkerPermanentFailDSN(t *testing.T) {
@@ -374,5 +374,55 @@ func TestWorkerDNSPermanentFailDSN(t *testing.T) {
 	}
 	if !strings.Contains(string(body), "Action: failed") {
 		t.Fatalf("body %q", body)
+	}
+}
+
+// Finished entries stay listed with the accepting server's reply, then are purged after KeepCompleted.
+func TestWorkerKeepsCompletedThenPurges(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, "file:"+t.TempDir()+"/store.sqlite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	dir := directory.NewLocal(store)
+	if _, err := directory.SeedDev(ctx, dir); err != nil {
+		t.Fatal(err)
+	}
+	blobs := blob.NewFS(t.TempDir() + "/blobs")
+	inbox := mail.NewInbox(store, blobs)
+	queue := mail.NewQueue(store, blobs)
+	raw := mail.BuildSimpleMessage("alice@localhost", "remote@example.com", "keep me")
+	if _, err := queue.Enqueue(ctx, "alice@localhost", []string{"remote@example.com"}, raw); err != nil {
+		t.Fatal(err)
+	}
+
+	policy := mail.TestQueuePolicy()
+	policy.KeepCompleted = 50 * time.Millisecond
+	w := mail.NewWorker(log.New("error"), queue, inbox, dir, stubRemote{ok: true}, nil, policy)
+	w.ProcessOnce(ctx)
+
+	if pending, _ := queue.ListPending(ctx); len(pending) != 0 {
+		t.Fatalf("still pending: %+v", pending)
+	}
+	all, err := queue.ListAll(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 1 || all[0].Msg.Done == 0 {
+		t.Fatalf("completed entry not kept: %+v", all)
+	}
+	rcpt := all[0].Msg.Recipients[0]
+	if mail.RecipientStatus(rcpt) != "delivered" || rcpt.LastDiag != "250 OK" {
+		t.Fatalf("rcpt %+v", rcpt)
+	}
+
+	time.Sleep(60 * time.Millisecond)
+	w.ProcessOnce(ctx)
+	if all, _ := queue.ListAll(ctx); len(all) != 0 {
+		t.Fatalf("not purged: %+v", all)
 	}
 }

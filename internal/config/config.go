@@ -203,6 +203,8 @@ type QueueConfig struct {
 	RetryIntervals []string `json:"retry_intervals"`
 	MaxLifetime    string   `json:"max_lifetime"`
 	RunDelay       string   `json:"run_delay"`
+	// KeepCompleted is how long delivered/failed entries stay listed (e.g. "7d"; "0" deletes at once).
+	KeepCompleted string `json:"keep_completed"`
 }
 
 // QuotaConfig holds default per-account storage limits (0 = unlimited).
@@ -350,6 +352,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Queue.RunDelay == "" {
 		c.Queue.RunDelay = "1s"
+	}
+	if c.Queue.KeepCompleted == "" {
+		c.Queue.KeepCompleted = "7d"
 	}
 	if c.Plugins.SMTP.FilterTimeoutMs <= 0 {
 		c.Plugins.SMTP.FilterTimeoutMs = 10000
@@ -718,6 +723,7 @@ type QueueTimings struct {
 	RetryIntervals []time.Duration
 	MaxLifetime    time.Duration
 	RunDelay       time.Duration
+	KeepCompleted  time.Duration
 }
 
 // QueueTimings parses queue schedule settings.
@@ -742,10 +748,15 @@ func (c *Config) QueueTimings() (QueueTimings, error) {
 	if err != nil {
 		return QueueTimings{}, err
 	}
+	keep, err := ParseDuration(c.Queue.KeepCompleted)
+	if err != nil {
+		return QueueTimings{}, err
+	}
 	return QueueTimings{
 		RetryIntervals: parsed,
 		MaxLifetime:    life,
 		RunDelay:       run,
+		KeepCompleted:  keep,
 	}, nil
 }
 

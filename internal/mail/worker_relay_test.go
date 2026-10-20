@@ -25,7 +25,7 @@ type relayRemote struct {
 	cfg smtp.RemoteConfig
 }
 
-func (r relayRemote) DeliverRemote(ctx context.Context, mailFrom, rcptTo string, data []byte) error {
+func (r relayRemote) DeliverRemote(ctx context.Context, mailFrom, rcptTo string, data []byte) (string, error) {
 	return smtp.DeliverRemote(ctx, r.cfg, mailFrom, rcptTo, data)
 }
 

@@ -7,7 +7,6 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"fmt"
-	"io"
 	"net"
 	"strings"
 	"time"
@@ -27,8 +26,14 @@ type ClientOptions struct {
 
 // Send submits one message to addr (relay or MX host:port).
 func Send(ctx context.Context, addr, mailFrom, rcptTo string, data []byte, opts ClientOptions) error {
+	_, err := SendReply(ctx, addr, mailFrom, rcptTo, data, opts)
+	return err
+}
+
+// SendReply is Send returning the server's final reply to the message (e.g. "250 2.0.0 OK ... - gsmtp").
+func SendReply(ctx context.Context, addr, mailFrom, rcptTo string, data []byte, opts ClientOptions) (string, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return "", err
 	}
 
 	host, _, err := net.SplitHostPort(addr)
@@ -39,38 +44,38 @@ func Send(ctx context.Context, addr, mailFrom, rcptTo string, data []byte, opts 
 	dialer := net.Dialer{Timeout: clientTimeout}
 	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
-		return fmt.Errorf("smtp client dial: %w", err)
+		return "", fmt.Errorf("smtp client dial: %w", err)
 	}
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(clientTimeout))
 
 	r := bufio.NewReader(conn)
 	if err := expectCode(r, 220); err != nil {
-		return err
+		return "", err
 	}
 	caps, err := ehlo(conn, r, "localhost")
 	if err != nil {
-		return err
+		return "", err
 	}
 	if wantSTARTTLS(opts) && caps.StartTLS {
 		conn, err = startTLS(conn, r, host, opts.TLSInsecureSkipVerify)
 		if err != nil {
 			if opts.MTASTSRequireTLS {
-				return &DeliveryError{Err: fmt.Errorf("smtp client starttls: %w", err), Permanent: true}
+				return "", &DeliveryError{Err: fmt.Errorf("smtp client starttls: %w", err), Permanent: true}
 			}
-			return err
+			return "", err
 		}
 		r = bufio.NewReader(conn)
 		caps, err = ehlo(conn, r, "localhost")
 		if err != nil {
-			return err
+			return "", err
 		}
 	} else if opts.MTASTSRequireTLS {
-		return &DeliveryError{Err: fmt.Errorf("mta-sts: STARTTLS required but not advertised"), Permanent: true}
+		return "", &DeliveryError{Err: fmt.Errorf("mta-sts: STARTTLS required but not advertised"), Permanent: true}
 	}
 	if opts.User != "" && opts.Password != "" {
 		if err := authPlain(conn, r, caps, opts.User, opts.Password); err != nil {
-			return err
+			return "", err
 		}
 	}
 
@@ -101,79 +106,74 @@ func mailFromLine(mailFrom string, data []byte, caps clientCaps) string {
 	return mailLine
 }
 
-func sendSequential(conn net.Conn, r *bufio.Reader, mailLine, rcptLine string, data []byte, caps clientCaps) error {
+func sendSequential(conn net.Conn, r *bufio.Reader, mailLine, rcptLine string, data []byte, caps clientCaps) (string, error) {
 	if err := cmd(conn, r, mailLine, 250); err != nil {
-		return err
+		return "", err
 	}
 	if err := cmd(conn, r, rcptLine, 250); err != nil {
-		return err
+		return "", err
 	}
 	return sendBody(conn, r, data, caps)
 }
 
-func sendPipelined(conn net.Conn, r *bufio.Reader, mailLine, rcptLine string, data []byte, caps clientCaps) error {
+func sendPipelined(conn net.Conn, r *bufio.Reader, mailLine, rcptLine string, data []byte, caps clientCaps) (string, error) {
 	useBDAT := caps.Chunking && len(data) > 0
 	if err := writeLine(conn, mailLine); err != nil {
-		return err
+		return "", err
 	}
 	if err := writeLine(conn, rcptLine); err != nil {
-		return err
+		return "", err
 	}
 	if useBDAT {
 		if err := writeBDATChunk(conn, data); err != nil {
-			return err
+			return "", err
 		}
 	} else {
 		if err := writeLine(conn, "DATA"); err != nil {
-			return err
+			return "", err
 		}
 	}
 	if err := expectCode(r, 250); err != nil {
-		return err
+		return "", err
 	}
 	if err := expectCode(r, 250); err != nil {
-		return err
+		return "", err
 	}
-	if useBDAT {
-		if err := expectCode(r, 250); err != nil {
-			return err
-		}
-	} else {
+	if !useBDAT {
 		if err := expectCode(r, 354); err != nil {
-			return err
+			return "", err
 		}
 		if err := writeDATABody(conn, data); err != nil {
-			return err
-		}
-		if err := expectCode(r, 250); err != nil {
-			return err
+			return "", err
 		}
 	}
-	_ = cmd(conn, r, "QUIT", 221)
-	return nil
+	return finishMessage(conn, r)
 }
 
-func sendBody(conn net.Conn, r *bufio.Reader, data []byte, caps clientCaps) error {
+func sendBody(conn net.Conn, r *bufio.Reader, data []byte, caps clientCaps) (string, error) {
 	if caps.Chunking && len(data) > 0 {
 		if err := writeBDATChunk(conn, data); err != nil {
-			return err
-		}
-		if err := expectCode(r, 250); err != nil {
-			return err
+			return "", err
 		}
 	} else {
 		if err := cmd(conn, r, "DATA", 354); err != nil {
-			return err
+			return "", err
 		}
 		if err := writeDATABody(conn, data); err != nil {
-			return err
-		}
-		if err := expectCode(r, 250); err != nil {
-			return err
+			return "", err
 		}
 	}
+	return finishMessage(conn, r)
+}
+
+// finishMessage reads the server's verdict on the message body, then quits.
+func finishMessage(conn net.Conn, r *bufio.Reader) (string, error) {
+	reply, err := expectReply(r, 250)
+	if err != nil {
+		return "", err
+	}
 	_ = cmd(conn, r, "QUIT", 221)
-	return nil
+	return reply, nil
 }
 
 // writeBDATChunk sends "BDAT n LAST" immediately followed by exactly n bytes (RFC 3030):
@@ -288,20 +288,23 @@ func cmd(conn net.Conn, r *bufio.Reader, line string, want int) error {
 }
 
 func expectCode(r *bufio.Reader, want int) error {
+	_, err := expectReply(r, want)
+	return err
+}
+
+// expectReply reads one reply line and returns it trimmed when the code matches want.
+func expectReply(r *bufio.Reader, want int) (string, error) {
 	line, err := r.ReadString('\n')
 	if err != nil {
-		if err == io.EOF {
-			return err
-		}
-		return err
+		return "", err
 	}
 	if len(line) < 3 {
-		return fmt.Errorf("smtp client: short response %q", line)
+		return "", fmt.Errorf("smtp client: short response %q", line)
 	}
 	code := 0
 	_, _ = fmt.Sscanf(line[:3], "%d", &code)
 	if code != want {
-		return &ResponseError{Code: code, Line: strings.TrimSpace(line)}
+		return "", &ResponseError{Code: code, Line: strings.TrimSpace(line)}
 	}
-	return nil
+	return strings.TrimSpace(line), nil
 }

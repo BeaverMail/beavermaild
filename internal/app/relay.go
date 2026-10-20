@@ -34,7 +34,7 @@ func remoteConfigFrom(c *config.Config) smtp.RemoteConfig {
 	}
 }
 
-func (d remoteDeliverer) DeliverRemote(ctx context.Context, mailFrom, rcptTo string, data []byte) error {
+func (d remoteDeliverer) DeliverRemote(ctx context.Context, mailFrom, rcptTo string, data []byte) (string, error) {
 	cfg := d.base
 	if d.dir != nil {
 		if at := strings.LastIndex(mailFrom, "@"); at > 0 && at < len(mailFrom)-1 {

@@ -330,6 +330,7 @@ func (a *App) Run(ctx context.Context) error {
 		RetryIntervals: qt.RetryIntervals,
 		MaxLifetime:    qt.MaxLifetime,
 		RunDelay:       qt.RunDelay,
+		KeepCompleted:  qt.KeepCompleted,
 	}
 
 	errCh := make(chan error, 3)

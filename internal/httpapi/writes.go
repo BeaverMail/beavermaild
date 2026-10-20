@@ -659,6 +659,7 @@ type queueRcptDTO struct {
 	Status        string `json:"status"`
 	NextDueMS     int64  `json:"next_due_ms"`
 	LastAttemptMS int64  `json:"last_attempt_ms"`
+	LastDiag      string `json:"last_diag,omitempty"` // last error, or the accepting server's reply once delivered
 }
 
 type queueEntryDTO struct {
@@ -669,6 +670,8 @@ type queueEntryDTO struct {
 	Pending    int            `json:"pending"`
 	Held       bool           `json:"held"`
 	Recipients []queueRcptDTO `json:"recipients"`
+	// CompletedMS is when no recipient was left pending (0 while still pending).
+	CompletedMS int64 `json:"completed_ms,omitempty"`
 }
 
 // handleListQueue returns outbound queue entries (instance admin only).
@@ -717,16 +720,18 @@ func (s *Server) handleListQueue(w http.ResponseWriter, r *http.Request) {
 				Status:        st,
 				NextDueMS:     rcpt.NextDue,
 				LastAttemptMS: rcpt.LastAttempt,
+				LastDiag:      rcpt.LastDiag,
 			}
 		}
 		out = append(out, queueEntryDTO{
-			ID:         e.ID,
-			ReturnPath: e.Msg.ReturnPath,
-			Size:       e.Msg.Size,
-			Created:    e.Msg.Created,
-			Pending:    pending,
-			Held:       mail.IsHeld(e.Msg),
-			Recipients: rcpts,
+			ID:          e.ID,
+			ReturnPath:  e.Msg.ReturnPath,
+			Size:        e.Msg.Size,
+			Created:     e.Msg.Created,
+			Pending:     pending,
+			Held:        mail.IsHeld(e.Msg),
+			Recipients:  rcpts,
+			CompletedMS: e.Msg.Done,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"entries": out})

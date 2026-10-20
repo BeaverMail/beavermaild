@@ -95,7 +95,7 @@ type QueueRecipient struct {
 	NextDue     int64  `msgpack:"nd,omitempty"` // unix milliseconds; 0 = due now
 	Notify      uint8  `msgpack:"nt,omitempty"` // NotifyFlags; 0 = default FAILURE|DELAY
 	Orcpt       string `msgpack:"oc,omitempty"`
-	LastDiag    string `msgpack:"ld,omitempty"` // last SMTP diagnostic for DSN
+	LastDiag    string `msgpack:"ld,omitempty"` // last SMTP diagnostic (error, or accepting server reply once delivered)
 }
 
 // QueueMessage is an SMTP queue entry (SubspaceQueue).
@@ -110,6 +110,7 @@ type QueueMessage struct {
 	Ret            string           `msgpack:"ret,omitempty"`  // FULL or HDRS
 	Envid          string           `msgpack:"envid,omitempty"`
 	Body           string           `msgpack:"body,omitempty"` // 7BIT or 8BITMIME
+	Done           int64            `msgpack:"dn,omitempty"`   // unix ms when no recipient was left pending; kept as history until retention
 }
 
 // HasBlob reports whether BlobHash points at filesystem blob storage.

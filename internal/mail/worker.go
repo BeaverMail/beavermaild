@@ -15,7 +15,8 @@ import (
 
 // RemoteDeliverer submits mail to remote recipients (relay or MX).
 type RemoteDeliverer interface {
-	DeliverRemote(ctx context.Context, mailFrom, rcptTo string, data []byte) error
+	// DeliverRemote returns the accepting server's reply on success.
+	DeliverRemote(ctx context.Context, mailFrom, rcptTo string, data []byte) (string, error)
 }
 
 // OutboundSigner adds DKIM signatures before remote delivery.
@@ -32,6 +33,8 @@ type Worker struct {
 	remote RemoteDeliverer
 	signer OutboundSigner
 	policy QueuePolicy
+
+	lastPurge time.Time
 }
 
 // NewWorker returns a queue worker. remote may be nil when only local delivery is needed.
@@ -80,12 +83,50 @@ func (w *Worker) drain(ctx context.Context) {
 			w.log.Warn("queue deliver", "id", e.ID, slog.Any("err", err))
 		}
 	}
+	w.purgeCompleted(ctx, time.Now())
+}
+
+// purgeInterval bounds how often finished entries are scanned for expiry.
+const purgeInterval = time.Minute
+
+// purgeCompleted deletes finished entries older than KeepCompleted (or unstamped ones).
+func (w *Worker) purgeCompleted(ctx context.Context, now time.Time) {
+	if now.Sub(w.lastPurge) < min(purgeInterval, w.policy.KeepCompleted) {
+		return
+	}
+	w.lastPurge = now
+	entries, err := w.queue.ListAll(ctx)
+	if err != nil {
+		w.log.Warn("queue list", slog.Any("err", err))
+		return
+	}
+	for _, e := range entries {
+		if pendingRecipients(e.Msg) > 0 {
+			continue
+		}
+		if e.Msg.Done == 0 || now.Sub(time.UnixMilli(e.Msg.Done)) > w.policy.KeepCompleted {
+			if err := w.queue.Delete(ctx, e.ID); err != nil {
+				w.log.Warn("queue purge", "id", e.ID, slog.Any("err", err))
+			}
+		}
+	}
+}
+
+// finishEntry keeps a message with no pending recipients as history, or deletes it when retention is off.
+func (w *Worker) finishEntry(ctx context.Context, id uint32, msg storage.QueueMessage, now time.Time) error {
+	if w.policy.KeepCompleted <= 0 {
+		return w.queue.Delete(ctx, id)
+	}
+	if msg.Done == 0 {
+		msg.Done = now.UnixMilli()
+	}
+	return w.queue.Save(ctx, id, msg)
 }
 
 func (w *Worker) deliverEntry(ctx context.Context, e QueueEntry) error {
 	msg := e.Msg
 	if pendingRecipients(msg) == 0 {
-		return w.queue.Delete(ctx, e.ID)
+		return w.finishEntry(ctx, e.ID, msg, time.Now())
 	}
 	if IsHeld(msg) {
 		return nil
@@ -118,8 +159,9 @@ func (w *Worker) deliverEntry(ctx context.Context, e QueueEntry) error {
 			continue
 		}
 		RecordAttempt(&msg, i, now)
-		if err := w.deliverTo(ctx, msg.ReturnPath, rcpt.Address, raw); err != nil {
-			w.log.Debug("queue rcpt failed", "rcpt", rcpt.Address, slog.Any("err", err))
+		reply, err := w.deliverTo(ctx, msg.ReturnPath, rcpt.Address, raw)
+		if err != nil {
+			w.log.Warn("queue rcpt failed", "queue_id", e.ID, "rcpt", rcpt.Address, slog.Any("err", err))
 			rcpt.LastDiag = err.Error()
 			if deliveryPermanent(err) {
 				MarkPermanentFail(&msg, i)
@@ -134,6 +176,7 @@ func (w *Worker) deliverEntry(ctx context.Context, e QueueEntry) error {
 			changed = true
 			continue
 		}
+		rcpt.LastDiag = reply
 		MarkDelivered(&msg, i)
 		w.maybeSendDSN(ctx, e.ID, msg, *rcpt, raw, DSNActionDelivered, nil)
 		changed = true
@@ -143,7 +186,7 @@ func (w *Worker) deliverEntry(ctx context.Context, e QueueEntry) error {
 		return nil
 	}
 	if AllDone(msg) {
-		return w.queue.Delete(ctx, e.ID)
+		return w.finishEntry(ctx, e.ID, msg, now)
 	}
 	return w.queue.Save(ctx, e.ID, msg)
 }
@@ -154,15 +197,17 @@ func (w *Worker) expireEntry(ctx context.Context, e QueueEntry) error {
 	w.log.Info("queue message expired", "id", e.ID, "return_path", msg.ReturnPath)
 	raw, _ := w.queue.LoadRaw(ctx, msg)
 	returnPath := strings.TrimSpace(msg.ReturnPath)
-	for i, rcpt := range msg.Recipients {
-		if !recipientPending(rcpt) || returnPath == "" {
+	for i := range msg.Recipients {
+		if !recipientPending(msg.Recipients[i]) {
 			continue
 		}
-		rcpt.LastDiag = "delivery time expired"
-		w.maybeSendDSN(ctx, e.ID, msg, rcpt, raw, DSNActionFailed, fmt.Errorf("delivery time expired"))
+		msg.Recipients[i].LastDiag = "delivery time expired"
+		if returnPath != "" {
+			w.maybeSendDSN(ctx, e.ID, msg, msg.Recipients[i], raw, DSNActionFailed, fmt.Errorf("delivery time expired"))
+		}
 		MarkPermanentFail(&msg, i)
 	}
-	return w.queue.Delete(ctx, e.ID)
+	return w.finishEntry(ctx, e.ID, msg, time.Now())
 }
 
 func (w *Worker) maybeSendDelayDSN(ctx context.Context, queueID uint32, msg storage.QueueMessage, rcptIdx int, raw []byte, created, now time.Time, err error) bool {
@@ -246,23 +291,27 @@ func (w *Worker) deliverBounce(ctx context.Context, returnPath string, raw []byt
 	if w.remote == nil {
 		return errors.New("mail: no remote delivery for bounce")
 	}
-	return w.remote.DeliverRemote(ctx, "", returnPath, raw)
+	_, err := w.remote.DeliverRemote(ctx, "", returnPath, raw)
+	return err
 }
 
-func (w *Worker) deliverTo(ctx context.Context, returnPath, rcpt string, raw []byte) error {
+// deliverTo returns a short delivery record on success (local mailbox or the remote server's reply).
+func (w *Worker) deliverTo(ctx context.Context, returnPath, rcpt string, raw []byte) (string, error) {
 	acc, _, err := w.dir.ResolveEmail(ctx, rcpt)
 	if err == nil {
 		if !acc.Active {
-			return directory.ErrInactive
+			return "", directory.ErrInactive
 		}
-		_, err = w.inbox.Deliver(ctx, acc.ID, raw)
-		return err
+		if _, err = w.inbox.Deliver(ctx, acc.ID, raw); err != nil {
+			return "", err
+		}
+		return "delivered to local mailbox", nil
 	}
 	if !errors.Is(err, directory.ErrNotFound) {
-		return err
+		return "", err
 	}
 	if w.remote == nil {
-		return errors.New("mail: no remote delivery configured")
+		return "", errors.New("mail: no remote delivery configured")
 	}
 	return w.remote.DeliverRemote(ctx, returnPath, rcpt, raw)
 }

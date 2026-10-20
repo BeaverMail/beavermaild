@@ -265,6 +265,8 @@ export type QueueRecipient = {
   status: string
   next_due_ms: number
   last_attempt_ms: number
+  /** Last error, or the accepting server's reply once delivered. */
+  last_diag?: string
 }
 
 export type QueueEntry = {
@@ -275,6 +277,8 @@ export type QueueEntry = {
   pending: number
   held: boolean
   recipients: QueueRecipient[]
+  /** Unix ms when no recipient was left pending; finished entries stay listed for queue.keep_completed. */
+  completed_ms?: number
 }
 
 /** Lists outbound queue entries (admin). Pass all=true for non-pending too. */

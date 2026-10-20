@@ -19,28 +19,33 @@ type RemoteConfig struct {
 }
 
 // DeliverRemote submits mail using relay when set, otherwise MX lookup on rcptTo domain.
-func DeliverRemote(ctx context.Context, cfg RemoteConfig, mailFrom, rcptTo string, data []byte) error {
+// On success it returns "host: final server reply" for the delivery record.
+func DeliverRemote(ctx context.Context, cfg RemoteConfig, mailFrom, rcptTo string, data []byte) (string, error) {
 	if cfg.Relay != "" {
-		return Send(ctx, cfg.Relay, mailFrom, rcptTo, data, cfg.RelayOptions)
+		reply, err := SendReply(ctx, cfg.Relay, mailFrom, rcptTo, data, cfg.RelayOptions)
+		if err != nil {
+			return "", err
+		}
+		return cfg.Relay + ": " + reply, nil
 	}
 	domain, err := DomainFromAddress(rcptTo)
 	if err != nil {
-		return err
+		return "", err
 	}
 	var policy *mtasts.Policy
 	if cfg.MTASTS != nil {
 		policy, err = cfg.MTASTS.Policy(ctx, domain)
 		if err != nil {
-			return err
+			return "", err
 		}
 	}
 	hosts, err := LookupHosts(ctx, domain)
 	if err != nil {
-		return err
+		return "", err
 	}
 	hosts, err = filterMXForMTASTS(hosts, policy)
 	if err != nil {
-		return err
+		return "", err
 	}
 	return deliverMX(ctx, hosts, mailFrom, rcptTo, data, mxOptionsForPolicy(cfg.MXOptions, policy))
 }
@@ -77,28 +82,28 @@ func mxOptionsForPolicy(base ClientOptions, policy *mtasts.Policy) ClientOptions
 	return opts
 }
 
-func deliverMX(ctx context.Context, hosts []string, mailFrom, rcptTo string, data []byte, opts ClientOptions) error {
+func deliverMX(ctx context.Context, hosts []string, mailFrom, rcptTo string, data []byte, opts ClientOptions) (string, error) {
 	mxOpts := opts
 	if !mxOpts.OpportunisticSTARTTLS && !mxOpts.MTASTSRequireTLS {
 		mxOpts.OpportunisticSTARTTLS = true
 	}
 	var last error
 	for _, host := range hosts {
-		err := Send(ctx, host, mailFrom, rcptTo, data, mxOpts)
+		reply, err := SendReply(ctx, host, mailFrom, rcptTo, data, mxOpts)
 		if err == nil {
-			return nil
+			return host + ": " + reply, nil
 		}
 		if deliveryPermanent(err) {
-			return err
+			return "", err
 		}
 		if shouldTryNextMX(err) {
 			last = err
 			continue
 		}
-		return err
+		return "", err
 	}
 	if last != nil {
-		return last
+		return "", last
 	}
-	return fmt.Errorf("smtp: no MX hosts")
+	return "", fmt.Errorf("smtp: no MX hosts")
 }
