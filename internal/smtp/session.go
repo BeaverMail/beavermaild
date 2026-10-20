@@ -499,12 +499,11 @@ func (s *session) writeEHLO(extended bool) error {
 	if s.submission && s.secure {
 		lines = append(lines, "250-AUTH PLAIN LOGIN")
 	}
-	for _, line := range lines {
-		if err := s.writef(line); err != nil {
-			return err
-		}
-	}
-	return s.writef("250 2.0.0 Ok")
+	// One write for the whole multi-line reply (as Postfix/Exim do): naive clients read the
+	// socket once after EHLO and otherwise take a leftover "250-..." line as the AUTH reply.
+	lines = append(lines, "250 2.0.0 Ok")
+	_, err := io.WriteString(s.conn, strings.Join(lines, "\r\n")+"\r\n")
+	return err
 }
 
 // cmdAuth handles AUTH on submission listeners after TLS is active.
