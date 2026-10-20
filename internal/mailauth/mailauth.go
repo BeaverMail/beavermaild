@@ -34,6 +34,8 @@ type SessionState struct {
 	DMARC       string
 	DMARCPolicy string
 	ARC         string
+	DKIMDomain  string // d= of the passing signature (else the first one), for Authentication-Results
+	FromDomain  string // RFC5322.From domain DMARC evaluated, for Authentication-Results
 }
 
 // Wire maps session auth fields to filter request auth values.
@@ -90,8 +92,9 @@ func (v *Verifier) FinishEom(ctx context.Context, bodyPath, mailFrom, helo strin
 	ctx, cancel := context.WithTimeout(ctx, v.cfg.DNSTimeout)
 	defer cancel()
 
+	state.FromDomain = domainFromAddress(extractFromHeader(bodyPath))
 	if v.cfg.DKIMEnabled {
-		state.DKIM = v.verifyDKIM(ctx, bodyPath)
+		state.DKIM, state.DKIMDomain = v.verifyDKIM(ctx, bodyPath)
 	}
 	if v.cfg.DMARCEnabled {
 		dmarcRes, policy := v.evaluateDMARC(ctx, bodyPath, mailFrom, state)
@@ -124,11 +127,12 @@ func (v *Verifier) arcLookupTXT() arc.LookupTXT {
 	}
 }
 
-// verifyDKIM verifies bounded signatures using the verifier DNS seam.
-func (v *Verifier) verifyDKIM(ctx context.Context, bodyPath string) string {
+// verifyDKIM verifies bounded signatures using the verifier DNS seam. It returns the result
+// and the signing domain (of the passing signature, else of the first one).
+func (v *Verifier) verifyDKIM(ctx context.Context, bodyPath string) (result, domain string) {
 	f, err := os.Open(bodyPath)
 	if err != nil {
-		return "temperror"
+		return "temperror", ""
 	}
 	defer f.Close()
 	verifs, err := dkim.VerifyWithOptions(f, &dkim.VerifyOptions{
@@ -137,28 +141,28 @@ func (v *Verifier) verifyDKIM(ctx context.Context, bodyPath string) string {
 	})
 	if err != nil {
 		if dkim.IsPermFail(err) {
-			return "permerror"
+			return "permerror", ""
 		}
 		if dkim.IsTempFail(err) {
-			return "temperror"
+			return "temperror", ""
 		}
-		return "fail"
+		return "fail", ""
 	}
 	if len(verifs) == 0 {
-		return "none"
+		return "none", ""
 	}
 	for _, vr := range verifs {
 		if vr.Err == nil {
-			return "pass"
+			return "pass", vr.Domain
 		}
 	}
 	if dkim.IsPermFail(verifs[0].Err) {
-		return "permerror"
+		return "permerror", verifs[0].Domain
 	}
 	if dkim.IsTempFail(verifs[0].Err) {
-		return "temperror"
+		return "temperror", verifs[0].Domain
 	}
-	return "fail"
+	return "fail", verifs[0].Domain
 }
 
 func (v *Verifier) evaluateDMARC(ctx context.Context, bodyPath, mailFrom string, state SessionState) (result, policy string) {

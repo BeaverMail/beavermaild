@@ -11,7 +11,10 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
+
+	"github.com/BeaverMail/beaver/internal/mailauth"
 )
 
 func (s *session) nextFilterID() string {
@@ -95,13 +98,16 @@ func (s *session) runFilter(ctx context.Context, phase string, to []string, body
 }
 
 func (s *session) filterEom(ctx context.Context, raw []byte) (FilterOutcome, error) {
-	if s.filter == nil {
-		return FilterOutcome{Action: FilterActionAccept}, nil
-	}
-	if s.skipAntiSpam(ctx, FilterPhaseEom, s.rcptAddresses()) {
+	runFilter := s.filter != nil && !s.skipAntiSpam(ctx, FilterPhaseEom, s.rcptAddresses())
+	// Inbound mail is always verified, filter or not, so Authentication-Results can be added.
+	runAuth := s.mailAuth != nil && s.mailAuth.Enabled() && (runFilter || !s.submission)
+	if !runFilter && !runAuth {
 		return FilterOutcome{Action: FilterActionAccept}, nil
 	}
 	if s.filterTmpDir == "" {
+		if !runFilter {
+			return FilterOutcome{Action: FilterActionAccept}, nil
+		}
 		return s.runFilter(ctx, FilterPhaseEom, s.rcptAddresses(), "")
 	}
 	if err := os.MkdirAll(s.filterTmpDir, 0o755); err != nil {
@@ -114,8 +120,12 @@ func (s *session) filterEom(ctx context.Context, raw []byte) (FilterOutcome, err
 	}
 	defer os.Remove(path)
 
-	if s.mailAuth != nil && s.mailAuth.Enabled() {
+	if runAuth {
 		s.authState = s.mailAuth.FinishEom(ctx, path, s.mailFrom, s.heloDomain, s.authState)
+		s.authDone = true
+	}
+	if !runFilter {
+		return FilterOutcome{Action: FilterActionAccept}, nil
 	}
 
 	req := s.buildFilterRequest(FilterPhaseEom, s.rcptAddresses(), path)
@@ -248,7 +258,57 @@ func (s *session) deliverAfterFilter(ctx context.Context, raw []byte) error {
 	if len(out.Headers) > 0 {
 		raw = appendFilterHeaders(raw, out.Headers)
 	}
+	if s.authDone && !s.submission {
+		raw = prependAuthResults(raw, s.hostname, mailauth.AuthResults(s.hostname, s.mailFrom, s.heloDomain, s.authState))
+	}
 	return s.finishDelivery(ctx, raw)
+}
+
+// prependAuthResults removes Authentication-Results fields that claim our authserv-id
+// (RFC 8601 §5: a sender could forge them) and puts ours at the top, using the message's
+// own line ending.
+func prependAuthResults(raw []byte, authservID, value string) []byte {
+	nl := "\r\n"
+	if !bytes.Contains(raw, []byte("\r\n")) {
+		nl = "\n"
+	}
+	header := "Authentication-Results: " + strings.ReplaceAll(value, "\r\n", nl) + nl
+	return append([]byte(header), stripAuthResults(raw, authservID)...)
+}
+
+// stripAuthResults drops header fields "Authentication-Results: <authservID>[ version];...",
+// including their folded continuation lines; the body is left untouched.
+func stripAuthResults(raw []byte, authservID string) []byte {
+	out := make([]byte, 0, len(raw))
+	dropping := false
+	rest := raw
+	for len(rest) > 0 {
+		line := rest
+		if i := bytes.IndexByte(rest, '\n'); i >= 0 {
+			line = rest[:i+1]
+		}
+		rest = rest[len(line):]
+		if len(bytes.TrimRight(line, "\r\n")) == 0 { // end of header
+			out = append(out, line...)
+			return append(out, rest...)
+		}
+		if line[0] == ' ' || line[0] == '\t' {
+			if !dropping {
+				out = append(out, line...)
+			}
+			continue
+		}
+		dropping = false
+		if name, val, ok := bytes.Cut(line, []byte(":")); ok && strings.EqualFold(strings.TrimSpace(string(name)), "Authentication-Results") {
+			id, _, _ := strings.Cut(strings.TrimSpace(string(val)), ";")
+			if fields := strings.Fields(id); len(fields) > 0 && strings.EqualFold(fields[0], authservID) {
+				dropping = true
+				continue
+			}
+		}
+		out = append(out, line...)
+	}
+	return out
 }
 
 // checkSPFEhlo runs EHLO/HELO SPF when mailauth is enabled.

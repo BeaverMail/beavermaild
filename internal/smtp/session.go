@@ -45,6 +45,7 @@ type session struct {
 	mailAuth        *mailauth.Verifier
 	heloDomain      string
 	authState       mailauth.SessionState
+	authDone        bool // FinishEom ran for this transaction (Authentication-Results can be added)
 	iprevPTR        string
 	iprevResult     string
 	iprevDone       bool
@@ -654,6 +655,7 @@ func (s *session) reset() {
 	s.bdatUsed = false
 	s.filterTxnID = ""
 	s.authState = mailauth.SessionState{SPFEhlo: s.authState.SPFEhlo}
+	s.authDone = false
 }
 
 // finishDelivery stores the message for local recipients and enqueues remote ones.

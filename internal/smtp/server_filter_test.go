@@ -316,3 +316,66 @@ func expectPrefix(t *testing.T, r *bufio.Reader, prefix string) {
 		t.Fatalf("expected prefix %q got %q", prefix, strings.TrimSpace(line))
 	}
 }
+
+// Inbound mail gets our Authentication-Results on top even without an antispam filter,
+// and a forged one claiming our authserv-id is dropped.
+func TestSMTPAddsAuthenticationResults(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	_, inbox, dir := openSMTPTestStore(t, ctx)
+	acc, _, err := dir.ResolveEmail(ctx, "alice@localhost")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := smtp.NewServer(log.New("error"), ln.Addr().String(), dir, inbox, nil, "", "", smtp.Options{
+		MailAuth:     mailauth.New(mailauth.Config{Enabled: true, SPFEnabled: true, SPFResolver: spfResolver{}}),
+		FilterTmpDir: t.TempDir(),
+		Hostname:     "mx.example.net",
+	})
+	sctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() { _ = srv.ServeListener(sctx, ln) }()
+	time.Sleep(20 * time.Millisecond)
+
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	read := bufio.NewReader(conn)
+	expect(t, read, "220")
+	send(t, conn, "HELO helo.example")
+	expect(t, read, "250")
+	send(t, conn, "MAIL FROM:<sender@example.com>")
+	expect(t, read, "250")
+	send(t, conn, "RCPT TO:<alice@localhost>")
+	expect(t, read, "250")
+	send(t, conn, "DATA")
+	expect(t, read, "354")
+	send(t, conn, "Authentication-Results: mx.example.net; spf=pass smtp.mailfrom=sender@example.com")
+	send(t, conn, "Subject: hi")
+	send(t, conn, "")
+	send(t, conn, "body")
+	send(t, conn, ".")
+	expect(t, read, "250")
+
+	msgs, err := inbox.List(ctx, acc.ID, mail.InboxMailboxID)
+	if err != nil || len(msgs) != 1 {
+		t.Fatalf("inbox %d, %v", len(msgs), err)
+	}
+	raw, err := inbox.LoadRaw(ctx, msgs[0].Meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(raw)
+	if !strings.HasPrefix(got, "Authentication-Results: mx.example.net;") || !strings.Contains(got, "spf=fail smtp.mailfrom=sender@example.com") {
+		t.Fatalf("missing our Authentication-Results:\n%s", got)
+	}
+	if strings.Count(got, "Authentication-Results:") != 1 {
+		t.Fatalf("forged Authentication-Results kept:\n%s", got)
+	}
+}
