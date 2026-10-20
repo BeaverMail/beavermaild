@@ -27,7 +27,7 @@ mkdir -p "$TMP/data/tls" "$TMP/data/plugins" "$TMP/data/antispam"
 openssl req -x509 -newkey rsa:2048 -keyout "$TMP/data/tls/smoke.key" -out "$TMP/data/tls/smoke.crt" \
 	-days 1 -nodes -subj "/CN=localhost" 2>/dev/null
 cp "$TMP/beaver-plugin-antispam" "$TMP/data/plugins/"
-cp data/antispam/config.json.example "$TMP/data/antispam/config.json"
+cp cmd/beaver-plugin-antispam/examples/config.json.example "$TMP/data/antispam/config.json"
 
 INBOUND_PORT=$((17000 + RANDOM % 1000))
 SUB_STARTTLS_PORT=$((18000 + RANDOM % 1000))

@@ -31,3 +31,6 @@ internal/webui/dist/*
 .specs
 .agents
 TODO.md
+
+# Local dev data dir (beaver init -data-dir data)
+/data/

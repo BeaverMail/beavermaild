@@ -25,7 +25,7 @@ export BEAVER_CONFIG="$TMP/data/config.json"
 mkdir -p "$TMP/data/plugins"
 cp "$TMP/beaver-plugin-antispam" "$TMP/data/plugins/"
 mkdir -p "$TMP/data/antispam"
-cp data/antispam/config.json.example "$TMP/data/antispam/config.json"
+cp cmd/beaver-plugin-antispam/examples/config.json.example "$TMP/data/antispam/config.json"
 
 echo "== plugin CLI =="
 "$TMP/beaver" filter status -c "$BEAVER_CONFIG" 2>&1 | grep -q enabled=

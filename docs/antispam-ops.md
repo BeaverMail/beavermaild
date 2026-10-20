@@ -6,7 +6,7 @@ This note covers **host** settings that feed the antispam plugin wire, plus wher
 
 | Piece | Where | Default |
 |-------|--------|---------|
-| Plugin policy (scores, RBL, rules, traps) | `<data_dir>/antispam/config.json` | Copy from `data/antispam/config.json.example` |
+| Plugin policy (scores, RBL, rules, traps) | `<data_dir>/antispam/config.json` | Copy from `cmd/beaver-plugin-antispam/examples/config.json.example` |
 | Mail-auth verify (SPF/DKIM/DMARC/ARC) | Host `mail_auth` in `config.json` | Off until `mail_auth.enabled` |
 | Greylist | Host `smtp.greylist` | **Off** |
 | ASN / country at connect | Host `smtp.asn_lookup` | **Off** |
@@ -19,7 +19,7 @@ Greylist and ASN run in the SMTP core. The plugin only sees the results on the f
 <data_dir>/antispam/config.json
 ```
 
-Example: `data/antispam/config.json.example`. After edits, run `beaver filter reload` (or touch `<data_dir>/antispam/.reload`).
+Example: `cmd/beaver-plugin-antispam/examples/config.json.example`. After edits, run `beaver filter reload` (or touch `<data_dir>/antispam/.reload`).
 
 Useful knobs:
 
