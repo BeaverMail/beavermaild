@@ -22,6 +22,7 @@ type ClientOptions struct {
 	MTASTSRequireTLS      bool // MX: RFC 8461 enforce requires STARTTLS with PKIX verify
 	User                  string
 	Password              string
+	HeloName              string // EHLO name; should match the sending IP's PTR (default "localhost")
 }
 
 // Send submits one message to addr (relay or MX host:port).
@@ -53,7 +54,11 @@ func SendReply(ctx context.Context, addr, mailFrom, rcptTo string, data []byte, 
 	if err := expectCode(r, 220); err != nil {
 		return "", err
 	}
-	caps, err := ehlo(conn, r, "localhost")
+	helo := opts.HeloName
+	if helo == "" {
+		helo = "localhost"
+	}
+	caps, err := ehlo(conn, r, helo)
 	if err != nil {
 		return "", err
 	}
@@ -66,7 +71,7 @@ func SendReply(ctx context.Context, addr, mailFrom, rcptTo string, data []byte, 
 			return "", err
 		}
 		r = bufio.NewReader(conn)
-		caps, err = ehlo(conn, r, "localhost")
+		caps, err = ehlo(conn, r, helo)
 		if err != nil {
 			return "", err
 		}

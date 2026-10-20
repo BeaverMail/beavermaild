@@ -369,7 +369,7 @@ func TestClientSendBDAT(t *testing.T) {
 		}
 		defer ln.Close()
 
-		var bdatLine, chunk, afterChunk string
+		var ehloLine, bdatLine, chunk, afterChunk string
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
@@ -389,6 +389,7 @@ func TestClientSendBDAT(t *testing.T) {
 				line = strings.TrimRight(line, "\r\n")
 				switch {
 				case strings.HasPrefix(line, "EHLO"):
+					ehloLine = line
 					reply(conn, "250-mx.test\r\n"+ehloCaps+"250 OK\r\n")
 				case strings.HasPrefix(line, "MAIL"), strings.HasPrefix(line, "RCPT"):
 					reply(conn, "250 OK\r\n")
@@ -412,13 +413,13 @@ func TestClientSendBDAT(t *testing.T) {
 			}
 		}()
 
-		err = smtp.Send(context.Background(), ln.Addr().String(), "sender@example.com", "rcpt@example.com", []byte("chunk\r\n"), smtp.ClientOptions{})
+		err = smtp.Send(context.Background(), ln.Addr().String(), "sender@example.com", "rcpt@example.com", []byte("chunk\r\n"), smtp.ClientOptions{HeloName: "mx.example.com"})
 		if err != nil {
 			t.Fatalf("caps %q: %v", ehloCaps, err)
 		}
 		<-done
-		if bdatLine != "BDAT 7 LAST" || chunk != "chunk\r\n" || afterChunk != "" {
-			t.Fatalf("caps %q: bdat %q chunk %q stray %q", ehloCaps, bdatLine, chunk, afterChunk)
+		if ehloLine != "EHLO mx.example.com" || bdatLine != "BDAT 7 LAST" || chunk != "chunk\r\n" || afterChunk != "" {
+			t.Fatalf("caps %q: ehlo %q bdat %q chunk %q stray %q", ehloCaps, ehloLine, bdatLine, chunk, afterChunk)
 		}
 	}
 }

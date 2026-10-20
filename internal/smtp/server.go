@@ -33,6 +33,7 @@ type Options struct {
 	MaxConnections  int           // 0 = unlimited (tests); positive = per-listener cap
 	ReadTimeout     time.Duration // 0 = no idle read deadline
 	Status          *servicestatus.Registry
+	Hostname        string // banner and EHLO name (default "localhost")
 }
 
 // Server accepts inbound SMTP connections.
@@ -59,6 +60,7 @@ type Server struct {
 	maxConnections      int
 	readTimeout         time.Duration
 	status              *servicestatus.Registry
+	hostname            string
 }
 
 // NewServer returns an SMTP server. submissionAddr is optional plain listener (e.g. :587).
@@ -95,6 +97,7 @@ func NewServer(log *slog.Logger, addr string, dir *directory.Local, inbox *mail.
 		maxConnections:      opts.MaxConnections,
 		readTimeout:         opts.ReadTimeout,
 		status:              opts.Status,
+		hostname:            opts.Hostname,
 	}
 }
 
@@ -226,6 +229,9 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn, secure, submissio
 	defer lim.Release()
 	defer conn.Close()
 	sess := newSession(s.log, conn, s.dir, s.inbox, s.queue, s.certs, secure, s.tlsRequired, s.vrfyEnabled, submission, s.dataLimits, s.filter, s.filterTmpDir, s.filterTimeoutMs, s.mailAuth, s.authGate, s.sendGate, s.greylist, s.asnLookup, s.readTimeout)
+	if s.hostname != "" {
+		sess.hostname = s.hostname
+	}
 	if err := sess.run(ctx); err != nil && ctx.Err() == nil {
 		s.log.Debug("smtp session", slog.Any("err", err))
 	}

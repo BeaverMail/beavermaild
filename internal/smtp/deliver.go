@@ -74,6 +74,7 @@ func mxOptionsForPolicy(base ClientOptions, policy *mtasts.Policy) ClientOptions
 	opts := ClientOptions{
 		OpportunisticSTARTTLS: true,
 		TLSInsecureSkipVerify: base.TLSInsecureSkipVerify,
+		HeloName:              base.HeloName,
 	}
 	if policy != nil && policy.Enforce() {
 		opts.MTASTSRequireTLS = true

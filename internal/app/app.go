@@ -240,6 +240,7 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 			MaxConnections:  smtpMaxConn,
 			ReadTimeout:     smtpReadTO,
 			Status:          status,
+			Hostname:        cfg.SMTPHostname(),
 		}),
 		imap: imap.NewServer(log, cfg.IMAPListen(), dir, inbox, imap.Options{
 			Certs:          certs,

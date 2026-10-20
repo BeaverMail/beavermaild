@@ -122,6 +122,8 @@ type TLSConfig struct {
 
 // SMTPConfig holds inbound SMTP listener settings.
 type SMTPConfig struct {
+	// Hostname is the SMTP banner/EHLO name; it should match the server IP's PTR record.
+	Hostname                string                    `json:"hostname"`
 	Listen                  string                    `json:"listen"`
 	SubmissionListen        string                    `json:"submission_listen"`
 	SubmissionTLSListen     string                    `json:"submission_tls_listen"`
@@ -509,6 +511,21 @@ func (c *Config) SMTPListen() string {
 		return c.SMTP.Listen
 	}
 	return "127.0.0.1:1025"
+}
+
+// SMTPHostname returns the SMTP banner/EHLO name: smtp.hostname, else the first
+// ACME host, else the machine hostname. Receivers compare it with the IP's PTR record.
+func (c *Config) SMTPHostname() string {
+	if h := strings.TrimSpace(c.SMTP.Hostname); h != "" {
+		return h
+	}
+	if hosts := c.ACMEHosts(); len(hosts) > 0 {
+		return hosts[0]
+	}
+	if h, err := os.Hostname(); err == nil && h != "" {
+		return h
+	}
+	return "localhost"
 }
 
 // SMTPRelay returns the outbound SMTP relay (may be empty).

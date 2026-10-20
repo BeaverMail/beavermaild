@@ -21,6 +21,7 @@ func newRemoteDeliverer(c *config.Config, dir *directory.Local) remoteDeliverer 
 
 func remoteConfigFrom(c *config.Config) smtp.RemoteConfig {
 	tlsSkip := c.SMTPOutboundTLSInsecureSkip()
+	helo := c.SMTPHostname()
 	return smtp.RemoteConfig{
 		Relay: c.SMTPRelay(),
 		RelayOptions: smtp.ClientOptions{
@@ -28,8 +29,9 @@ func remoteConfigFrom(c *config.Config) smtp.RemoteConfig {
 			TLSInsecureSkipVerify: tlsSkip,
 			User:                  c.SMTPRelayUser(),
 			Password:              c.SMTPRelayPassword(),
+			HeloName:              helo,
 		},
-		MXOptions: smtp.ClientOptions{TLSInsecureSkipVerify: tlsSkip},
+		MXOptions: smtp.ClientOptions{TLSInsecureSkipVerify: tlsSkip, HeloName: helo},
 		MTASTS:    c.NewMTASTSResolver(),
 	}
 }

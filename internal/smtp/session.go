@@ -56,6 +56,7 @@ type session struct {
 	sendGate    security.SendGate
 	greylist    *Greylist
 	readTimeout time.Duration
+	hostname    string // banner and EHLO name
 
 	mailFrom  string
 	mailRet   mail.RetMode
@@ -116,11 +117,12 @@ func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *ma
 		greylist:        greylist,
 		asnLookup:       asnLookup,
 		readTimeout:     readTimeout,
+		hostname:        "localhost",
 	}
 }
 
 func (s *session) run(ctx context.Context) error {
-	if err := s.writef("220 localhost ESMTP BeaverMail"); err != nil {
+	if err := s.writef("220 %s ESMTP BeaverMail", s.hostname); err != nil {
 		return err
 	}
 	s.ensureIPRev(ctx)
@@ -465,10 +467,10 @@ func (s *session) filterHelo(ctx context.Context) error {
 
 func (s *session) writeEHLO(extended bool) error {
 	if !extended {
-		return s.writef("250 localhost")
+		return s.writef("250 %s", s.hostname)
 	}
 	lines := []string{
-		"250-localhost",
+		"250-" + s.hostname,
 		"250-ENHANCEDSTATUSCODES",
 		"250-8BITMIME",
 		"250-SMTPUTF8",

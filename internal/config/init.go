@@ -47,6 +47,7 @@ func InitLayout(configPath, dataDir, hostname string) (*Config, error) {
 	cfg.HTTP.Listen = "127.0.0.1:8080"
 	if hostname != "" {
 		cfg.TLS.ACMEHosts = []string{hostname}
+		cfg.SMTP.Hostname = hostname
 		cfg.HTTP.Listen = ":443"
 		cfg.HTTP.PlainListen = ":80"
 		cfg.SMTP.Listen = ":25"

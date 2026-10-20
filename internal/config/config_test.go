@@ -75,6 +75,9 @@ func TestInitLayoutHostnameAndLoopbackDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if loaded.SMTPHostname() != "mail.example.com" {
+		t.Fatalf("smtp hostname %q", loaded.SMTPHostname())
+	}
 	if hosts := loaded.ACMEHosts(); len(hosts) != 1 || hosts[0] != "mail.example.com" {
 		t.Fatalf("acme hosts %v", hosts)
 	}
