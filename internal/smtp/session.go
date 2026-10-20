@@ -720,36 +720,33 @@ func (s *session) finishDelivery(ctx context.Context, raw []byte) error {
 
 // cmdBDAT receives one binary chunk and delivers the message on the final LAST chunk.
 func (s *session) cmdBDAT(ctx context.Context, arg string) error {
-	if s.mailFrom == "" || len(s.rcpt) == 0 {
-		return s.writef(replyBadSequence)
-	}
 	size, last, ok := parseBDAT(arg)
 	if !ok {
-		return s.writef(replySyntaxBDAT)
+		// Chunk length unknown: the stream cannot be resynchronized, so end the session.
+		_ = s.writef(replySyntaxBDAT)
+		return fmt.Errorf("smtp: bdat syntax %q", arg)
 	}
-	if size > s.dataLimits.MaxMessageBytes {
-		return s.writef(replyMessageTooLarge)
+	if size > s.dataLimits.MaxMessageBytes || len(s.bdatBuf)+size > s.dataLimits.MaxMessageBytes {
+		// Refuse to read an oversized chunk; the bytes in flight leave the stream unusable.
+		_ = s.writef(replyMessageTooLarge)
+		s.reset()
+		return fmt.Errorf("smtp: bdat chunk %d bytes over limit", size)
 	}
-	if len(s.bdatBuf)+size > s.dataLimits.MaxMessageBytes {
-		return s.writef(replyMessageTooLarge)
-	}
-	if err := s.writef(replyOK); err != nil {
-		return err
-	}
+	// RFC 3030: the chunk follows the command line immediately and the reply comes only after it.
 	chunk, err := readBDATChunk(s.r, size, s.bumpReadDeadline)
 	if err != nil {
 		s.reset()
 		return err
 	}
+	if s.mailFrom == "" || len(s.rcpt) == 0 {
+		return s.writef(replyBadSequence) // chunk already consumed, session stays in sync
+	}
 	s.bdatUsed = true
 	s.bdatBuf = append(s.bdatBuf, chunk...)
 	if !last {
-		return nil
+		return s.writef("250 2.0.0 %d octets received", size)
 	}
-	if err := s.deliverAfterFilter(ctx, s.bdatBuf); err != nil {
-		return err
-	}
-	return nil
+	return s.deliverAfterFilter(ctx, s.bdatBuf)
 }
 
 // buildEnvelopeDSN collects MAIL/RCPT DSN parameters for queued remote recipients.

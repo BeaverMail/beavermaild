@@ -114,9 +114,8 @@ func TestSMTPBDATDeliver(t *testing.T) {
 	expect(t, read, "250")
 
 	body := "Subject: bdat\r\n\r\nchunked"
-	send(t, conn, fmt.Sprintf("BDAT %d LAST", len(body)))
-	expect(t, read, "250")
-	if _, err := fmt.Fprintf(conn, "%s\r\n", body); err != nil {
+	// RFC 3030: command line, then exactly len(body) bytes (no CRLF after), then one reply.
+	if _, err := fmt.Fprintf(conn, "BDAT %d LAST\r\n%s", len(body), body); err != nil {
 		t.Fatal(err)
 	}
 	expect(t, read, "250")
@@ -138,7 +137,8 @@ func TestSMTPBDATMultiChunk(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 
 	dir := directory.NewLocal(store)
-	if _, err := directory.SeedDev(ctx, dir); err != nil {
+	acc, err := directory.SeedDev(ctx, dir)
+	if err != nil {
 		t.Fatal(err)
 	}
 	blobs := blob.NewFS(t.TempDir() + "/blobs")
@@ -169,19 +169,69 @@ func TestSMTPBDATMultiChunk(t *testing.T) {
 	send(t, conn, "RCPT TO:<alice@localhost>")
 	expect(t, read, "250")
 
-	part1 := "part-1-"
+	// Each chunk is the command line plus exactly n bytes; the reply follows the chunk.
+	part1 := "Subject: x\r\n\r\npart-1-"
 	part2 := "part-2"
-	send(t, conn, fmt.Sprintf("BDAT %d", len(part1)))
-	expect(t, read, "250")
-	if _, err := fmt.Fprintf(conn, "%s\r\n", part1); err != nil {
-		t.Fatal(err)
-	}
-	send(t, conn, fmt.Sprintf("BDAT %d LAST", len(part2)))
-	expect(t, read, "250")
-	if _, err := fmt.Fprintf(conn, "%s\r\n", part2); err != nil {
+	if _, err := fmt.Fprintf(conn, "BDAT %d\r\n%s", len(part1), part1); err != nil {
 		t.Fatal(err)
 	}
 	expect(t, read, "250")
+	if _, err := fmt.Fprintf(conn, "BDAT %d LAST\r\n%s", len(part2), part2); err != nil {
+		t.Fatal(err)
+	}
+	expect(t, read, "250")
+
+	msgs, err := inbox.List(ctx, acc.ID, mail.InboxMailboxID)
+	if err != nil || len(msgs) != 1 {
+		t.Fatalf("inbox %d messages, err %v", len(msgs), err)
+	}
+	raw, err := inbox.LoadRaw(ctx, msgs[0].Meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(string(raw), "part-1-part-2") {
+		t.Fatalf("stored %q", raw)
+	}
+}
+
+// Our client delivering to our server over CHUNKING+PIPELINING, as Gmail does inbound.
+func TestSMTPClientToServerBDAT(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, "file:"+t.TempDir()+"/store.sqlite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	dir := directory.NewLocal(store)
+	acc, err := directory.SeedDev(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inbox := mail.NewInbox(store, blob.NewFS(t.TempDir()+"/blobs"))
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := smtp.NewServer(log.New("error"), ln.Addr().String(), dir, inbox, nil, "", "", smtp.Options{})
+	sctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() { _ = srv.ServeListener(sctx, ln) }()
+	time.Sleep(20 * time.Millisecond)
+
+	body := "Subject: e2e\r\n\r\nhello over bdat\r\n"
+	reply, err := smtp.SendReply(ctx, ln.Addr().String(), "sender@example.com", "alice@localhost", []byte(body), smtp.ClientOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(reply, "250") {
+		t.Fatalf("reply %q", reply)
+	}
+	msgs, err := inbox.List(ctx, acc.ID, mail.InboxMailboxID)
+	if err != nil || len(msgs) != 1 {
+		t.Fatalf("inbox %d messages, err %v", len(msgs), err)
+	}
 }
 
 func TestClientEHLOSizeAnd8BITMIME(t *testing.T) {
