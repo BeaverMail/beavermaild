@@ -424,10 +424,13 @@ func (a *App) Run(ctx context.Context) error {
 		a.log.Info("shutting down")
 		return a.Close()
 	case err := <-errCh:
+		closeErr := a.Close()
 		if err != nil {
 			a.log.Error("server stopped", slog.Any("err", err))
+			// Non-zero exit so a supervisor (systemd Restart=on-failure) notices.
+			return err
 		}
-		return a.Close()
+		return closeErr
 	}
 }
 
