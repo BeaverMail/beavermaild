@@ -42,12 +42,12 @@ func finalizeClassify(id string, tags []string, cfg pluginConfig) filterResp {
 	return resp
 }
 
-// buildSpamHeaders returns X-Spam-Result and X-Spam-Score for accepted messages.
+// buildSpamHeaders returns SpamAssassin-style headers for accepted messages, which mail
+// clients (e.g. Thunderbird "trust SpamAssassin headers") and Sieve rules recognize:
+// X-Spam-Flag (spam only), X-Spam-Score (number), X-Spam-Level (one * per point),
+// X-Spam-Status, plus X-Spam-Result with the per-rule weights.
 func buildSpamHeaders(tags []string, total float64, cfg pluginConfig) map[string]string {
-	class := "ham"
-	if cfg.Thresholds.Spam > 0 && total >= cfg.Thresholds.Spam {
-		class = "spam"
-	}
+	isSpam := cfg.Thresholds.Spam > 0 && total >= cfg.Thresholds.Spam
 	var parts []tagScore
 	seen := make(map[string]struct{})
 	for _, tag := range tags {
@@ -68,14 +68,35 @@ func buildSpamHeaders(tags []string, total float64, cfg pluginConfig) map[string
 		return parts[i].tag < parts[j].tag
 	})
 	var result strings.Builder
+	names := make([]string, len(parts))
 	for i, p := range parts {
 		if i > 0 {
 			result.WriteString(", ")
 		}
 		fmt.Fprintf(&result, "%s (%.2f)", p.tag, p.score)
+		names[i] = p.tag
+	}
+	verdict := "No"
+	if isSpam {
+		verdict = "Yes"
+	}
+	status := fmt.Sprintf("%s, score=%.1f", verdict, total)
+	if cfg.Thresholds.Spam > 0 {
+		status += fmt.Sprintf(" required=%.1f", cfg.Thresholds.Spam)
+	}
+	tests := strings.Join(names, ",")
+	if tests == "" {
+		tests = "none"
 	}
 	headers := map[string]string{
-		"X-Spam-Score": fmt.Sprintf("%s, score=%.2f", class, total),
+		"X-Spam-Score":  fmt.Sprintf("%.1f", total),
+		"X-Spam-Status": status + " tests=" + tests,
+	}
+	if level := min(int(total), 50); level > 0 {
+		headers["X-Spam-Level"] = strings.Repeat("*", level)
+	}
+	if isSpam {
+		headers["X-Spam-Flag"] = "YES"
 	}
 	if result.Len() > 0 {
 		headers["X-Spam-Result"] = result.String()

@@ -72,8 +72,22 @@ func TestBuildSpamHeadersResult(t *testing.T) {
 	if h["X-Spam-Result"] == "" {
 		t.Fatal("missing X-Spam-Result")
 	}
-	if !strings.Contains(h["X-Spam-Score"], "spam") {
-		t.Fatalf("X-Spam-Score=%q", h["X-Spam-Score"])
+	if h["X-Spam-Flag"] != "YES" || h["X-Spam-Score"] != "8.0" || h["X-Spam-Level"] != "********" {
+		t.Fatalf("spam headers %v", h)
+	}
+	if !strings.HasPrefix(h["X-Spam-Status"], "Yes, score=8.0 required=5.0 tests=") {
+		t.Fatalf("X-Spam-Status=%q", h["X-Spam-Status"])
+	}
+
+	ham := buildSpamHeaders(nil, -0.5, cfg)
+	if _, ok := ham["X-Spam-Flag"]; ok {
+		t.Fatalf("ham must not carry X-Spam-Flag: %v", ham)
+	}
+	if _, ok := ham["X-Spam-Level"]; ok {
+		t.Fatalf("no level for a score below 1: %v", ham)
+	}
+	if ham["X-Spam-Score"] != "-0.5" || ham["X-Spam-Status"] != "No, score=-0.5 required=5.0 tests=none" {
+		t.Fatalf("ham headers %v", ham)
 	}
 }
 

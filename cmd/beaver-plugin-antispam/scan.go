@@ -143,10 +143,11 @@ func runScan(dataDir string, req plugin.CliRequest) error {
 }
 
 func spamClass(resp filterResp) string {
-	if v := resp.Headers["X-Spam-Score"]; v != "" {
-		if class, _, ok := strings.Cut(v, ","); ok {
-			return strings.TrimSpace(class)
-		}
+	if strings.EqualFold(resp.Headers["X-Spam-Flag"], "YES") {
+		return "spam"
+	}
+	if resp.Headers["X-Spam-Status"] != "" {
+		return "ham"
 	}
 	if resp.Action == "reject" || resp.Action == "discard" {
 		return resp.Action

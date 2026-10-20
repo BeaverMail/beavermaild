@@ -7,8 +7,8 @@ import (
 )
 
 func TestIncludeScanRowOnlyNonHam(t *testing.T) {
-	ham := filterResp{Action: "accept", Score: 1, Headers: map[string]string{"X-Spam-Score": "ham, score=1.00"}}
-	spam := filterResp{Action: "accept", Score: 7, Headers: map[string]string{"X-Spam-Score": "spam, score=7.00"}}
+	ham := filterResp{Action: "accept", Score: 1, Headers: map[string]string{"X-Spam-Status": "No, score=1.0"}}
+	spam := filterResp{Action: "accept", Score: 7, Headers: map[string]string{"X-Spam-Flag": "YES", "X-Spam-Status": "Yes, score=7.0"}}
 	if includeScanRow(ham, scanReportOpts{Only: "non-ham"}) {
 		t.Fatal("ham excluded for non-ham")
 	}
@@ -19,7 +19,7 @@ func TestIncludeScanRowOnlyNonHam(t *testing.T) {
 
 func TestIncludeScanRowMinScore(t *testing.T) {
 	low := filterResp{Action: "accept", Score: 2}
-	high := filterResp{Action: "accept", Score: 8, Headers: map[string]string{"X-Spam-Score": "spam, score=8.00"}}
+	high := filterResp{Action: "accept", Score: 8, Headers: map[string]string{"X-Spam-Flag": "YES", "X-Spam-Status": "Yes, score=8.0"}}
 	opts := scanReportOpts{MinScore: 5}
 	if includeScanRow(low, opts) {
 		t.Fatal("low score excluded")
