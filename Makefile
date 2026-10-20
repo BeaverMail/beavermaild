@@ -33,3 +33,4 @@ web-dev:
 web-build:
 	cd web && npm run build
 	@test -f $(WEB_DIST)/index.html || (echo "web-build: missing $(WEB_DIST)/index.html" >&2; exit 1)
+	@touch $(WEB_DIST)/.gitkeep # adapter-static wipes dist; keep the tracked embed placeholder

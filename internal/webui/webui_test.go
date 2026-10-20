@@ -7,11 +7,11 @@ import (
 	"github.com/BeaverMail/beaver/internal/webui"
 )
 
-// TestEmbedIncludesIndex checks go:embed always ships at least index.html.
+// TestEmbedIncludesIndex checks the UI is enabled only when the SPA build (index.html) is embedded.
 func TestEmbedIncludesIndex(t *testing.T) {
 	t.Parallel()
 	if !webui.Enabled() {
-		t.Fatal("expected Enabled")
+		t.Skip("no SPA build in internal/webui/dist (run make web-build)")
 	}
 	root, ok := webui.Assets()
 	if !ok || root == nil {

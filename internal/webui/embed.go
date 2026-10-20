@@ -6,7 +6,7 @@ import (
 	"io/fs"
 )
 
-// dist always embeds at least index.html (kept in git); full SPA after web-build.
+// dist always holds .gitkeep (kept in git, so the embed compiles); the SPA appears after web-build.
 //
 //go:embed all:dist
 var dist embed.FS
@@ -20,5 +20,8 @@ func init() {
 	if err != nil {
 		panic("webui: embed dist: " + err.Error())
 	}
-	assets = sub
+	// Without a built SPA (fresh clone, make beaver-go) the UI stays disabled instead of serving a blank page.
+	if _, err := fs.Stat(sub, "index.html"); err == nil {
+		assets = sub
+	}
 }

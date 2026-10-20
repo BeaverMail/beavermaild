@@ -19,7 +19,6 @@ web/node_modules/
 web/build/
 web/.svelte-kit/
 internal/webui/dist/*
-!internal/webui/dist/index.html
 
 # Editor / tooling
 .*
@@ -28,6 +27,7 @@ internal/webui/dist/*
 !.github
 !web/.gitignore
 !web/.npmrc
+!internal/webui/dist/.gitkeep
 .specs
 .agents
 TODO.md
