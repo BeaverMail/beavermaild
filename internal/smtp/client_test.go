@@ -424,6 +424,62 @@ func TestClientSendBDAT(t *testing.T) {
 	}
 }
 
+// Stored messages use bare LF; over BDAT (sent verbatim) they must arrive as CRLF.
+func TestClientSendBDATNormalizesCRLF(t *testing.T) {
+	t.Parallel()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	var chunk string
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+		r := bufio.NewReader(conn)
+		reply(conn, "220 mx.test ESMTP\r\n")
+		for {
+			line, err := r.ReadString('\n')
+			if err != nil {
+				return
+			}
+			line = strings.TrimRight(line, "\r\n")
+			switch {
+			case strings.HasPrefix(line, "EHLO"):
+				reply(conn, "250-mx.test\r\n250-CHUNKING\r\n250 OK\r\n")
+			case strings.HasPrefix(line, "MAIL"), strings.HasPrefix(line, "RCPT"):
+				reply(conn, "250 OK\r\n")
+			case strings.HasPrefix(line, "BDAT"):
+				var n int
+				_, _ = fmt.Sscanf(line, "BDAT %d", &n)
+				buf := make([]byte, n)
+				if _, err := io.ReadFull(r, buf); err != nil {
+					return
+				}
+				chunk = string(buf)
+				reply(conn, "250 queued\r\n")
+			case line == "QUIT":
+				reply(conn, "221 bye\r\n")
+				return
+			}
+		}
+	}()
+	lf := "Date: x\nTo: b@example.org\nFrom: a@example.com\n\nbody\n"
+	if err := smtp.Send(context.Background(), ln.Addr().String(), "a@example.com", "b@example.org", []byte(lf), smtp.ClientOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	<-done
+	if chunk != "Date: x\r\nTo: b@example.org\r\nFrom: a@example.com\r\n\r\nbody\r\n" {
+		t.Fatalf("chunk %q", chunk)
+	}
+}
+
 func TestClientSendPipelining(t *testing.T) {
 	t.Parallel()
 

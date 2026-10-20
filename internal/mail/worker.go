@@ -142,6 +142,8 @@ func (w *Worker) deliverEntry(ctx context.Context, e QueueEntry) error {
 	if err != nil {
 		return err
 	}
+	// Sign the exact bytes that go on the wire (stored DATA messages use bare LF).
+	raw = CRLF(raw)
 	if w.signer != nil && w.hasPendingRemote(ctx, msg) {
 		raw, err = w.signer.Sign(msg.ReturnPath, raw)
 		if err != nil {

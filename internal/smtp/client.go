@@ -10,6 +10,8 @@ import (
 	"net"
 	"strings"
 	"time"
+
+	"github.com/BeaverMail/beaver/internal/mail"
 )
 
 const clientTimeout = 30 * time.Second
@@ -36,6 +38,8 @@ func SendReply(ctx context.Context, addr, mailFrom, rcptTo string, data []byte, 
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	// BDAT sends bytes verbatim and SIZE counts them: both need the CRLF wire form.
+	data = mail.CRLF(data)
 
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
