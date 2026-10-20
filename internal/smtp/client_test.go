@@ -463,7 +463,8 @@ func TestClientSendBDATNormalizesCRLF(t *testing.T) {
 					return
 				}
 				chunk = string(buf)
-				reply(conn, "250 queued\r\n")
+				// Exim answers BDAT with a multi-line reply.
+				reply(conn, fmt.Sprintf("250- %d byte chunk, total %d\r\n250 OK id=1abc\r\n", n, n))
 			case line == "QUIT":
 				reply(conn, "221 bye\r\n")
 				return
@@ -471,12 +472,16 @@ func TestClientSendBDATNormalizesCRLF(t *testing.T) {
 		}
 	}()
 	lf := "Date: x\nTo: b@example.org\nFrom: a@example.com\n\nbody\n"
-	if err := smtp.Send(context.Background(), ln.Addr().String(), "a@example.com", "b@example.org", []byte(lf), smtp.ClientOptions{}); err != nil {
+	got, err := smtp.SendReply(context.Background(), ln.Addr().String(), "a@example.com", "b@example.org", []byte(lf), smtp.ClientOptions{})
+	if err != nil {
 		t.Fatal(err)
 	}
 	<-done
 	if chunk != "Date: x\r\nTo: b@example.org\r\nFrom: a@example.com\r\n\r\nbody\r\n" {
 		t.Fatalf("chunk %q", chunk)
+	}
+	if got != "250 OK id=1abc" {
+		t.Fatalf("final reply %q, want the last line of the multi-line reply", got)
 	}
 }
 

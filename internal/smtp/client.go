@@ -301,14 +301,23 @@ func expectCode(r *bufio.Reader, want int) error {
 	return err
 }
 
-// expectReply reads one reply line and returns it trimmed when the code matches want.
+// expectReply reads one reply, including every "NNN-" continuation line (RFC 5321
+// multi-line replies, e.g. Exim's BDAT "250- 1249 byte chunk" then "250 OK id=..."), and
+// returns its final line trimmed when the code matches want.
 func expectReply(r *bufio.Reader, want int) (string, error) {
-	line, err := r.ReadString('\n')
-	if err != nil {
-		return "", err
-	}
-	if len(line) < 3 {
-		return "", fmt.Errorf("smtp client: short response %q", line)
+	var line string
+	for {
+		l, err := r.ReadString('\n')
+		if err != nil {
+			return "", err
+		}
+		if len(l) < 3 {
+			return "", fmt.Errorf("smtp client: short response %q", l)
+		}
+		line = l
+		if len(l) < 4 || l[3] != '-' {
+			break
+		}
 	}
 	code := 0
 	_, _ = fmt.Sscanf(line[:3], "%d", &code)
