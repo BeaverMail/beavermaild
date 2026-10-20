@@ -70,9 +70,10 @@ type session struct {
 
 type rcptTarget struct {
 	address   string
-	accountID uint32 // 0 = outbound queue recipient
+	accountID uint32 // 0 = outbound queue recipient (unless report is set)
 	notify    mail.NotifyFlags
 	orcpt     string
+	report    string // dmarc|tls: goes to the domain report store, never an INBOX
 }
 
 type smtpCommand struct {
@@ -362,34 +363,39 @@ func (s *session) handleRcpt(ctx context.Context, arg string, mailBlocked bool) 
 		}
 		return err
 	}
-	acc, _, err := s.dir.ResolveEmail(ctx, addr)
-	if err != nil {
-		if errors.Is(err, directory.ErrNotFound) {
-			acc, _, err = s.dir.ResolveCatchAll(ctx, domName)
-			if err != nil {
-				if errors.Is(err, directory.ErrNotFound) {
-					return s.writef(replyUserUnknown)
+	target := rcptTarget{
+		address: normalizeEnvelopeAddress(addr),
+		notify:  rcptParams.Notify,
+		orcpt:   rcptParams.Orcpt,
+		report:  reportKindForAddress(addr),
+	}
+	// Report addresses skip account lookup so a catch-all cannot swallow them.
+	if target.report == "" {
+		acc, _, err := s.dir.ResolveEmail(ctx, addr)
+		if err != nil {
+			if errors.Is(err, directory.ErrNotFound) {
+				acc, _, err = s.dir.ResolveCatchAll(ctx, domName)
+				if err != nil {
+					if errors.Is(err, directory.ErrNotFound) {
+						return s.writef(replyUserUnknown)
+					}
+					return err
 				}
+			} else {
 				return err
 			}
-		} else {
-			return err
 		}
-	}
-	if !acc.Active {
-		return s.writef(replyUserInactive)
+		if !acc.Active {
+			return s.writef(replyUserInactive)
+		}
+		target.accountID = acc.ID
 	}
 	if ok, err := s.allowGreylist(ctx, addr); err != nil {
 		return err
 	} else if !ok {
 		return s.writef("452 4.2.2 Try again later")
 	}
-	s.rcpt = append(s.rcpt, rcptTarget{
-		address:   normalizeEnvelopeAddress(addr),
-		accountID: acc.ID,
-		notify:    rcptParams.Notify,
-		orcpt:     rcptParams.Orcpt,
-	})
+	s.rcpt = append(s.rcpt, target)
 	if out, err := s.runFilter(ctx, FilterPhaseRcpt, []string{normalizeEnvelopeAddress(addr)}, ""); err != nil {
 		return err
 	} else if out.Action != FilterActionAccept {
@@ -652,6 +658,17 @@ func (s *session) finishDelivery(ctx context.Context, raw []byte) error {
 	}
 	var remotes []string
 	for _, t := range s.rcpt {
+		if t.report != "" {
+			if err := s.storeReport(ctx, t, raw); err != nil {
+				s.log.Warn("store report failed", "rcpt", t.address, slog.Any("err", err))
+				if err := s.writef(replyLocalError); err != nil {
+					return err
+				}
+				s.reset()
+				return nil
+			}
+			continue
+		}
 		if t.accountID == 0 {
 			remotes = append(remotes, t.address)
 			continue
