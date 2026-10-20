@@ -120,7 +120,7 @@ func sendPipelined(conn net.Conn, r *bufio.Reader, mailLine, rcptLine string, da
 		return err
 	}
 	if useBDAT {
-		if err := writeLine(conn, fmt.Sprintf("BDAT %d LAST", len(data))); err != nil {
+		if err := writeBDATChunk(conn, data); err != nil {
 			return err
 		}
 	} else {
@@ -135,12 +135,6 @@ func sendPipelined(conn net.Conn, r *bufio.Reader, mailLine, rcptLine string, da
 		return err
 	}
 	if useBDAT {
-		if err := expectCode(r, 250); err != nil {
-			return err
-		}
-		if err := writeBDATChunk(conn, data); err != nil {
-			return err
-		}
 		if err := expectCode(r, 250); err != nil {
 			return err
 		}
@@ -161,9 +155,6 @@ func sendPipelined(conn net.Conn, r *bufio.Reader, mailLine, rcptLine string, da
 
 func sendBody(conn net.Conn, r *bufio.Reader, data []byte, caps clientCaps) error {
 	if caps.Chunking && len(data) > 0 {
-		if err := cmd(conn, r, fmt.Sprintf("BDAT %d LAST", len(data)), 250); err != nil {
-			return err
-		}
 		if err := writeBDATChunk(conn, data); err != nil {
 			return err
 		}
@@ -185,13 +176,13 @@ func sendBody(conn net.Conn, r *bufio.Reader, data []byte, caps clientCaps) erro
 	return nil
 }
 
+// writeBDATChunk sends "BDAT n LAST" immediately followed by exactly n bytes (RFC 3030):
+// the server replies only after reading the chunk, so waiting for a reply in between deadlocks.
 func writeBDATChunk(conn net.Conn, data []byte) error {
-	if len(data) > 0 {
-		if _, err := conn.Write(data); err != nil {
-			return err
-		}
+	if err := writeLine(conn, fmt.Sprintf("BDAT %d LAST", len(data))); err != nil {
+		return err
 	}
-	_, err := conn.Write([]byte("\r\n"))
+	_, err := conn.Write(data)
 	return err
 }
 

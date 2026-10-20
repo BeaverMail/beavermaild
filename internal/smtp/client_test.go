@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"net"
 	"strings"
 	"testing"
@@ -357,65 +358,68 @@ func TestClientOpportunisticSTARTTLS(t *testing.T) {
 	}
 }
 
+// The fake server follows RFC 3030: it replies to BDAT only after reading the whole chunk,
+// as real MX hosts (e.g. Gmail) do. Replying early would hide a client that waits in between.
 func TestClientSendBDAT(t *testing.T) {
 	t.Parallel()
-
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ln.Close()
-
-	var bdatLine string
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		conn, err := ln.Accept()
+	for _, ehloCaps := range []string{"250-CHUNKING\r\n", "250-PIPELINING\r\n250-CHUNKING\r\n"} {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
-			return
+			t.Fatal(err)
 		}
-		defer conn.Close()
-		_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
-		r := bufio.NewReader(conn)
-		reply(conn, "220 mx.test ESMTP\r\n")
-		for {
-			line, err := r.ReadString('\n')
+		defer ln.Close()
+
+		var bdatLine, chunk, afterChunk string
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			conn, err := ln.Accept()
 			if err != nil {
 				return
 			}
-			line = strings.TrimSpace(line)
-			switch {
-			case strings.HasPrefix(line, "EHLO"):
-				reply(conn, "250-mx.test\r\n250-CHUNKING\r\n250 OK\r\n")
-			case strings.HasPrefix(line, "MAIL"), strings.HasPrefix(line, "RCPT"):
-				reply(conn, "250 OK\r\n")
-			case strings.HasPrefix(line, "BDAT"):
-				bdatLine = line
-				reply(conn, "250 OK\r\n")
-				payload, err := r.ReadString('\n')
+			defer conn.Close()
+			_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+			r := bufio.NewReader(conn)
+			reply(conn, "220 mx.test ESMTP\r\n")
+			for {
+				line, err := r.ReadString('\n')
 				if err != nil {
 					return
 				}
-				if payload != "chunk\r\n" {
+				line = strings.TrimRight(line, "\r\n")
+				switch {
+				case strings.HasPrefix(line, "EHLO"):
+					reply(conn, "250-mx.test\r\n"+ehloCaps+"250 OK\r\n")
+				case strings.HasPrefix(line, "MAIL"), strings.HasPrefix(line, "RCPT"):
+					reply(conn, "250 OK\r\n")
+				case strings.HasPrefix(line, "BDAT"):
+					bdatLine = line
+					var n int
+					_, _ = fmt.Sscanf(line, "BDAT %d", &n)
+					buf := make([]byte, n)
+					if _, err := io.ReadFull(r, buf); err != nil {
+						return
+					}
+					chunk = string(buf)
+					reply(conn, "250 queued\r\n")
+				case line == "QUIT":
+					reply(conn, "221 bye\r\n")
 					return
+				default:
+					afterChunk = line
+					reply(conn, "500 unexpected\r\n")
 				}
-				reply(conn, "250 queued\r\n")
-				return
-			case strings.HasPrefix(line, "QUIT"):
-				reply(conn, "221 bye\r\n")
-				return
 			}
-		}
-	}()
+		}()
 
-	ctx := context.Background()
-	err = smtp.Send(ctx, ln.Addr().String(), "sender@example.com", "rcpt@example.com", []byte("chunk\r\n"), smtp.ClientOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	<-done
-	if !strings.HasPrefix(bdatLine, "BDAT 7 LAST") {
-		t.Fatalf("got %q", bdatLine)
+		err = smtp.Send(context.Background(), ln.Addr().String(), "sender@example.com", "rcpt@example.com", []byte("chunk\r\n"), smtp.ClientOptions{})
+		if err != nil {
+			t.Fatalf("caps %q: %v", ehloCaps, err)
+		}
+		<-done
+		if bdatLine != "BDAT 7 LAST" || chunk != "chunk\r\n" || afterChunk != "" {
+			t.Fatalf("caps %q: bdat %q chunk %q stray %q", ehloCaps, bdatLine, chunk, afterChunk)
+		}
 	}
 }
 
