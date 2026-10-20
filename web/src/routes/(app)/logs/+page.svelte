@@ -1,6 +1,6 @@
 <script lang="ts">
-import { ScrollText } from '@lucide/svelte'
-import { ApiError, type LogEntry, fetchLogs } from '$lib/api'
+import { ScrollText, X } from '@lucide/svelte'
+import { ApiError, fetchLogs, type LogEntry } from '$lib/api'
 import { me } from '$lib/session'
 
 let entries = $state<LogEntry[]>([])
@@ -11,6 +11,7 @@ let loadingOlder = $state(false)
 let level = $state('')
 let q = $state('')
 let hasMore = $state(true)
+let selected = $state<LogEntry | null>(null)
 
 const isAdmin = $derived($me?.role === 'admin')
 
@@ -87,11 +88,21 @@ function levelClass(lvl: string) {
   }
 }
 
+// valueText renders an attribute value; objects as JSON instead of "[object Object]".
+function valueText(v: unknown): string {
+  if (v !== null && typeof v === 'object') return JSON.stringify(v, null, 2)
+  return String(v)
+}
+
 function attrsText(attrs?: Record<string, unknown>) {
   if (!attrs) return ''
   return Object.entries(attrs)
-    .map(([k, v]) => `${k}=${String(v)}`)
+    .map(([k, v]) => `${k}=${valueText(v)}`)
     .join(' ')
+}
+
+function onKeydown(ev: KeyboardEvent) {
+  if (ev.key === 'Escape') selected = null
 }
 
 function formatTime(t: string) {
@@ -184,12 +195,23 @@ function formatTime(t: string) {
           </thead>
           <tbody class="divide-y divide-gray-100">
             {#each entries as e, i (e.time + e.msg + String(i))}
-              <tr class="align-top">
+              <tr
+                class="cursor-pointer align-top hover:bg-gray-50 focus:bg-gray-50 focus:outline-none"
+                tabindex="0"
+                aria-label="Log entry details"
+                onclick={() => (selected = e)}
+                onkeydown={(ev) => {
+                  if (ev.key === 'Enter' || ev.key === ' ') {
+                    ev.preventDefault()
+                    selected = e
+                  }
+                }}
+              >
                 <td class="whitespace-nowrap px-4 py-3 font-mono text-xs text-gray-500">{formatTime(e.time)}</td>
                 <td class="px-4 py-3">
                   <span class="rounded px-2 py-0.5 text-xs font-semibold {levelClass(e.level)}">{e.level}</span>
                 </td>
-                <td class="px-4 py-3 font-medium text-gray-900">{e.msg}</td>
+                <td class="max-w-xs truncate px-4 py-3 font-medium text-gray-900">{e.msg}</td>
                 <td class="max-w-md truncate px-4 py-3 font-mono text-xs text-gray-500" title={attrsText(e.attrs)}>
                   {attrsText(e.attrs)}
                 </td>
@@ -214,4 +236,56 @@ function formatTime(t: string) {
       {/if}
     {/if}
   {/if}
+{/if}
+
+<svelte:window onkeydown={onKeydown} />
+
+{#if selected}
+  {@const e = selected}
+  <div class="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto p-4 sm:p-8">
+    <!-- Backdrop: a real button so click-to-close is keyboard/screen-reader accessible (Escape also closes). -->
+    <button
+      type="button"
+      class="fixed inset-0 cursor-default bg-black/40"
+      aria-label="Close details"
+      tabindex="-1"
+      onclick={() => (selected = null)}
+    ></button>
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="log-entry-title"
+      class="relative my-4 w-full max-w-3xl rounded-xl border border-gray-200 bg-white shadow-lg"
+    >
+      <div class="flex items-start justify-between gap-3 border-b border-gray-100 px-5 py-4">
+        <div class="min-w-0">
+          <h2 id="log-entry-title" class="text-lg font-semibold break-words text-gray-900">
+            <span class="mr-2 rounded px-2 py-0.5 align-middle text-xs font-semibold {levelClass(e.level)}"
+              >{e.level}</span
+            >
+            {e.msg}
+          </h2>
+          <p class="mt-1 font-mono text-xs text-gray-500">{formatTime(e.time)} ({e.time})</p>
+        </div>
+        <button
+          type="button"
+          class="rounded-lg p-1 text-gray-500 hover:bg-gray-100"
+          onclick={() => (selected = null)}
+          aria-label="Close"
+        >
+          <X class="size-5" />
+        </button>
+      </div>
+      {#if e.attrs && Object.keys(e.attrs).length > 0}
+        <dl class="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 px-5 py-4 text-sm">
+          {#each Object.entries(e.attrs) as [k, v] (k)}
+            <dt class="font-mono text-xs text-gray-500">{k}</dt>
+            <dd class="font-mono text-xs break-all whitespace-pre-wrap text-gray-900">{valueText(v)}</dd>
+          {/each}
+        </dl>
+      {:else}
+        <p class="px-5 py-4 text-sm text-gray-500">No attributes.</p>
+      {/if}
+    </div>
+  </div>
 {/if}
