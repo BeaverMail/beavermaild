@@ -29,6 +29,7 @@ type Entry struct {
 type Registry struct {
 	pluginsDir string
 	entries    []Entry
+	skipped    []error
 }
 
 // LoadRegistry scans pluginsDir for beaver-plugin-* binaries and probes each for a Descriptor.
@@ -47,7 +48,9 @@ func LoadRegistry(pluginsDir string) (*Registry, error) {
 		base := filepath.Base(path)
 		entry, err := entryFromBinary(path, base)
 		if err != nil {
-			return nil, err
+			// One broken binary must not take down serve or every other plugin command.
+			r.skipped = append(r.skipped, fmt.Errorf("%s: %w", base, err))
+			continue
 		}
 		key := strings.Join(entry.Command, "/")
 		if _, ok := seenCmd[key]; ok {
@@ -58,6 +61,9 @@ func LoadRegistry(pluginsDir string) (*Registry, error) {
 	}
 	return r, nil
 }
+
+// Skipped returns one error per plugin binary that failed its metadata probe and was left out.
+func (r *Registry) Skipped() []error { return r.skipped }
 
 // entryFromBinary builds a registry entry from defaults plus plugin metadata probe.
 func entryFromBinary(exePath, base string) (Entry, error) {

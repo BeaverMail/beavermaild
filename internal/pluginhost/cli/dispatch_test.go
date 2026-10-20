@@ -23,6 +23,23 @@ func TestSplitCommandAndFlags(t *testing.T) {
 	}
 }
 
+func TestConfigFromArgs(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{nil, "def"},
+		{[]string{"-account", "alice@example.com"}, "def"},
+		{[]string{"-c", "/opt/b/config.json"}, "/opt/b/config.json"},
+		{[]string{"-dry-run", "--c=/opt/b/config.json"}, "/opt/b/config.json"},
+		{[]string{"-c"}, "def"},
+	} {
+		if got := configFromArgs(tc.args, "def"); got != tc.want {
+			t.Fatalf("%v: got %q want %q", tc.args, got, tc.want)
+		}
+	}
+}
+
 func TestParsePluginFlags(t *testing.T) {
 	p, err := parsePluginFlags([]string{
 		"--account", "alice@example.com",

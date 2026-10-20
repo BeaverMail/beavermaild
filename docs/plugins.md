@@ -12,13 +12,21 @@ Go package: `github.com/BeaverMail/beaver/plugin`
 make beaver
 ```
 
-2. Install a plugin executable under `data/plugins/`. The host discovers command and `cli_flags` via metadata probe (`BEAVER_PLUGIN_MODE=metadata`).
+2. Install a plugin executable under `<data_dir>/plugins/` (`/var/lib/beavermail/plugins/` with `beaver init` defaults; `make plugins` builds into `.data/plugins`):
+
+```bash
+install -m 755 beaver-plugin-antispam /var/lib/beavermail/plugins/
+```
+
+The host discovers command and `cli_flags` via metadata probe (`BEAVER_PLUGIN_MODE=metadata`). CLI plugins are available immediately; daemon plugins (`smtp`) load when `beaver serve` starts, so restart it after installing or upgrading one. A binary whose probe fails is skipped with a warning (`beaver plugins list` shows it) instead of blocking the others.
 
 3. Run a plugin command (account must exist for mail-ingest plugins):
 
 ```bash
-beaver widget frob -c data/config.json -account alice@example.com -srcdir /var/data/src
-beaver plugins list -c data/config.json
+beaver widget frob -account alice@example.com -srcdir /var/data/src
+beaver plugins list
+# config outside the default path: -c (or BEAVER_CONFIG) selects which data_dir/plugins is scanned
+beaver widget frob -c /srv/beaver/config.json -account alice@example.com -srcdir /var/data/src
 ```
 
 Plugin commands come from each plugin `Descriptor` (metadata probe), not from hardcoded subcommands in `beaver`.
@@ -30,7 +38,7 @@ Plugin commands come from each plugin `Descriptor` (metadata probe), not from ha
 | Runtime | Subprocess `exec`, stdin JSON + stdout JSONL |
 | Store access | Host only (`storage.Store` + blobs); plugin sends batches, host ingests |
 | Commands | CLI: `beaver <command>` only. Daemon: `beaver serve` (scaffold, not wired in v2.0) |
-| Discovery | `beaver-plugin-*` in `data/plugins/`; host probes each binary (`BEAVER_PLUGIN_MODE=metadata`) |
+| Discovery | `beaver-plugin-*` in `<data_dir>/plugins/`; host probes each binary (`BEAVER_PLUGIN_MODE=metadata`) |
 | Versioning | `APIVersion` constant (currently **2**) |
 | Deploy | Ship `beaver` + all `beaver-plugin-*` from the same build |
 

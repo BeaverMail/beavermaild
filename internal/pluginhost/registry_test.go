@@ -45,3 +45,24 @@ func TestLoadRegistryFindExactCommandOnly(t *testing.T) {
 		t.Fatal("widget-frob must not match when list shows widget frob")
 	}
 }
+
+func TestLoadRegistrySkipsBrokenPlugin(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "beaver-plugin-broken"), []byte("#!/bin/sh\necho 'not json'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "beaver-plugin-widget-frob"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	reg, err := pluginhost.LoadRegistry(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reg.List()) != 1 || reg.List()[0].Exe != "beaver-plugin-widget-frob" {
+		t.Fatalf("entries: %+v", reg.List())
+	}
+	if len(reg.Skipped()) != 1 {
+		t.Fatalf("skipped: %v", reg.Skipped())
+	}
+}

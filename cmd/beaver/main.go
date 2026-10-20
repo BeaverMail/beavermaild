@@ -1038,6 +1038,9 @@ func runPluginsList(args []string) int {
 		fmt.Fprintf(os.Stderr, "plugins list: %v\n", err)
 		return cli.ExitError
 	}
+	for _, skipErr := range reg.Skipped() {
+		fmt.Fprintf(os.Stderr, "skipped %v\n", skipErr)
+	}
 	for _, e := range reg.List() {
 		exe, err := reg.ResolveExe(e)
 		status := "ok"

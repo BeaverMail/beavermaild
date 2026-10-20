@@ -30,11 +30,15 @@ func TryDispatch(ctx context.Context, opts DispatchOptions) (int, bool) {
 		return 0, false
 	}
 
-	defaultConfig := config.DefaultConfigPath()
-	reg, err := loadRegistry(defaultConfig)
+	// The registry (and so command matching) must come from the -c config, not only the default one.
+	configPath := configFromArgs(flagArgs, config.DefaultConfigPath())
+	reg, err := loadRegistry(configPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "plugins: %v\n", err)
 		return cli.ExitError, true
+	}
+	for _, skipErr := range reg.Skipped() {
+		fmt.Fprintf(os.Stderr, "plugins: skipped %v\n", skipErr)
 	}
 
 	if isHelpRequest(flagArgs) {
@@ -46,7 +50,7 @@ func TryDispatch(ctx context.Context, opts DispatchOptions) (int, bool) {
 			printPluginUsage(entry)
 			return cli.ExitUsage, true
 		}
-		return runPluginCommand(ctx, opts, entry, cmd, flagArgs)
+		return runPluginCommand(ctx, opts, entry, cmd, flagArgs, configPath)
 	}
 
 	matches := reg.FindCLIByPrefix(cmd)
@@ -81,7 +85,7 @@ func dispatchPluginHelp(reg *pluginhost.Registry, cmd []string) (int, bool) {
 	return cli.ExitUsage, true
 }
 
-func runPluginCommand(ctx context.Context, opts DispatchOptions, entry pluginhost.Entry, cmd []string, flagArgs []string) (int, bool) {
+func runPluginCommand(ctx context.Context, opts DispatchOptions, entry pluginhost.Entry, cmd []string, flagArgs []string, configPath string) (int, bool) {
 	profile, err := entry.ProfileForCommand(cmd)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "plugin %s: %v\n", strings.Join(cmd, " "), err)
@@ -89,8 +93,7 @@ func runPluginCommand(ctx context.Context, opts DispatchOptions, entry pluginhos
 		return cli.ExitUsage, true
 	}
 	op := entry.OpForCommand(cmd)
-	defaultConfig := config.DefaultConfigPath()
-	parsed, err := parsePluginFlags(flagArgs, defaultConfig, entry.CliFlags, profile)
+	parsed, err := parsePluginFlags(flagArgs, configPath, entry.CliFlags, profile)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "plugin %s: %v\n", strings.Join(cmd, " "), err)
 		if hint := pluginFlagHint(entry, err); hint != "" {
@@ -98,14 +101,6 @@ func runPluginCommand(ctx context.Context, opts DispatchOptions, entry pluginhos
 		}
 		printPluginUsage(entry)
 		return cli.ExitUsage, true
-	}
-
-	if parsed.configPath != defaultConfig {
-		entry, err = loadCLIEntry(parsed.configPath, entry.Command)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "plugin %s: %v\n", strings.Join(cmd, " "), err)
-			return cli.ExitError, true
-		}
 	}
 
 	if pluginhost.RequiresAccount(profile) && parsed.account == "" {
@@ -231,16 +226,24 @@ func printMailboxTotals(byMailbox map[string]plugin.MailboxCounts) {
 	}
 }
 
-func loadCLIEntry(configPath string, cmd []string) (pluginhost.Entry, error) {
-	reg, err := loadRegistry(configPath)
-	if err != nil {
-		return pluginhost.Entry{}, err
+// configFromArgs returns the -c value (-c x, -c=x, --c x, --c=x) or def when absent.
+func configFromArgs(args []string, def string) string {
+	for i, a := range args {
+		if !strings.HasPrefix(a, "-") {
+			continue
+		}
+		name, val, hasVal := strings.Cut(strings.TrimLeft(a, "-"), "=")
+		if name != "c" {
+			continue
+		}
+		if hasVal {
+			return val
+		}
+		if i+1 < len(args) {
+			return args[i+1]
+		}
 	}
-	entry, ok := reg.Find(cmd)
-	if !ok {
-		return pluginhost.Entry{}, fmt.Errorf("plugin not found for command %q", strings.Join(cmd, " "))
-	}
-	return entry, nil
+	return def
 }
 
 func loadRegistry(configPath string) (*pluginhost.Registry, error) {

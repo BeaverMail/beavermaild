@@ -341,9 +341,14 @@ func (a *App) Run(ctx context.Context) error {
 		FailOpen:       a.cfg.PluginsSMTPTimeoutFailOpen(),
 		RestartBackoff: a.cfg.PluginsSMTPRestartBackoff(),
 	})
-	if reg, err := pluginhost.LoadRegistry(pluginhost.PluginsDirFromConfigPath(a.cfg.ConfigPath())); err != nil {
+	reg, err := pluginhost.LoadRegistry(pluginhost.PluginsDirFromConfigPath(a.cfg.ConfigPath()))
+	if err != nil {
 		return fmt.Errorf("plugins: %w", err)
-	} else if err := dm.LoadFromRegistry(reg); err != nil {
+	}
+	for _, skipErr := range reg.Skipped() {
+		a.log.Warn("plugin skipped", slog.Any("err", skipErr))
+	}
+	if err := dm.LoadFromRegistry(reg); err != nil {
 		return fmt.Errorf("plugins: %w", err)
 	} else if err := dm.Start(ctx); err != nil {
 		return fmt.Errorf("plugins: %w", err)
