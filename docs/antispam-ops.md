@@ -98,7 +98,7 @@ Domains are reduced to the registered domain (`mail.example.com` -> `example.com
 }
 ```
 
-When `enabled` is true and no sub-toggle is set, SPF/DKIM/DMARC/ARC all turn on. Results appear on the wire as `auth` (`spf_ehlo`, `spf_mail_from`, `dkim`, `dmarc`, `dmarc_policy`, `arc`). The plugin maps them to `SPF_*` / `DKIM_*` / `DMARC_*` / `ARC_*` tags.
+When `enabled` is true and no sub-toggle is set, SPF/DKIM/DMARC/ARC all turn on. Checks run on inbound mail only: on submission they would judge the authenticated client's IP (e.g. an application server outside your SPF record) while the message leaves from this server with its DKIM signature, so the plugin gets no `auth` fields there. Results appear on the wire as `auth` (`spf_ehlo`, `spf_mail_from`, `dkim`, `dmarc`, `dmarc_policy`, `arc`). The plugin maps them to `SPF_*` / `DKIM_*` / `DMARC_*` / `ARC_*` tags.
 
 Inbound ARC is **verify only** (no outbound seal). ARC does **not** override a DMARC fail.
 

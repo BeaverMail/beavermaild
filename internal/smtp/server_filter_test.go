@@ -17,6 +17,8 @@ import (
 	"github.com/BeaverMail/beaver/internal/storage"
 	"github.com/BeaverMail/beaver/internal/storage/blob"
 	"github.com/BeaverMail/beaver/internal/storage/sqlite"
+	"github.com/BeaverMail/beaver/internal/tlsload"
+	"github.com/BeaverMail/beaver/internal/tlsload/tlstest"
 	"github.com/miekg/dns"
 )
 
@@ -377,5 +379,62 @@ func TestSMTPAddsAuthenticationResults(t *testing.T) {
 	}
 	if strings.Count(got, "Authentication-Results:") != 1 {
 		t.Fatalf("forged Authentication-Results kept:\n%s", got)
+	}
+}
+
+// Authenticated submission is not judged by SPF/DKIM/DMARC of the client hop: the filter
+// gets no auth results, so own outbound mail cannot score SPF_FAIL/DMARC.
+func TestSMTPSubmissionSkipsMailAuth(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	_, inbox, dir := openSMTPTestStore(t, ctx)
+	certFile, keyFile := tlstest.WritePEM(t, t.TempDir(), []string{"localhost"})
+	certs, err := tlsload.Load(certFile, keyFile, "1.2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln, err := certs.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	filter := &captureFilter{}
+	srv := smtp.NewServer(log.New("error"), "127.0.0.1:0", dir, inbox, nil, "", "", smtp.Options{
+		Certs:        certs,
+		Filter:       filter,
+		FilterTmpDir: t.TempDir(),
+		MailAuth:     mailauth.New(mailauth.Config{Enabled: true, SPFEnabled: true, SPFResolver: spfResolver{}}),
+	})
+	sctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() { _ = srv.ServeSubmissionListener(sctx, ln, true) }()
+	time.Sleep(20 * time.Millisecond)
+
+	conn, err := tlsload.DialTestClient(ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	read := bufio.NewReader(conn)
+	expect(t, read, "220")
+	send(t, conn, "EHLO helo.example")
+	readEHLO(t, read, "AUTH PLAIN")
+	send(t, conn, "AUTH PLAIN "+plainCred("alice@localhost", directory.SeedPassword()))
+	expect(t, read, "235")
+	send(t, conn, "MAIL FROM:<alice@localhost>")
+	expect(t, read, "250")
+	send(t, conn, "RCPT TO:<alice@localhost>")
+	expect(t, read, "250")
+	send(t, conn, "DATA")
+	expect(t, read, "354")
+	send(t, conn, "Subject: hi")
+	send(t, conn, "")
+	send(t, conn, "body")
+	send(t, conn, ".")
+	expect(t, read, "250")
+
+	for _, phase := range []string{smtp.FilterPhaseMail, smtp.FilterPhaseEom} {
+		if a := filter.authAt(phase); a != nil {
+			t.Fatalf("%s: submission got auth results %+v", phase, a)
+		}
 	}
 }

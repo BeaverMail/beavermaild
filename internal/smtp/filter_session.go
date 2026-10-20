@@ -100,7 +100,7 @@ func (s *session) runFilter(ctx context.Context, phase string, to []string, body
 func (s *session) filterEom(ctx context.Context, raw []byte) (FilterOutcome, error) {
 	runFilter := s.filter != nil && !s.skipAntiSpam(ctx, FilterPhaseEom, s.rcptAddresses())
 	// Inbound mail is always verified, filter or not, so Authentication-Results can be added.
-	runAuth := s.mailAuth != nil && s.mailAuth.Enabled() && (runFilter || !s.submission)
+	runAuth := s.authApplies()
 	if !runFilter && !runAuth {
 		return FilterOutcome{Action: FilterActionAccept}, nil
 	}
@@ -311,9 +311,16 @@ func stripAuthResults(raw []byte, authservID string) []byte {
 	return out
 }
 
-// checkSPFEhlo runs EHLO/HELO SPF when mailauth is enabled.
+// authApplies reports whether SPF/DKIM/DMARC describe this transaction. Not on submission:
+// there they would judge the client's IP (e.g. an app server outside the SPF record), while
+// the message leaves from our IP with our DKIM signature; scoring them flagged own mail as spam.
+func (s *session) authApplies() bool {
+	return s.mailAuth != nil && s.mailAuth.Enabled() && !s.submission
+}
+
+// checkSPFEhlo runs EHLO/HELO SPF when mailauth applies.
 func (s *session) checkSPFEhlo(ctx context.Context) {
-	if s.mailAuth == nil || !s.mailAuth.Enabled() || s.heloDomain == "" {
+	if !s.authApplies() || s.heloDomain == "" {
 		return
 	}
 	ip := net.ParseIP(s.clientIP())
@@ -323,9 +330,9 @@ func (s *session) checkSPFEhlo(ctx context.Context) {
 	s.authState.SPFEhlo = s.mailAuth.CheckSPF(ctx, ip, "", s.heloDomain)
 }
 
-// checkSPFMailFrom runs MAIL FROM SPF when mailauth is enabled.
+// checkSPFMailFrom runs MAIL FROM SPF when mailauth applies.
 func (s *session) checkSPFMailFrom(ctx context.Context) {
-	if s.mailAuth == nil || !s.mailAuth.Enabled() {
+	if !s.authApplies() {
 		return
 	}
 	ip := net.ParseIP(s.clientIP())
