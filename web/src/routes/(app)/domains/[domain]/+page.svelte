@@ -1,5 +1,6 @@
 <script lang="ts">
-    import { Pencil, Plus, Trash2, Users, X } from "@lucide/svelte";
+    import { KeyRound, MoreHorizontal, Pencil, Plus, Trash2, Users, X } from "@lucide/svelte";
+    import ConfirmDialog from "$lib/ConfirmDialog.svelte";
     import { page } from "$app/state";
     import {
         ApiError,
@@ -29,6 +30,17 @@
     let dnsError = $state("");
     let copiedKey = $state("");
     let formError = $state("");
+
+    // Row actions menu, delete confirmation and password reset dialogs.
+    let menuFor = $state<number | null>(null);
+    let deleteTarget = $state<ListedAccount | null>(null);
+    let deleteBusy = $state(false);
+    let deleteError = $state("");
+    let resetTarget = $state<ListedAccount | null>(null);
+    let newPassword = $state("");
+    let showPassword = $state(false);
+    let resetBusy = $state(false);
+    let resetError = $state("");
 
     let editOpen = $state(false);
     let editBusy = $state(false);
@@ -202,19 +214,51 @@
         }
     }
 
-    async function onDelete(a: ListedAccount) {
+    function onDelete(a: ListedAccount) {
+        menuFor = null;
         if (a.email === $me?.email) {
             formError = "cannot delete own account";
             return;
         }
-        if (!window.confirm(`Delete ${a.email}?`)) return;
         formError = "";
+        deleteError = "";
+        deleteTarget = a;
+    }
+
+    async function confirmDelete() {
+        if (!deleteTarget) return;
+        deleteBusy = true;
+        deleteError = "";
         try {
-            await deleteAccount(a.email);
+            await deleteAccount(deleteTarget.email);
+            deleteTarget = null;
             await reload(domain);
         } catch (err) {
-            formError = err instanceof ApiError ? err.message : "delete failed";
+            deleteError = err instanceof ApiError ? err.message : "delete failed";
+        } finally {
+            deleteBusy = false;
         }
+    }
+
+    function formatBytes(n: number): string {
+        if (n < 1024) return `${n} B`;
+        if (n < 1024 ** 2) return `${(n / 1024).toFixed(1)} KB`;
+        if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)} MB`;
+        return `${(n / 1024 ** 3).toFixed(2)} GB`;
+    }
+
+    // Fill ratio of the tighter limit (storage or messages), null when unlimited.
+    function usageRatio(a: ListedAccount): number | null {
+        const ratios: number[] = [];
+        if (a.storage_limit > 0) ratios.push(a.storage_used / a.storage_limit);
+        if (a.messages_limit > 0) ratios.push(a.messages_used / a.messages_limit);
+        return ratios.length ? Math.max(...ratios) : null;
+    }
+
+    function usageBarClass(r: number): string {
+        if (r >= 0.9) return "bg-red-500";
+        if (r >= 0.75) return "bg-amber-500";
+        return "bg-emerald-500";
     }
 
     async function onToggleActive(a: ListedAccount) {
@@ -241,18 +285,32 @@
         }
     }
 
-    async function onResetPassword(a: ListedAccount) {
+    function onResetPassword(a: ListedAccount) {
+        menuFor = null;
         if (a.email === $me?.email) {
             formError = "cannot reset own password here";
             return;
         }
-        const pw = window.prompt(`New password for ${a.email}:`);
-        if (!pw) return;
         formError = "";
+        resetError = "";
+        newPassword = "";
+        showPassword = false;
+        resetTarget = a;
+    }
+
+    async function submitReset(ev: SubmitEvent) {
+        ev.preventDefault();
+        if (!resetTarget || !newPassword) return;
+        resetBusy = true;
+        resetError = "";
         try {
-            await patchAccount(a.email, { password: pw });
+            await patchAccount(resetTarget.email, { password: newPassword });
+            resetTarget = null;
+            newPassword = "";
         } catch (err) {
-            formError = err instanceof ApiError ? err.message : "password reset failed";
+            resetError = err instanceof ApiError ? err.message : "password reset failed";
+        } finally {
+            resetBusy = false;
         }
     }
     async function copyDnsValue(r: DnsRecord) {
@@ -382,6 +440,7 @@
                 <tr>
                     <th class="px-4 py-3 text-left font-medium text-gray-600">Email</th>
                     <th class="px-4 py-3 text-left font-medium text-gray-600">Role</th>
+                    <th class="px-4 py-3 text-left font-medium text-gray-600">Usage</th>
                     <th class="px-4 py-3 text-left font-medium text-gray-600">Active</th>
                     {#if canWrite}
                         <th class="px-4 py-3 text-right font-medium text-gray-600">Actions</th>
@@ -390,6 +449,7 @@
             </thead>
             <tbody class="divide-y divide-gray-100">
                 {#each accounts as a (a.id)}
+                    {@const ratio = usageRatio(a)}
                     <tr class="hover:bg-gray-50">
                         <td class="px-4 py-3 font-medium text-gray-900">{a.email}</td>
                         <td class="px-4 py-3 text-gray-600">
@@ -407,6 +467,34 @@
                                 {a.role}
                             {/if}
                         </td>
+                        <td class="px-4 py-3">
+                            <div class="min-w-36 text-xs text-gray-700">
+                                <span class="font-medium">{formatBytes(a.storage_used)}</span>
+                                <span class="text-gray-500">
+                                    / {a.storage_limit > 0 ? formatBytes(a.storage_limit) : "unlimited"}
+                                </span>
+                            </div>
+                            {#if ratio !== null}
+                                <div
+                                    class="mt-1 h-1.5 w-36 overflow-hidden rounded-full bg-gray-100"
+                                    role="progressbar"
+                                    aria-label="Mailbox usage {a.email}"
+                                    aria-valuemin={0}
+                                    aria-valuemax={100}
+                                    aria-valuenow={Math.round(Math.min(ratio, 1) * 100)}
+                                >
+                                    <div
+                                        class="h-full {usageBarClass(ratio)}"
+                                        style="width: {Math.min(ratio, 1) * 100}%"
+                                    ></div>
+                                </div>
+                            {/if}
+                            <div class="mt-0.5 text-[11px] text-gray-500">
+                                {a.messages_used.toLocaleString()} msgs{a.messages_limit > 0
+                                    ? ` / ${a.messages_limit.toLocaleString()}`
+                                    : ""}
+                            </div>
+                        </td>
                         <td class="px-4 py-3 text-gray-600">
                             {#if canWrite}
                                 <button
@@ -421,22 +509,40 @@
                             {/if}
                         </td>
                         {#if canWrite}
-                            <td class="px-4 py-3 text-right space-x-2">
+                            <td class="relative px-4 py-3 text-right">
                                 <button
                                     type="button"
-                                    class="text-xs text-brand-700 hover:underline"
-                                    onclick={() => onResetPassword(a)}
+                                    class="rounded-lg p-1.5 text-gray-500 hover:bg-gray-100"
+                                    aria-label="Actions for {a.email}"
+                                    aria-haspopup="menu"
+                                    aria-expanded={menuFor === a.id}
+                                    onclick={() => (menuFor = menuFor === a.id ? null : a.id)}
                                 >
-                                    Reset password
+                                    <MoreHorizontal class="size-4" />
                                 </button>
-                                <button
-                                    type="button"
-                                    class="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-red-700 hover:bg-red-50"
-                                    onclick={() => onDelete(a)}
-                                >
-                                    <Trash2 class="size-3.5" />
-                                    Delete
-                                </button>
+                                {#if menuFor === a.id}
+                                    <div
+                                        role="menu"
+                                        class="absolute right-4 z-30 mt-1 w-44 overflow-hidden rounded-lg border border-gray-200 bg-white py-1 text-left shadow-lg"
+                                    >
+                                        <button
+                                            type="button"
+                                            role="menuitem"
+                                            class="flex w-full items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                                            onclick={() => onResetPassword(a)}
+                                        >
+                                            <KeyRound class="size-4" /> Reset password
+                                        </button>
+                                        <button
+                                            type="button"
+                                            role="menuitem"
+                                            class="flex w-full items-center gap-2 px-3 py-2 text-sm text-red-700 hover:bg-red-50"
+                                            onclick={() => onDelete(a)}
+                                        >
+                                            <Trash2 class="size-4" /> Delete
+                                        </button>
+                                    </div>
+                                {/if}
                             </td>
                         {/if}
                     </tr>
@@ -761,6 +867,108 @@
                         class="rounded-lg bg-brand-700 px-3 py-2 text-sm font-medium text-white hover:bg-brand-800 disabled:opacity-50"
                     >
                         {editBusy ? "Saving…" : "Save changes"}
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+{/if}
+
+<svelte:window
+    onkeydown={(ev) => {
+        if (ev.key === "Escape") menuFor = null;
+    }}
+    onclick={(ev) => {
+        // Close the row menu on any click outside its toggle and items.
+        if (menuFor !== null && !(ev.target as Element).closest('[role="menu"], [aria-haspopup="menu"]')) {
+            menuFor = null;
+        }
+    }}
+/>
+
+{#if deleteTarget}
+    <ConfirmDialog
+        title="Delete mailbox"
+        confirmLabel="Delete mailbox"
+        danger
+        requireText={deleteTarget.email}
+        busy={deleteBusy}
+        error={deleteError}
+        onconfirm={confirmDelete}
+        oncancel={() => (deleteTarget = null)}
+    >
+        <p>
+            This permanently deletes <span class="font-medium">{deleteTarget.email}</span> and all its mail:
+            <span class="font-medium">{deleteTarget.messages_used.toLocaleString()} messages</span>,
+            <span class="font-medium">{formatBytes(deleteTarget.storage_used)}</span>.
+        </p>
+        <p class="text-red-700">This cannot be undone.</p>
+    </ConfirmDialog>
+{/if}
+
+{#if resetTarget}
+    <div class="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4 sm:p-8">
+        <button
+            type="button"
+            class="fixed inset-0 cursor-default bg-black/40"
+            aria-label="Cancel"
+            tabindex="-1"
+            onclick={() => {
+                if (!resetBusy) resetTarget = null;
+            }}
+        ></button>
+        <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="reset-password-title"
+            class="relative my-4 w-full max-w-md rounded-xl border border-gray-200 bg-white shadow-lg"
+        >
+            <div class="flex items-center justify-between border-b border-gray-100 px-5 py-4">
+                <h2 id="reset-password-title" class="text-lg font-semibold text-gray-900">Reset password</h2>
+                <button
+                    type="button"
+                    class="rounded-lg p-1 text-gray-500 hover:bg-gray-100"
+                    onclick={() => (resetTarget = null)}
+                    aria-label="Close"
+                >
+                    <X class="size-5" />
+                </button>
+            </div>
+            <form class="space-y-4 px-5 py-4" onsubmit={submitReset}>
+                <p class="text-sm text-gray-700">
+                    New password for <span class="font-medium">{resetTarget.email}</span>.
+                </p>
+                <label class="block text-sm">
+                    <span class="mb-1 block text-gray-600">New password</span>
+                    <input
+                        class="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+                        type={showPassword ? "text" : "password"}
+                        autocomplete="new-password"
+                        required
+                        bind:value={newPassword}
+                    />
+                </label>
+                <label class="flex items-center gap-2 text-xs text-gray-600">
+                    <input type="checkbox" bind:checked={showPassword} /> Show password
+                </label>
+                {#if resetError}
+                    <p class="text-sm text-red-600">{resetError}</p>
+                {/if}
+                <div class="flex justify-end gap-2 border-t border-gray-100 pt-4">
+                    <button
+                        type="button"
+                        class="rounded-lg px-3 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                        disabled={resetBusy}
+                        onclick={() => (resetTarget = null)}
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        type="submit"
+                        disabled={resetBusy || !newPassword}
+                        class="rounded-lg bg-brand-700 px-3 py-2 text-sm font-medium text-white hover:bg-brand-800 disabled:opacity-50"
+                    >
+                        {resetBusy ? "Saving…" : "Set password"}
                     </button>
                 </div>
             </form>

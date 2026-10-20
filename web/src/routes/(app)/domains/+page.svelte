@@ -12,6 +12,7 @@
         type Tenant,
     } from "$lib/api";
     import { me } from "$lib/session";
+    import ConfirmDialog from "$lib/ConfirmDialog.svelte";
 
     let domains = $state<Domain[]>([]);
     let tenants = $state<Tenant[]>([]);
@@ -156,15 +157,29 @@
         }
     }
 
-    async function onDelete(d: Domain) {
-        const confirmName = window.prompt(`Type ${d.name} to delete this domain and all accounts:`);
-        if (confirmName !== d.name) return;
+    let deleteTarget = $state<Domain | null>(null);
+    let deleteBusy = $state(false);
+    let deleteError = $state("");
+
+    function onDelete(d: Domain) {
         formError = "";
+        deleteError = "";
+        deleteTarget = d;
+    }
+
+    async function confirmDelete() {
+        const d = deleteTarget;
+        if (!d) return;
+        deleteBusy = true;
+        deleteError = "";
         try {
             await deleteDomain(d.name);
             domains = domains.filter((x) => x.id !== d.id);
+            deleteTarget = null;
         } catch (err) {
-            formError = err instanceof ApiError ? err.message : "delete failed";
+            deleteError = err instanceof ApiError ? err.message : "delete failed";
+        } finally {
+            deleteBusy = false;
         }
     }
 </script>
@@ -567,4 +582,23 @@
             </form>
         </div>
     </div>
+{/if}
+
+{#if deleteTarget}
+    <ConfirmDialog
+        title="Delete domain"
+        confirmLabel="Delete domain"
+        danger
+        requireText={deleteTarget.name}
+        busy={deleteBusy}
+        error={deleteError}
+        onconfirm={confirmDelete}
+        oncancel={() => (deleteTarget = null)}
+    >
+        <p>
+            This permanently deletes <span class="font-medium">{deleteTarget.name}</span>, its
+            <span class="font-medium">{deleteTarget.account_count ?? 0} accounts</span> and all their mail.
+        </p>
+        <p class="text-red-700">This cannot be undone.</p>
+    </ConfirmDialog>
 {/if}

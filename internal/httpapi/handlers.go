@@ -260,6 +260,11 @@ type accountListDTO struct {
 	Role      string `json:"role"`
 	TenantID  uint32 `json:"tenant_id"`
 	Active    bool   `json:"active"`
+	// Mailbox usage and limits (0 limit = unlimited); omitted when the inbox is not wired.
+	StorageUsed   uint64 `json:"storage_used"`
+	StorageLimit  uint64 `json:"storage_limit"`
+	MessagesUsed  uint32 `json:"messages_used"`
+	MessagesLimit uint32 `json:"messages_limit"`
 }
 
 // handleListAccounts lists accounts on a domain when the caller is in scope.
@@ -290,14 +295,21 @@ func (s *Server) handleListAccounts(w http.ResponseWriter, r *http.Request) {
 		if p.Role == directory.RoleUser && !strings.EqualFold(email, p.Email()) {
 			continue
 		}
-		out = append(out, accountListDTO{
+		dto := accountListDTO{
 			ID:        a.ID,
 			LocalPart: a.LocalPart,
 			Email:     email,
 			Role:      role,
 			TenantID:  a.TenantID,
 			Active:    a.Active,
-		})
+		}
+		if s.inbox != nil {
+			if st, err := s.inbox.QuotaStatus(r.Context(), a.ID); err == nil {
+				dto.StorageUsed, dto.StorageLimit = st.StorageUsed, st.StorageLimit
+				dto.MessagesUsed, dto.MessagesLimit = st.MessagesUsed, st.MessagesLimit
+			}
+		}
+		out = append(out, dto)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"accounts": out})
 }

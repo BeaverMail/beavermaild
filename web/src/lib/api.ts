@@ -65,6 +65,11 @@ export type ListedAccount = {
   role: string
   tenant_id: number
   active: boolean
+  /** Mailbox usage; a limit of 0 means unlimited. */
+  storage_used: number
+  storage_limit: number
+  messages_used: number
+  messages_limit: number
 }
 
 export class ApiError extends Error {
@@ -385,8 +390,6 @@ export type DnsRecord = {
 
 /** Recommended DNS records for a hosted domain (MX, SPF, DKIM, DMARC, MTA-STS, TLS-RPT, autoconfig). */
 export async function fetchDnsRecommended(domain: string): Promise<DnsRecord[]> {
-  const out = await api<{ records: DnsRecord[] }>(
-    `/domains/${encodeURIComponent(domain)}/dns-recommended`
-  )
+  const out = await api<{ records: DnsRecord[] }>(`/domains/${encodeURIComponent(domain)}/dns-recommended`)
   return out.records ?? []
 }

@@ -2,6 +2,7 @@
 import { Building2, Plus, Trash2 } from '@lucide/svelte'
 import { onMount } from 'svelte'
 import { ApiError, createTenant, deleteTenant, fetchTenants, patchTenant, type Tenant } from '$lib/api'
+import ConfirmDialog from '$lib/ConfirmDialog.svelte'
 import { me } from '$lib/session'
 
 let tenants = $state<Tenant[]>([])
@@ -56,16 +57,30 @@ async function onRename(t: Tenant) {
   }
 }
 
-async function onDelete(t: Tenant) {
+let deleteTarget = $state<Tenant | null>(null)
+let deleteBusy = $state(false)
+let deleteError = $state('')
+
+function onDelete(t: Tenant) {
   if (!isAdmin || t.id === 1) return
-  const confirmName = window.prompt(`Type ${t.name} to delete this tenant and all its domains:`)
-  if (confirmName !== t.name) return
   formError = ''
+  deleteError = ''
+  deleteTarget = t
+}
+
+async function confirmDelete() {
+  const t = deleteTarget
+  if (!t) return
+  deleteBusy = true
+  deleteError = ''
   try {
     await deleteTenant(t.id, t.name)
+    deleteTarget = null
     await reload()
   } catch (err) {
-    formError = err instanceof ApiError ? err.message : 'delete failed'
+    deleteError = err instanceof ApiError ? err.message : 'delete failed'
+  } finally {
+    deleteBusy = false
   }
 }
 
@@ -158,4 +173,23 @@ function canRenameOwn(t: Tenant): boolean {
       </tbody>
     </table>
   </div>
+{/if}
+
+{#if deleteTarget}
+  <ConfirmDialog
+    title="Delete tenant"
+    confirmLabel="Delete tenant"
+    danger
+    requireText={deleteTarget.name}
+    busy={deleteBusy}
+    error={deleteError}
+    onconfirm={confirmDelete}
+    oncancel={() => (deleteTarget = null)}
+  >
+    <p>
+      This permanently deletes the tenant <span class="font-medium">{deleteTarget.name}</span> with all its domains,
+      accounts and mail.
+    </p>
+    <p class="text-red-700">This cannot be undone.</p>
+  </ConfirmDialog>
 {/if}
