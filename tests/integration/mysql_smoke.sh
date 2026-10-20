@@ -30,8 +30,8 @@ echo "== wipe mysql schema =="
 go run ./tests/integration/mysqldrop "$DSN"
 
 echo "== init (blobs + config) =="
-"$TMP/beaver" init -data-dir "$TMP/data"
 export BEAVER_CONFIG="$TMP/data/config.json"
+"$TMP/beaver" init -data-dir "$TMP/data"
 
 INBOUND_PORT=$((17000 + RANDOM % 1000))
 SUB_STARTTLS_PORT=$((18000 + RANDOM % 1000))

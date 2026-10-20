@@ -25,7 +25,7 @@ func TestCLIIngestPlugin(t *testing.T) {
 	}
 
 	dataDir := t.TempDir()
-	cfg, err := config.InitLayout(dataDir)
+	cfg, err := config.InitLayout(filepath.Join(dataDir, "config.json"), dataDir, "")
 	if err != nil {
 		t.Fatal(err)
 	}

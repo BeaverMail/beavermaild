@@ -41,7 +41,7 @@ func TestInitLayoutCreatesConfig(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	cfg, err := config.InitLayout(dir)
+	cfg, err := config.InitLayout(filepath.Join(dir, "config.json"), dir, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,9 +59,57 @@ func TestInitLayoutCreatesConfig(t *testing.T) {
 	}
 }
 
+func TestInitLayoutHostnameAndLoopbackDefaults(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "etc", "beavermail", "config.json")
+	cfg, err := config.InitLayout(path, filepath.Join(dir, "data"), "Mail.Example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ConfigPath() != path {
+		t.Fatalf("config path %q", cfg.ConfigPath())
+	}
+	loaded, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hosts := loaded.ACMEHosts(); len(hosts) != 1 || hosts[0] != "mail.example.com" {
+		t.Fatalf("acme hosts %v", hosts)
+	}
+	if !loaded.HTTPEnabled() || loaded.HTTPListen() != ":443" || loaded.HTTPPlainListen() != ":80" {
+		t.Fatalf("http %+v", loaded.HTTP)
+	}
+	if loaded.SMTPListen() != ":25" || loaded.SMTPSubmissionListen() != ":587" || loaded.SMTPSubmissionTLSListen() != ":465" ||
+		loaded.IMAPListen() != ":143" || loaded.IMAPTLSListen() != ":993" {
+		t.Fatalf("mail ports smtp %+v imap %+v", loaded.SMTP, loaded.IMAP)
+	}
+
+	// Existing config is kept: a second init with other flags changes nothing.
+	again, err := config.InitLayout(path, filepath.Join(dir, "other"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.DataDir != loaded.DataDir || again.Secrets.AuthKey != loaded.Secrets.AuthKey {
+		t.Fatal("existing config overwritten")
+	}
+
+	plain, err := config.InitLayout(filepath.Join(dir, "p.json"), filepath.Join(dir, "pdata"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.HTTPListen() != "127.0.0.1:8080" || len(plain.ACMEHosts()) != 0 || plain.SMTPListen() != "127.0.0.1:1025" {
+		t.Fatalf("loopback default %+v", plain.HTTP)
+	}
+	if _, err := config.InitLayout(filepath.Join(dir, "bad.json"), dir, "mail.example.com:443"); err == nil {
+		t.Fatal("expected hostname error")
+	}
+}
+
 func TestLoadApplyEnv(t *testing.T) {
 	dir := t.TempDir()
-	cfg, err := config.InitLayout(dir)
+	cfg, err := config.InitLayout(filepath.Join(dir, "config.json"), dir, "")
 	if err != nil {
 		t.Fatal(err)
 	}

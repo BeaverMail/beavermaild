@@ -17,8 +17,8 @@ go build -o "$TMP/beaver" ./cmd/beaver
 go build -o "$TMP/beaver-plugin-antispam" ./cmd/beaver-plugin-antispam
 
 echo "== init =="
-"$TMP/beaver" init -data-dir "$TMP/data"
 export BEAVER_CONFIG="$TMP/data/config.json"
+"$TMP/beaver" init -data-dir "$TMP/data"
 
 "$TMP/beaver" seed -c "$BEAVER_CONFIG"
 "$TMP/beaver" auth -c "$BEAVER_CONFIG" "$EMAIL" "$PASSWORD"

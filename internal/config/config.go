@@ -15,8 +15,8 @@ import (
 	"github.com/BeaverMail/beaver/internal/security"
 )
 
-// DefaultDataDir is the relative data root when not overridden.
-const DefaultDataDir = "data"
+// DefaultDataDir is the data root on installed systems (FHS) when not overridden.
+const DefaultDataDir = "/var/lib/beavermail"
 
 // SystemConfigPath is the default bootstrap config on installed systems (FHS).
 const SystemConfigPath = "/etc/beavermail/config.json"
@@ -31,6 +31,8 @@ func DefaultConfigPath() string {
 
 // Config is the on-disk bootstrap configuration (JSON).
 type Config struct {
+	path string // file this config was loaded from or saved to
+
 	DataDir  string         `json:"data_dir"`
 	LogLevel string         `json:"log_level"`
 	Log      LogConfig      `json:"log"`
@@ -232,6 +234,7 @@ func Load(path string) (*Config, error) {
 	if err := json.Unmarshal(b, &cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
+	cfg.path = path
 	cfg.ApplyEnv()
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -642,8 +645,11 @@ func (c *Config) SMTPSubmissionListen() string {
 	return strings.TrimSpace(c.SMTP.SubmissionListen)
 }
 
-// ConfigPath returns data_dir/config.json.
+// ConfigPath returns the file this config came from (data_dir/config.json if built in memory).
 func (c *Config) ConfigPath() string {
+	if c.path != "" {
+		return c.path
+	}
 	return filepath.Join(c.DataDir, "config.json")
 }
 

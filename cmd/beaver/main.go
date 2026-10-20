@@ -92,18 +92,24 @@ func run(args []string) int {
 func runInit(args []string) int {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	dataDir := fs.String("data-dir", config.DefaultDataDir, "data directory")
+	configPath := configFlag(fs)
+	defDataDir := config.DefaultDataDir
+	if v := os.Getenv("BEAVER_DATA_DIR"); v != "" {
+		defDataDir = v
+	}
+	dataDir := fs.String("data-dir", defDataDir, "data directory")
+	hostname := fs.String("hostname", "", "public hostname: ACME certificate, admin UI on :443 (:80 for challenges)")
 	if err := fs.Parse(args); err != nil {
 		return cli.ExitUsage
 	}
 
-	cfg, err := config.InitLayout(*dataDir)
+	cfg, err := config.InitLayout(*configPath, *dataDir, *hostname)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "init: %v\n", err)
 		return cli.ExitError
 	}
 	fmt.Fprintf(os.Stderr, "initialized %s (config %s)\n", cfg.DataDir, cfg.ConfigPath())
-	// Other commands read DefaultConfigPath, not data_dir/config.json; tell the operator how to point at this one.
+	// Written elsewhere via -c: other commands still read DefaultConfigPath unless told otherwise.
 	if def := config.DefaultConfigPath(); filepath.Clean(def) != filepath.Clean(cfg.ConfigPath()) {
 		fmt.Fprintf(os.Stderr, "note: commands read %s by default; use: export BEAVER_CONFIG=%s (or -c)\n", def, cfg.ConfigPath())
 	}
@@ -1182,7 +1188,7 @@ func runAccountSetRole(args []string) int {
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage:")
 	fmt.Fprintln(os.Stderr, "  beaver version")
-	fmt.Fprintln(os.Stderr, "  beaver init [-data-dir data]")
+	fmt.Fprintln(os.Stderr, "  beaver init [-c path] [-data-dir dir] [-hostname name]")
 	fmt.Fprintln(os.Stderr, "  beaver migrate [-c path]")
 	fmt.Fprintln(os.Stderr, "  beaver store export [-c path] -o file|-")
 	fmt.Fprintln(os.Stderr, "  beaver store import [-c path] -i file|- [--force]")

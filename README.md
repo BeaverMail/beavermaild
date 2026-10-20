@@ -8,13 +8,15 @@ Complete mail and collaboration server in Go. One deploy for SMTP, IMAP, POP3, J
 
 ## Build
 
-Default config path is `/etc/beavermail/config.json`. For local development, point at the tree created by `init`:
+`beaver init` writes `/etc/beavermail/config.json` with data under `/var/lib/beavermail` (override with `-c`/`BEAVER_CONFIG` and `-data-dir`/`BEAVER_DATA_DIR`). Pass `-hostname mail.example.com` on a dedicated server: ACME certificate for that name, admin UI on `:443`, `:80` for ACME challenges and redirects, and public mail ports (SMTP `:25`, submission `:587`/`:465`, IMAP `:143`/`:993`). Without it everything stays on loopback dev ports and the admin UI listens on `127.0.0.1:8080` (use an SSH tunnel, `ssh -L 8080:127.0.0.1:8080 host`, or a reverse proxy).
+
+For local development, keep everything in the tree:
 
 ```bash
 make beaver          # embeds admin UI (needs Node)
 ./beaver version
-./beaver init
 export BEAVER_CONFIG=data/config.json
+./beaver init -data-dir data
 ./beaver seed
 ./beaver auth alice@localhost beaver
 ./beaver serve
