@@ -118,3 +118,59 @@ func TestTenantExternalIDUnique(t *testing.T) {
 		t.Fatalf("external_id must be reusable after delete: %v", err)
 	}
 }
+
+// login_disabled on the domain or tenant blocks login (after the password check) but keeps the
+// account resolvable, so inbound mail is still accepted.
+func TestLoginDisabled(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	d := openDir(t)
+	if _, err := d.BootstrapAdmin(ctx, "root@example.com", "secret"); err != nil {
+		t.Fatal(err)
+	}
+	tenant, err := d.CreateTenant(ctx, "Customer", "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dom, _, err := d.EnsureDomain(ctx, tenant.ID, "customer.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.CreateAccountRole(ctx, dom.ID, "alice", "pw", directory.RoleUser); err != nil {
+		t.Fatal(err)
+	}
+	const email = "alice@customer.example"
+
+	if _, err := d.SetDomainLoginDisabled(ctx, "customer.example", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Authenticate(ctx, email, "pw"); !errors.Is(err, directory.ErrInactive) {
+		t.Fatalf("domain disabled: err=%v", err)
+	}
+	if _, err := d.Authenticate(ctx, email, "wrong"); !errors.Is(err, directory.ErrInvalidCredentials) {
+		t.Fatalf("wrong password must not reveal suspension: err=%v", err)
+	}
+	if _, _, err := d.ResolveEmail(ctx, email); err != nil {
+		t.Fatalf("delivery lookup must still work: %v", err)
+	}
+	if _, err := d.SetDomainLoginDisabled(ctx, "customer.example", false); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := d.SetTenantLoginDisabled(ctx, tenant.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Authenticate(ctx, email, "pw"); !errors.Is(err, directory.ErrInactive) {
+		t.Fatalf("tenant disabled: err=%v", err)
+	}
+	if err := d.SetTenantLoginDisabled(ctx, tenant.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Authenticate(ctx, email, "pw"); err != nil {
+		t.Fatalf("restored: %v", err)
+	}
+
+	if err := d.SetTenantLoginDisabled(ctx, directory.DefaultTenantID, true); err == nil {
+		t.Fatal("default tenant must not be disabled")
+	}
+}

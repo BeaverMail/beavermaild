@@ -249,6 +249,12 @@ func canCreateOrDeleteTenant(p directory.Principal) bool {
 	return p.Role == directory.RoleAdmin || p.Role == directory.RoleProvisioner
 }
 
+// canSuspend reports whether p may block or restore login on a tenant or domain. A tenant_admin
+// never may: it would lift its own customer's suspension.
+func canSuspend(p directory.Principal) bool {
+	return p.Role == directory.RoleAdmin || p.Role == directory.RoleProvisioner
+}
+
 // canRenameTenant reports whether p may rename tenantID.
 func canRenameTenant(p directory.Principal, tenantID uint32) bool {
 	switch p.Role {

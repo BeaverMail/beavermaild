@@ -174,6 +174,7 @@ type patchDomainRequest struct {
 	RelayUser       *string `json:"relay_user"`
 	RelayPassword   string  `json:"relay_password"` // empty keeps the stored password
 	RelayStartTLS   *bool   `json:"relay_starttls"`
+	LoginDisabled   *bool   `json:"login_disabled"` // admin/provisioner only
 }
 
 // setIf overwrites *dst with *v when v is set.
@@ -234,6 +235,16 @@ func (s *Server) handlePatchDomain(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
+	if req.LoginDisabled != nil {
+		if !canSuspend(p) {
+			writeError(w, http.StatusForbidden, "forbidden")
+			return
+		}
+		if *req.LoginDisabled && strings.EqualFold(p.DomainName, dom.Name) {
+			writeError(w, http.StatusForbidden, "cannot disable login on own domain")
+			return
+		}
+	}
 	if req.MailHostname != nil && strings.TrimSpace(*req.MailHostname) == "" {
 		writeError(w, http.StatusBadRequest, "mail_hostname cannot be empty")
 		return
@@ -271,6 +282,12 @@ func (s *Server) handlePatchDomain(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	if req.LoginDisabled != nil {
+		if updated, err = s.dir.SetDomainLoginDisabled(r.Context(), domainName, *req.LoginDisabled); err != nil {
+			writeError(w, http.StatusInternalServerError, "set login_disabled failed")
+			return
+		}
 	}
 	s.syncDomainRuntime(updated)
 	writeJSON(w, http.StatusOK, s.domainToDTO(r.Context(), updated))
@@ -594,8 +611,9 @@ func (s *Server) handleCreateTenant(w http.ResponseWriter, r *http.Request) {
 }
 
 type patchTenantRequest struct {
-	Name         *string `json:"name"`
-	StorageLimit *uint64 `json:"storage_limit"`
+	Name          *string `json:"name"`
+	StorageLimit  *uint64 `json:"storage_limit"`
+	LoginDisabled *bool   `json:"login_disabled"`
 }
 
 // handlePatchTenant renames a tenant and/or sets its storage cap. Only admin and provisioner may
@@ -616,16 +634,31 @@ func (s *Server) handlePatchTenant(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	if req.Name == nil && req.StorageLimit == nil {
+	if req.Name == nil && req.StorageLimit == nil && req.LoginDisabled == nil {
 		writeError(w, http.StatusBadRequest, "no fields to update")
 		return
 	}
-	if (req.Name != nil && !canRenameTenant(p, id)) || (req.StorageLimit != nil && !canCreateOrDeleteTenant(p)) {
+	if (req.Name != nil && !canRenameTenant(p, id)) || (req.StorageLimit != nil && !canCreateOrDeleteTenant(p)) ||
+		(req.LoginDisabled != nil && !canSuspend(p)) {
 		writeError(w, http.StatusForbidden, "forbidden")
 		return
 	}
 	if req.Name != nil {
 		if err := s.dir.SetTenantName(r.Context(), id, *req.Name); err != nil {
+			if errors.Is(err, directory.ErrNotFound) {
+				writeError(w, http.StatusNotFound, "tenant not found")
+				return
+			}
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	if req.LoginDisabled != nil {
+		if *req.LoginDisabled && p.TenantID == id {
+			writeError(w, http.StatusForbidden, "cannot disable login on own tenant")
+			return
+		}
+		if err := s.dir.SetTenantLoginDisabled(r.Context(), id, *req.LoginDisabled); err != nil {
 			if errors.Is(err, directory.ErrNotFound) {
 				writeError(w, http.StatusNotFound, "tenant not found")
 				return

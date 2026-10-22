@@ -9,6 +9,8 @@ type Tenant struct {
 	ExternalID string `msgpack:"x,omitempty"`
 	// StorageLimit caps the summed mailbox usage of all accounts in the tenant (bytes, 0 = unlimited).
 	StorageLimit uint64 `msgpack:"sl,omitempty"`
+	// LoginDisabled blocks IMAP/SMTP/API login for every account in the tenant; mail is still received.
+	LoginDisabled bool `msgpack:"ld,omitempty"`
 }
 
 // APIKey is a long-lived integration credential; only the SHA-256 of its secret is stored.
@@ -38,6 +40,8 @@ type Domain struct {
 	DKIMSelector string `msgpack:"dks,omitempty"`
 
 	AntiSpam bool `msgpack:"as,omitempty"`
+	// LoginDisabled blocks IMAP/SMTP/API login for every account on the domain; mail is still received.
+	LoginDisabled bool `msgpack:"ld,omitempty"`
 
 	// SendMaxMessages / SendWindow override global submission rate (0 / empty = global).
 	SendMaxMessages int    `msgpack:"smx,omitempty"`

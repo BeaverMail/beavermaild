@@ -340,7 +340,11 @@ func (s *session) finishAuth(ctx context.Context, tag, user, pass, resp string) 
 	p, err := s.dir.Authenticate(ctx, user, pass)
 	if err != nil {
 		if errors.Is(err, directory.ErrInvalidCredentials) || errors.Is(err, directory.ErrInactive) {
-			s.authGate.RecordAuthFailure(ip, user)
+			// Only a wrong password counts toward the IP limit: a suspended client retrying with the right one
+			// (often via a shared webmail IP) must not lock out everyone else.
+			if errors.Is(err, directory.ErrInvalidCredentials) {
+				s.authGate.RecordAuthFailure(ip, user)
+			}
 			return s.tagged(tag, "NO LOGIN failed")
 		}
 		return err

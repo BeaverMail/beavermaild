@@ -87,7 +87,11 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	p, err := s.dir.Authenticate(r.Context(), req.Email, req.Password)
 	if err != nil {
-		s.authGate.RecordAuthFailure(ip, req.Email)
+		// Only a wrong password counts toward the IP limit: a suspended client retrying with the right one
+		// (often via a shared webmail IP) must not lock out everyone else.
+		if !errors.Is(err, directory.ErrInactive) {
+			s.authGate.RecordAuthFailure(ip, req.Email)
+		}
 		if errors.Is(err, directory.ErrInvalidCredentials) || errors.Is(err, directory.ErrInactive) || errors.Is(err, directory.ErrNotFound) {
 			writeError(w, http.StatusUnauthorized, "invalid credentials")
 			return
@@ -121,16 +125,17 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 }
 
 type tenantDTO struct {
-	ID           uint32 `json:"id"`
-	Name         string `json:"name"`
-	ExternalID   string `json:"external_id,omitempty"`
-	StorageLimit uint64 `json:"storage_limit"` // 0 = unlimited
-	StorageUsed  uint64 `json:"storage_used"`
+	ID            uint32 `json:"id"`
+	Name          string `json:"name"`
+	ExternalID    string `json:"external_id,omitempty"`
+	StorageLimit  uint64 `json:"storage_limit"` // 0 = unlimited
+	StorageUsed   uint64 `json:"storage_used"`
+	LoginDisabled bool   `json:"login_disabled"`
 }
 
 // tenantToDTO adds the summed mailbox usage of the tenant (0 when the inbox is not wired).
 func (s *Server) tenantToDTO(ctx context.Context, t storage.Tenant) tenantDTO {
-	dto := tenantDTO{ID: t.ID, Name: t.Name, ExternalID: t.ExternalID, StorageLimit: t.StorageLimit}
+	dto := tenantDTO{ID: t.ID, Name: t.Name, ExternalID: t.ExternalID, StorageLimit: t.StorageLimit, LoginDisabled: t.LoginDisabled}
 	if s.inbox != nil {
 		if ids, err := s.dir.TenantAccountIDs(ctx, t.ID); err == nil {
 			dto.StorageUsed, _ = s.inbox.StorageUsed(ctx, ids)
@@ -194,6 +199,7 @@ type domainDTO struct {
 	SSLActive     bool   `json:"ssl_active"`
 	DKIMActive    bool   `json:"dkim_active"`
 	AntiSpamOn    bool   `json:"antispam_active"`
+	LoginDisabled bool   `json:"login_disabled"`
 }
 
 func (s *Server) domainToDTO(ctx context.Context, d storage.Domain) domainDTO {
@@ -207,6 +213,7 @@ func (s *Server) domainToDTO(ctx context.Context, d storage.Domain) domainDTO {
 		DKIMEnabled:   d.DKIMEnabled,
 		DKIMSelector:  d.DKIMSelector,
 		AntiSpam:      d.AntiSpam,
+		LoginDisabled: d.LoginDisabled,
 		SendMax:       d.SendMaxMessages,
 		SendWindow:    d.SendWindow,
 		StorageBytes:  d.StorageBytes,

@@ -109,6 +109,41 @@ func (d *Local) SetTenantStorageLimit(ctx context.Context, id uint32, limit uint
 	return d.store.Commit(ctx, batch)
 }
 
+// SetTenantLoginDisabled blocks or restores login for every account in the tenant.
+// The default tenant cannot be disabled: it normally holds the instance admin.
+func (d *Local) SetTenantLoginDisabled(ctx context.Context, id uint32, disabled bool) error {
+	if disabled && id == DefaultTenantID {
+		return fmt.Errorf("directory: cannot disable login on the default tenant")
+	}
+	tenant, err := d.GetTenant(ctx, id)
+	if err != nil {
+		return err
+	}
+	tenant.LoginDisabled = disabled
+	batch := storage.NewBatch().WithAccount(systemAccountID)
+	if err := d.putTenant(batch, tenant); err != nil {
+		return err
+	}
+	return d.store.Commit(ctx, batch)
+}
+
+// SetDomainLoginDisabled blocks or restores login for every account on domain name.
+func (d *Local) SetDomainLoginDisabled(ctx context.Context, name string, disabled bool) (storage.Domain, error) {
+	dom, err := d.LookupDomain(ctx, name)
+	if err != nil {
+		return storage.Domain{}, err
+	}
+	dom.LoginDisabled = disabled
+	batch := storage.NewBatch().WithAccount(systemAccountID)
+	if err := d.putDomain(batch, dom); err != nil {
+		return storage.Domain{}, err
+	}
+	if err := d.store.Commit(ctx, batch); err != nil {
+		return storage.Domain{}, err
+	}
+	return dom, nil
+}
+
 // TenantStorageCap returns the storage cap of accountID's tenant and the ids of all accounts
 // sharing it; limit 0 means no cap. It matches mail.TenantStorageCapFunc. Cost per call is the
 // tenant's domains and accounts (domain → account index), not the whole instance.

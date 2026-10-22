@@ -214,3 +214,99 @@ func TestTenantStorageLimitAPI(t *testing.T) {
 		t.Fatalf("tenants %+v", out.Tenants)
 	}
 }
+
+// Only admin/provisioner suspend login; nobody suspends their own domain; suspended users get 401.
+func TestLoginDisabledAPI(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	srv, dir := newTestAPI(t)
+	tenant, err := dir.CreateTenant(ctx, "Customer", "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dom, _, err := dir.EnsureDomain(ctx, tenant.ID, "customer.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dir.CreateAccountRole(ctx, dom.ID, "boss", "pw", directory.RoleTenantAdmin); err != nil {
+		t.Fatal(err)
+	}
+	adminTok := login(t, srv, "admin@api.test", "secret")
+	bossTok := login(t, srv, "boss@customer.example", "pw")
+	patch := func(tok, path, body string) int {
+		res := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(res, authedJSON(t, http.MethodPatch, path, tok, []byte(body)))
+		return res.Code
+	}
+	tenantPath := "/api/v1/tenants/" + itoa(tenant.ID)
+
+	if code := patch(bossTok, "/api/v1/domains/customer.example", `{"login_disabled":false}`); code != http.StatusForbidden {
+		t.Fatalf("tenant_admin on domain want 403 got %d", code)
+	}
+	if code := patch(bossTok, tenantPath, `{"login_disabled":false}`); code != http.StatusForbidden {
+		t.Fatalf("tenant_admin on tenant want 403 got %d", code)
+	}
+	if code := patch(adminTok, "/api/v1/domains/api.test", `{"login_disabled":true}`); code != http.StatusForbidden {
+		t.Fatalf("own domain want 403 got %d", code)
+	}
+	if code := patch(adminTok, tenantPath, `{"login_disabled":true}`); code != http.StatusOK {
+		t.Fatalf("admin suspend tenant want 200 got %d", code)
+	}
+
+	res := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(res, authedJSON(t, http.MethodPost, "/api/v1/auth/login", "",
+		[]byte(`{"email":"boss@customer.example","password":"pw"}`)))
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("suspended login want 401 got %d", res.Code)
+	}
+}
+
+// Suspended users retrying with the right password must not trip the shared IP limiter.
+func TestLoginDisabledDoesNotTripRateLimit(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, "file:"+t.TempDir()+"/store.sqlite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	dir := directory.NewLocal(store)
+	if _, err := dir.BootstrapAdmin(ctx, "root@example.com", "secret"); err != nil {
+		t.Fatal(err)
+	}
+	tenant, err := dir.CreateTenant(ctx, "Customer", "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dom, _, err := dir.EnsureDomain(ctx, tenant.ID, "customer.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dir.CreateAccountRole(ctx, dom.ID, "alice", "pw", directory.RoleUser); err != nil {
+		t.Fatal(err)
+	}
+	if err := dir.SetTenantLoginDisabled(ctx, tenant.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	gate := security.NewRateLimitGate(security.RateLimitConfig{MaxAttempts: 2, Window: time.Hour})
+	srv, err := httpapi.New(httpapi.Options{
+		Listen: "127.0.0.1:0", Dir: dir, AuthKey: "0123456789abcdef0123456789abcdef", AuthGate: gate,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loginCode := func(email, pw string) int {
+		res := httptest.NewRecorder()
+		body, _ := json.Marshal(map[string]string{"email": email, "password": pw})
+		srv.Handler().ServeHTTP(res, authedJSON(t, http.MethodPost, "/api/v1/auth/login", "", body))
+		return res.Code
+	}
+	for range 5 {
+		if code := loginCode("alice@customer.example", "pw"); code != http.StatusUnauthorized {
+			t.Fatalf("suspended login want 401 got %d", code)
+		}
+	}
+	if code := loginCode("root@example.com", "secret"); code != http.StatusOK {
+		t.Fatalf("other user after suspended retries want 200 got %d", code)
+	}
+}

@@ -63,6 +63,15 @@ func (d *Local) Authenticate(ctx context.Context, email, password string) (Princ
 	if err := VerifyPassword(cred.PasswordHash, password); err != nil {
 		return Principal{}, ErrInvalidCredentials
 	}
+	// Suspension is checked after the password so it is not revealed to someone without it.
+	if dom.LoginDisabled {
+		return Principal{}, ErrInactive
+	}
+	if tenant, err := d.GetTenant(ctx, acc.TenantID); err == nil && tenant.LoginDisabled {
+		return Principal{}, ErrInactive
+	} else if err != nil && !errors.Is(err, ErrNotFound) {
+		return Principal{}, err
+	}
 	return Principal{
 		AccountID:  acc.ID,
 		DomainID:   dom.ID,

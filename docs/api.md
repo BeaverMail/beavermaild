@@ -107,11 +107,11 @@ Paths are relative to `/api/v1`. "Who" is the minimum role.
 |--------|------|-----|------|----------|
 | GET | `/tenants` | tenant_admin (own) / provisioner, admin (all) | | `{"tenants":[Tenant]}` |
 | POST | `/tenants` | provisioner / admin | `{name, external_id?, storage_limit?}` | `201` Tenant |
-| PATCH | `/tenants/{id}` | `name`: tenant_admin (own) / provisioner, admin. `storage_limit`: provisioner, admin | any of `{name, storage_limit}` | Tenant |
+| PATCH | `/tenants/{id}` | `name`: tenant_admin (own) / provisioner, admin. `storage_limit`, `login_disabled`: provisioner, admin | any of `{name, storage_limit, login_disabled}` | Tenant |
 | DELETE | `/tenants/{id}` | provisioner / admin | `{"confirm": "<tenant name>"}` | `{id, name, domains_deleted, accounts_deleted}` |
 
 **Tenant**: `id`, `name`, `external_id?`, `storage_limit` (bytes, `0` = unlimited), `storage_used` (sum of all its
-mailboxes).
+mailboxes), `login_disabled`.
 
 Deleting a tenant deletes all its domains, accounts and mail. The default tenant (`id=1`) cannot be deleted.
 
@@ -154,6 +154,7 @@ deleted its `external_id` can be used again.
 | `send_max_messages`, `send_window` | number, duration | per-domain submission rate, e.g. `100` per `"1h"`; `0`/empty = global |
 | `storage_bytes`, `messages_quota` | number | default per-account quotas; `0` = global default |
 | `relay_host`, `relay_user`, `relay_password`, `relay_starttls` | | per-domain outbound relay; on PATCH an empty `relay_password` keeps the stored one |
+| `login_disabled` | bool | PATCH only, admin and provisioner only; see [Suspending a customer](#suspending-a-customer) |
 
 **PATCH is a partial update**: only the fields in the body change, omitted fields keep their stored value. To clear
 a value send it explicitly (`"catch_all": ""`, `"storage_bytes": 0`). `cert_pem`/`key_pem` and `relay_password` keep
@@ -161,8 +162,8 @@ the stored secret when empty. There is no version check (ETag): two clients that
 time still race, last write wins.
 
 **Domain** (response) has the input fields (except secrets and PEMs) plus `id`, `dkim_selector`, `dkim_dns_name`,
-`dkim_dns_value`, `account_count`, `storage_used`, `ssl_active`, `dkim_active`, `antispam_active`. Empty or false
-optional fields are omitted.
+`dkim_dns_value`, `account_count`, `storage_used`, `ssl_active`, `dkim_active`, `antispam_active`, `login_disabled`.
+Empty or false optional fields are omitted.
 
 **Reports**: each item has `kind` (`dmarc`|`tls`), `from`, `to`, `received_at`, `content_type`, `format`, `file`,
 `parsed`, `problems?`. The `dmarc` aggregate (`reports`, `messages`, `dkim_pass`, `spf_pass`, `dmarc_pass`,
@@ -221,6 +222,24 @@ login can move space between its mailboxes but never exceed its plan.
 fails; nothing already stored is deleted. Lowering the cap below current usage only blocks new mail. Concurrent
 deliveries can overshoot the cap by at most the messages in flight. Typical use for a hosting plan: set
 `storage_limit = plan - web space used`, and update it when web usage changes.
+
+### Suspending a customer
+
+| Goal | Call | Login (IMAP, SMTP, API) | Sending | Incoming mail |
+|------|------|------------------------|---------|---------------|
+| Suspend (e.g. unpaid, after notices) | `PATCH /tenants/{id}` or `/domains/{domain}` with `{"login_disabled": true}` | blocked | blocked (needs SMTP AUTH) | **accepted**, up to the quota |
+| Disable one mailbox completely | `PATCH /accounts/{email}` with `{"active": false}` | blocked | blocked | **rejected** (`550 5.1.1 User inactive`, sender gets a bounce) |
+| Remove | `DELETE` on tenant, domain or account | | | mail deleted permanently |
+
+`login_disabled` is restored with `false`. Only `admin` and `provisioner` can change it, so a customer's
+`tenant_admin` cannot lift its own suspension. The default tenant and the caller's own tenant or domain cannot be
+disabled. A blocked login gets the same answer as a wrong password (`401`, IMAP `NO`, SMTP `535`), and it is checked
+only after the password, so it does not reveal the suspension to someone without it. Retries with the right password
+do not count toward the IP rate limit, so a suspended client polling through a shared webmail cannot lock out other
+users.
+
+Already open IMAP connections and API session tokens (up to 12 h) are not cut: suspension applies from the next
+login.
 
 ### Aliases and forwarding
 
