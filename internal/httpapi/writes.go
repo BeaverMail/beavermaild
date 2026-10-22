@@ -113,7 +113,7 @@ func (s *Server) handleCreateDomain(w http.ResponseWriter, r *http.Request) {
 	}
 	tenantID := req.TenantID
 	switch p.Role {
-	case directory.RoleAdmin:
+	case directory.RoleAdmin, directory.RoleProvisioner:
 		if tenantID == 0 {
 			tenantID = directory.DefaultTenantID
 		}

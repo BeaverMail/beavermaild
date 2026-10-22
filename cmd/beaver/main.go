@@ -71,6 +71,8 @@ func run(args []string) int {
 		return runDomain(args[1:])
 	case "account":
 		return runAccount(args[1:])
+	case "apikey":
+		return runAPIKey(args[1:])
 	case "plugins":
 		return runPlugins(args[1:])
 	case "help", "-h", "--help":
@@ -1210,6 +1212,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  beaver account info [-c path] -email addr [-json]")
 	fmt.Fprintln(os.Stderr, "  beaver account set-role [-c path] -email addr -role user|admin|tenant_admin")
 	fmt.Fprintln(os.Stderr, "  beaver account delete [-c path] -email addr")
+	printAPIKeyUsageLines()
 	fmt.Fprintln(os.Stderr, "  beaver plugins list [-c path]")
 	printPluginUsageLines()
 }

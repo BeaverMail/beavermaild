@@ -93,9 +93,14 @@ func (s *Server) parseToken(token string) (sessionClaims, error) {
 	return claims, nil
 }
 
-// principalFromRequest reads Bearer or session cookie.
+// principalFromRequest reads Bearer (API key or session) or session cookie.
 func (s *Server) principalFromRequest(r *http.Request) (directory.Principal, error) {
 	token := bearerToken(r)
+	// API keys skip the auth rate limit: a 256-bit secret cannot be guessed, and a shared
+	// limiter would let any local client lock the integration out.
+	if strings.HasPrefix(token, directory.APIKeyPrefix) {
+		return s.dir.AuthenticateAPIKey(r.Context(), token)
+	}
 	if token == "" {
 		if c, err := r.Cookie(sessionCookie); err == nil {
 			token = c.Value
@@ -191,13 +196,13 @@ func (s *Server) clearSessionCookie(w http.ResponseWriter) {
 
 // canListAllDomains reports instance-wide domain visibility.
 func canListAllDomains(p directory.Principal) bool {
-	return p.Role == directory.RoleAdmin
+	return p.Role == directory.RoleAdmin || p.Role == directory.RoleProvisioner
 }
 
 // canSeeDomainTenant reports whether p may see domains for tenantID.
 func canSeeDomainTenant(p directory.Principal, tenantID uint32) bool {
 	switch p.Role {
-	case directory.RoleAdmin:
+	case directory.RoleAdmin, directory.RoleProvisioner:
 		return true
 	case directory.RoleTenantAdmin:
 		return p.TenantID == tenantID
@@ -211,7 +216,7 @@ func canSeeDomainTenant(p directory.Principal, tenantID uint32) bool {
 // canListAccounts reports whether p may list accounts on domain tenant/name.
 func canListAccounts(p directory.Principal, tenantID uint32, domainName string) bool {
 	switch p.Role {
-	case directory.RoleAdmin:
+	case directory.RoleAdmin, directory.RoleProvisioner:
 		return true
 	case directory.RoleTenantAdmin:
 		return p.TenantID == tenantID
@@ -225,7 +230,7 @@ func canListAccounts(p directory.Principal, tenantID uint32, domainName string) 
 // canManageDomain reports whether p may create/delete domains in tenantID.
 func canManageDomain(p directory.Principal, tenantID uint32) bool {
 	switch p.Role {
-	case directory.RoleAdmin:
+	case directory.RoleAdmin, directory.RoleProvisioner:
 		return true
 	case directory.RoleTenantAdmin:
 		return p.TenantID == tenantID
@@ -239,15 +244,15 @@ func canManageAccount(p directory.Principal, tenantID uint32) bool {
 	return canManageDomain(p, tenantID)
 }
 
-// canCreateOrDeleteTenant reports instance-admin-only tenant lifecycle.
+// canCreateOrDeleteTenant reports tenant lifecycle rights (instance admin or provisioner).
 func canCreateOrDeleteTenant(p directory.Principal) bool {
-	return p.Role == directory.RoleAdmin
+	return p.Role == directory.RoleAdmin || p.Role == directory.RoleProvisioner
 }
 
 // canRenameTenant reports whether p may rename tenantID.
 func canRenameTenant(p directory.Principal, tenantID uint32) bool {
 	switch p.Role {
-	case directory.RoleAdmin:
+	case directory.RoleAdmin, directory.RoleProvisioner:
 		return true
 	case directory.RoleTenantAdmin:
 		return p.TenantID == tenantID
@@ -262,7 +267,7 @@ func canAssignRole(p directory.Principal, targetRole string) bool {
 	switch p.Role {
 	case directory.RoleAdmin:
 		return directory.ValidateRole(targetRole) == nil
-	case directory.RoleTenantAdmin:
+	case directory.RoleTenantAdmin, directory.RoleProvisioner:
 		return targetRole == directory.RoleUser || targetRole == directory.RoleTenantAdmin
 	default:
 		return false

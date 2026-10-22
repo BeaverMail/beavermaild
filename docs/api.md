@@ -27,10 +27,32 @@ A non-loopback `listen` requires TLS (`tls.cert_file`/`key_file` or `tls.acme_ho
 | Question | Answer today |
 |----------|--------------|
 | Where does it listen? | TCP only: loopback (plain HTTP allowed) or network (HTTPS required). No Unix socket. |
-| How do clients authenticate? | Session token from `POST /auth/login` (below). No API keys, no mTLS. |
-| Can credentials be restricted? | Only by role and tenant (see [Roles](#roles)). No per-operation scopes or read-only tokens. |
+| How do clients authenticate? | API key (integrations) or session token from `POST /auth/login` (browser, scripts). No mTLS. |
+| Can credentials be restricted? | By role and tenant (see [Roles](#roles)). API keys use the `provisioner` role. No per-operation scopes or read-only tokens. |
 
 ## Authentication
+
+### API keys (integrations)
+
+Create a key on the mail server with the CLI; the token is printed once on stdout:
+
+```sh
+beaver apikey create -name panel          # prints bk_<id>_<secret>
+beaver apikey list [-json]                # id, name, role, created (never the secret)
+beaver apikey revoke <id>                 # takes effect on the next request
+```
+
+Send it as `Authorization: Bearer bk_<id>_<secret>`. API keys:
+
+- do not expire; revoke them with the CLI;
+- use the `provisioner` role (see [Roles](#roles));
+- **skip the login rate limit**, so failed logins from other local clients cannot lock the integration out;
+- can only be created, listed and revoked from the CLI, not through the API;
+- are stored as SHA-256 of the secret; a lost token cannot be recovered, create a new one.
+
+A wrong or revoked key returns `401`.
+
+### Session login
 
 1. `POST /auth/login` with directory credentials; the response carries a `token`.
 2. Send `Authorization: Bearer <token>` on every other call.
@@ -43,8 +65,7 @@ TOKEN=$(curl -s https://mail.example.com/api/v1/auth/login \
 curl -s https://mail.example.com/api/v1/me -H "Authorization: Bearer $TOKEN"
 ```
 
-- Tokens are HMAC-signed sessions valid for **12 hours**. There are no long-lived API keys yet: integrations log in
-  again when they get `401`.
+- Session tokens are HMAC-signed and valid for **12 hours**; clients log in again when they get `401`.
 - Logout is client-side for Bearer clients (drop the token); `POST /auth/logout` only clears the browser cookie.
 - The browser UI uses the `beaver_session` cookie instead. Cookie-authenticated writes must pass a same-origin check;
   Bearer requests skip it.
@@ -52,14 +73,14 @@ curl -s https://mail.example.com/api/v1/me -H "Authorization: Bearer $TOKEN"
   further attempts get `429 too many auth attempts`. Authenticated calls have no rate limit.
 - The failure counter is **shared with IMAP and SMTP AUTH** and keyed by IP only. Every local client (webmail,
   scripts, other users on the host) counts as `127.0.0.1`, so 10 failed IMAP logins from a local webmail also block
-  API logins from the same host for up to 15 minutes. The only switch today is `auth.rate_limit.disable`, which turns
-  it off for all protocols.
+  session logins from the same host for up to 15 minutes. Integrations should use an API key, which is not affected.
 
 ### Roles
 
 | Role | Scope |
 |------|-------|
 | `admin` | Whole instance |
+| `provisioner` | API keys only. All tenants, domains and accounts (create, change, delete). Cannot create or promote `admin` accounts, and has no access to queue, logs, status or delivery |
 | `tenant_admin` | Its own tenant: domains and accounts |
 | `user` | Read-only view of its own domain and its own account |
 
@@ -78,16 +99,16 @@ Paths are relative to `/api/v1`. "Who" is the minimum role.
 | POST | `/setup` | public, only while `needed` | `{email, password}` | same as login; `409` once setup is done |
 | POST | `/auth/login` | public | `{email, password}` | `{token, account:{email, role, tenant_id}}` |
 | POST | `/auth/logout` | public | | `{"status":"ok"}` |
-| GET | `/me` | any | | `{email, role, tenant_id}` |
+| GET | `/me` | any | | `{email, role, tenant_id}` (API key: `apikey-<id>@api-key.invalid`, `tenant_id` 0) |
 
 ### Tenants
 
 | Method | Path | Who | Body | Response |
 |--------|------|-----|------|----------|
-| GET | `/tenants` | tenant_admin (own) / admin (all) | | `{"tenants":[{id, name}]}` |
-| POST | `/tenants` | admin | `{name}` | `201` `{id, name}` |
+| GET | `/tenants` | tenant_admin (own) / provisioner, admin (all) | | `{"tenants":[{id, name}]}` |
+| POST | `/tenants` | provisioner / admin | `{name}` | `201` `{id, name}` |
 | PATCH | `/tenants/{id}` | tenant_admin (own) / admin | `{name}` | `{id, name}` |
-| DELETE | `/tenants/{id}` | admin | `{"confirm": "<tenant name>"}` | `{id, name, domains_deleted, accounts_deleted}` |
+| DELETE | `/tenants/{id}` | provisioner / admin | `{"confirm": "<tenant name>"}` | `{id, name, domains_deleted, accounts_deleted}` |
 
 Deleting a tenant deletes all its domains, accounts and mail. The default tenant (`id=1`) cannot be deleted.
 
@@ -108,7 +129,7 @@ Deleting a tenant deletes all its domains, accounts and mail. The default tenant
 | Field | Type | Notes |
 |-------|------|-------|
 | `name` | string | POST only, required |
-| `tenant_id` | number | POST only; admin may choose (default `1`), tenant_admin is forced to its own |
+| `tenant_id` | number | POST only; admin and provisioner may choose (default `1`), tenant_admin is forced to its own |
 | `mail_hostname` | string | **required** (e.g. `mail.example.com`) |
 | `ssl_mode` | string | `none` (default), `acme`, `custom` |
 | `cert_pem`, `key_pem` | string | required with `custom` on create; on PATCH omit them to keep the stored cert |
@@ -144,7 +165,7 @@ that kind parsed.
 **Account**: `id`, `local_part`, `email`, `role`, `tenant_id`, `active`, `storage_used`, `storage_limit`,
 `messages_used`, `messages_limit` (limit `0` = unlimited; usage is filled on list and PATCH, not on create).
 
-- `role` defaults to `user`. A tenant_admin can assign only `user` or `tenant_admin`.
+- `role` defaults to `user`. A tenant_admin or provisioner can assign only `user` or `tenant_admin`.
 - Account PATCH is a real partial update: send only the fields to change.
 - `active: false` blocks IMAP/SMTP/API login **and rejects incoming mail** with `550 5.1.1 User inactive`, so senders
   get a bounce. Stored mail is kept.
@@ -169,7 +190,7 @@ usage read). Changing the domain default later does **not** update mailboxes tha
 mailbox explicitly with PATCH. A new limit below current usage blocks further delivery but deletes nothing. Usage is
 in bytes and counts stored messages only.
 
-Who can set mailbox limits: `admin`, and `tenant_admin` for accounts in its own tenant (same rule as the domain
+Who can set mailbox limits: `admin`, `provisioner`, and `tenant_admin` for accounts in its own tenant (same rule as the domain
 defaults). A customer who holds a `tenant_admin` login can therefore raise its own limits; there is no server-side
 tenant-wide cap yet.
 
@@ -219,7 +240,7 @@ milliseconds.
 | Code | Meaning |
 |------|---------|
 | 400 | Invalid JSON, unknown field, or validation error (message in `error`) |
-| 401 | Missing, invalid or expired token: log in again |
+| 401 | Missing, invalid, expired or revoked token / API key |
 | 403 | Outside the caller's role or tenant, or a forbidden self-action |
 | 404 | Domain, account, tenant or queue entry not found |
 | 409 | Already exists, or setup already complete |
@@ -350,6 +371,7 @@ DELETE /api/v1/domains/example.org
   domain deletes also require a `confirm` field equal to the name.
 - `PATCH /domains/{domain}` resets every field you omit: always GET first and send the full object back.
 - Do not invent fields; unknown keys fail the whole request.
-- On `401`, log in again; tokens expire after 12 h.
-- Never put passwords in logs or prompts; prefer a dedicated `tenant_admin` account scoped to one tenant over
-  `admin`.
+- Prefer an API key (`provisioner`) over a password login; on `401` with an API key, stop and ask: the key was
+  revoked. With a session token, log in again (tokens expire after 12 h).
+- Never put passwords or API keys in logs or prompts. For an agent that serves one customer, a `tenant_admin`
+  account scoped to that tenant is narrower than a `provisioner` key.

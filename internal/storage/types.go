@@ -7,6 +7,15 @@ type Tenant struct {
 	Name string `msgpack:"n"`
 }
 
+// APIKey is a long-lived integration credential; only the SHA-256 of its secret is stored.
+type APIKey struct {
+	ID      uint32 `msgpack:"id"`
+	Name    string `msgpack:"n"`
+	Role    string `msgpack:"r"`
+	Hash    []byte `msgpack:"h"`
+	Created int64  `msgpack:"c"` // Unix seconds
+}
+
 // Domain is a mail domain (e.g. example.com) with optional hosting settings.
 type Domain struct {
 	ID       uint32 `msgpack:"id"`

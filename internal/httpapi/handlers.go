@@ -125,7 +125,7 @@ type tenantDTO struct {
 	Name string `json:"name"`
 }
 
-// handleListTenants returns tenants visible to the caller (admin: all; tenant_admin: own).
+// handleListTenants returns tenants visible to the caller (admin/provisioner: all; tenant_admin: own).
 func (s *Server) handleListTenants(w http.ResponseWriter, r *http.Request) {
 	p, ok := principal(r.Context())
 	if !ok {
@@ -133,7 +133,7 @@ func (s *Server) handleListTenants(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch p.Role {
-	case directory.RoleAdmin:
+	case directory.RoleAdmin, directory.RoleProvisioner:
 		tenants, err := s.dir.ListTenants(r.Context())
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "list tenants failed")

@@ -11,6 +11,8 @@ const (
 	RoleUser        = "user"
 	RoleAdmin       = "admin"
 	RoleTenantAdmin = "tenant_admin"
+	// RoleProvisioner manages tenants, domains, and accounts without instance ops; API keys only, never accounts.
+	RoleProvisioner = "provisioner"
 )
 
 // NormalizeRole returns a canonical role or RoleUser when empty.
