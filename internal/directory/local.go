@@ -96,7 +96,7 @@ func (d *Local) CreateDomain(ctx context.Context, tenantID uint32, name string) 
 	if tenantID == 0 {
 		return storage.Domain{}, fmt.Errorf("directory: tenant_id required")
 	}
-	if err := d.ensureTenant(ctx, tenantRecord(tenantID)); err != nil {
+	if err := d.requireTenant(ctx, tenantID); err != nil {
 		return storage.Domain{}, err
 	}
 	if _, err := d.lookupDomainID(ctx, name); err == nil {

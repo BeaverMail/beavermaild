@@ -174,3 +174,27 @@ func TestLoginDisabled(t *testing.T) {
 		t.Fatal("default tenant must not be disabled")
 	}
 }
+
+// On a fresh store (no setup yet) a customer tenant never takes the default id, and a
+// domain for an unknown tenant fails instead of creating that tenant.
+func TestFreshStoreTenantIDs(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	d := openDir(t)
+	tenant, err := d.CreateTenant(ctx, "Customer", "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tenant.ID == directory.DefaultTenantID {
+		t.Fatalf("customer tenant got the default id %d", tenant.ID)
+	}
+	if _, err := d.CreateDomain(ctx, 99, "ghost.example"); err == nil {
+		t.Fatal("domain for unknown tenant must fail")
+	}
+	if _, err := d.GetTenant(ctx, 99); !errors.Is(err, directory.ErrNotFound) {
+		t.Fatalf("unknown tenant was created: err=%v", err)
+	}
+	if _, err := d.CreateDomain(ctx, directory.DefaultTenantID, "default.example"); err != nil {
+		t.Fatalf("default tenant domain: %v", err)
+	}
+}

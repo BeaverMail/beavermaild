@@ -57,9 +57,6 @@ func (d *Local) EnsureDomain(ctx context.Context, tenantID uint32, name string) 
 	if err != nil {
 		return storage.Domain{}, false, err
 	}
-	if err := d.ensureTenant(ctx, tenantRecord(tenantID)); err != nil {
-		return storage.Domain{}, false, err
-	}
 	dom, err := d.CreateDomain(ctx, tenantID, name)
 	if err == nil {
 		return dom, true, nil
@@ -72,6 +69,21 @@ func (d *Local) EnsureDomain(ctx context.Context, tenantID uint32, name string) 
 		return storage.Domain{}, false, err
 	}
 	return existing, false, nil
+}
+
+// requireTenant creates the default tenant on demand and fails for any other id that does not
+// exist, so a mistyped tenant_id never creates a tenant behind the caller's back.
+func (d *Local) requireTenant(ctx context.Context, id uint32) error {
+	if id == DefaultTenantID {
+		return d.ensureTenant(ctx, tenantRecord(DefaultTenantID))
+	}
+	if _, err := d.GetTenant(ctx, id); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return fmt.Errorf("directory: tenant %d not found", id)
+		}
+		return err
+	}
+	return nil
 }
 
 func tenantRecord(id uint32) storage.Tenant {

@@ -50,7 +50,11 @@ func TestRoleScopedDomains(t *testing.T) {
 	srv, dir := newTestAPI(t)
 	ctx := context.Background()
 
-	other, err := dir.CreateDomain(ctx, 2, "other.test")
+	otherTenant, err := dir.CreateTenant(ctx, "Other", "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := dir.CreateDomain(ctx, otherTenant.ID, "other.test")
 	if err != nil {
 		t.Fatal(err)
 	}

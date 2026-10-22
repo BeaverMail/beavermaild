@@ -41,6 +41,10 @@ func (d *Local) CreateTenant(ctx context.Context, name, externalID string, stora
 			return storage.Tenant{}, err
 		}
 	}
+	// The default tenant must exist first so customer tenants never take id 1 on a fresh store.
+	if err := d.ensureTenant(ctx, tenantRecord(DefaultTenantID)); err != nil {
+		return storage.Tenant{}, err
+	}
 	id, err := d.allocTenantID(ctx)
 	if err != nil {
 		return storage.Tenant{}, err
