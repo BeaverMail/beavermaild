@@ -74,3 +74,24 @@ func TestDomainAccountIndexBackfill(t *testing.T) {
 		t.Fatalf("after delete %+v err=%v", accounts, err)
 	}
 }
+
+// Report addresses are taken on every domain: creating a mailbox with that name must fail clearly.
+func TestReservedReportLocalParts(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, "file:"+t.TempDir()+"/store.sqlite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	d := NewLocal(store)
+	dom, _, err := d.EnsureDomain(ctx, DefaultTenantID, "one.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, lp := range []string{"dmarc-reports", "TLS-Reports"} {
+		if _, err := d.CreateAccountRole(ctx, dom.ID, lp, "pw", RoleUser); err == nil {
+			t.Fatalf("%s must be reserved", lp)
+		}
+	}
+}

@@ -19,6 +19,13 @@ import (
 
 // ReportMeta is the basic ingest metadata stored beside the raw report file.
 // The report itself is never parsed at ingest: Format is only presumed.
+// ReportLocalParts maps the per-domain report addresses (<local>@<domain>) to their report kind.
+// SMTP stores mail to them as reports, so they can never be mailboxes.
+var ReportLocalParts = map[string]string{
+	"dmarc-reports": "dmarc",
+	"tls-reports":   "tls",
+}
+
 type ReportMeta struct {
 	Kind        string `json:"kind"`         // dmarc|tls
 	From        string `json:"from"`         // envelope sender

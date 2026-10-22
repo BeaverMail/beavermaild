@@ -125,6 +125,9 @@ func (d *Local) CreateAccountRole(ctx context.Context, domainID uint32, localPar
 	if localPart == "" {
 		return storage.Account{}, fmt.Errorf("directory: empty local part")
 	}
+	if _, ok := ReportLocalParts[localPart]; ok {
+		return storage.Account{}, fmt.Errorf("directory: local part %q is reserved for %s reports", localPart, ReportLocalParts[localPart])
+	}
 	role = NormalizeRole(role)
 	if err := ValidateRole(role); err != nil {
 		return storage.Account{}, err

@@ -15,13 +15,7 @@ func reportKindForAddress(addr string) string {
 	if i < 0 {
 		return ""
 	}
-	switch strings.ToLower(addr[:i]) {
-	case "dmarc-reports":
-		return "dmarc"
-	case "tls-reports":
-		return "tls"
-	}
-	return ""
+	return directory.ReportLocalParts[strings.ToLower(addr[:i])]
 }
 
 // storeReport saves the raw report message to the domain report store in the data dir.

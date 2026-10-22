@@ -132,10 +132,10 @@ deleted its `external_id` can be used again.
 | Method | Path | Who | Body | Response |
 |--------|------|-----|------|----------|
 | GET | `/domains` | any (scoped) | | `{"domains":[Domain]}` |
-| POST | `/domains` | tenant_admin / admin | DomainInput | `201` Domain |
+| POST | `/domains` | tenant_admin / provisioner / admin | DomainInput | `201` Domain |
 | GET | `/domains/{domain}` | any (scoped) | | Domain |
-| PATCH | `/domains/{domain}` | tenant_admin / admin | any DomainInput fields (not `name`, `tenant_id`) | Domain |
-| DELETE | `/domains/{domain}` | tenant_admin / admin | `{"confirm": "<domain name>"}` | `{name, accounts_deleted}` |
+| PATCH | `/domains/{domain}` | tenant_admin / provisioner / admin | any DomainInput fields (not `name`, `tenant_id`) | Domain |
+| DELETE | `/domains/{domain}` | tenant_admin / provisioner / admin | `{"confirm": "<domain name>"}` | `{name, accounts_deleted}` |
 | GET | `/domains/{domain}/dns-recommended` | any (scoped) | | `{domain, records:[{type, host, value, placeholder?, note?}]}` |
 | GET | `/domains/{domain}/reports` | any (scoped) | | `{domain, reports:[...], dmarc?, tls?}` |
 
@@ -146,7 +146,7 @@ deleted its `external_id` can be used again.
 | `name` | string | POST only, required |
 | `tenant_id` | number | POST only; admin and provisioner may choose (default `1`), tenant_admin is forced to its own |
 | `mail_hostname` | string | **required** on POST (e.g. `mail.example.com`); on PATCH it cannot be set to empty |
-| `ssl_mode` | string | `none` (default), `acme`, `custom` |
+| `ssl_mode` | string | `none` (default), `acme`, `custom`. `acme` issues for `mail_hostname` via HTTP-01 or TLS-ALPN-01, so it needs ports 80/443 or a proxy that forwards the challenge (see [tls-ops.md](tls-ops.md#acme)); `custom` takes PEMs you renew yourself |
 | `cert_pem`, `key_pem` | string | required with `custom` on create; on PATCH omit them to keep the stored cert |
 | `catch_all` | string | local part that receives mail for unknown addresses |
 | `dkim_enabled` | bool | generates a key (selector `beaver`) on first enable |
@@ -175,14 +175,17 @@ that kind parsed.
 | Method | Path | Who | Body | Response |
 |--------|------|-----|------|----------|
 | GET | `/domains/{domain}/accounts` | any (user: only itself) | | `{"accounts":[Account]}` |
-| POST | `/domains/{domain}/accounts` | tenant_admin / admin | `{local_part, password, role?}` | `201` Account |
-| PATCH | `/accounts/{email}` | tenant_admin / admin | any of `{role, password, active, storage_limit, messages_limit}` | Account |
-| DELETE | `/accounts/{email}` | tenant_admin / admin | | `{email, messages_removed, blobs_removed}` |
+| POST | `/domains/{domain}/accounts` | tenant_admin / provisioner / admin | `{local_part, password, role?}` | `201` Account |
+| PATCH | `/accounts/{email}` | tenant_admin / provisioner / admin | any of `{role, password, active, storage_limit, messages_limit}` | Account |
+| DELETE | `/accounts/{email}` | tenant_admin / provisioner / admin | | `{email, messages_removed, blobs_removed}` |
 
 **Account**: `id`, `local_part`, `email`, `role`, `tenant_id`, `active`, `storage_used`, `storage_limit`,
 `messages_used`, `messages_limit` (limit `0` = unlimited; usage is filled on list and PATCH, not on create).
 
 - `role` defaults to `user`. A tenant_admin or provisioner can assign only `user` or `tenant_admin`.
+- `dmarc-reports` and `tls-reports` are reserved on every domain (they receive DMARC/TLS reports, see
+  [Recommended DNS records](#recommended-dns-records)): creating them returns `400` with
+  `local part "dmarc-reports" is reserved for dmarc reports`.
 - Account PATCH is a real partial update: send only the fields to change.
 - `active: false` blocks IMAP/SMTP/API login **and rejects incoming mail** with `550 5.1.1 User inactive`, so senders
   get a bounce. Stored mail is kept.
@@ -253,7 +256,9 @@ one.
 
 **MTA-STS is not returned**: publishing `_mta-sts.<domain>` requires serving the policy at
 `https://mta-sts.<domain>/.well-known/mta-sts.txt` with a valid certificate (RFC 8461, Section 3), and this server
-does not serve inbound policies yet.
+does not serve inbound policies yet. Another web server can serve it instead; its `mx:` lines must match the domain's
+`mail_hostname`, and the mail server's certificate must be valid for that name, or `mode: enforce` senders will refuse
+to deliver. Start with `mode: testing`.
 
 ### Outbound queue (admin)
 
