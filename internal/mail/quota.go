@@ -67,6 +67,23 @@ func (ib *Inbox) QuotaStatus(ctx context.Context, accountID uint32) (QuotaStatus
 	}, nil
 }
 
+// SetQuotaLimits overrides the stored limits for accountID (0 = unlimited); nil keeps the current value.
+func (ib *Inbox) SetQuotaLimits(ctx context.Context, accountID uint32, storageBytes *uint64, messages *uint32) error {
+	ib.quotaMu.Lock()
+	defer ib.quotaMu.Unlock()
+	rec, err := ib.loadQuotaRecord(ctx, accountID)
+	if err != nil {
+		return err
+	}
+	if storageBytes != nil {
+		rec.StorageLimit = *storageBytes
+	}
+	if messages != nil {
+		rec.MessageLimit = *messages
+	}
+	return ib.saveQuotaRecord(ctx, accountID, rec)
+}
+
 func (ib *Inbox) checkQuota(ctx context.Context, accountID uint32, addBytes uint64, addMessages uint32) error {
 	rec, err := ib.loadQuotaRecord(ctx, accountID)
 	if err != nil {
@@ -82,6 +99,8 @@ func (ib *Inbox) checkQuota(ctx context.Context, accountID uint32, addBytes uint
 }
 
 func (ib *Inbox) addQuotaUsage(ctx context.Context, accountID uint32, addBytes uint64, addMessages uint32) error {
+	ib.quotaMu.Lock()
+	defer ib.quotaMu.Unlock()
 	rec, err := ib.loadQuotaRecord(ctx, accountID)
 	if err != nil {
 		return err
@@ -92,6 +111,8 @@ func (ib *Inbox) addQuotaUsage(ctx context.Context, accountID uint32, addBytes u
 }
 
 func (ib *Inbox) subQuotaUsage(ctx context.Context, accountID uint32, subBytes uint64, subMessages uint32) error {
+	ib.quotaMu.Lock()
+	defer ib.quotaMu.Unlock()
 	rec, err := ib.loadQuotaRecord(ctx, accountID)
 	if err != nil {
 		return err

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/BeaverMail/beaver/internal/storage"
@@ -17,6 +18,8 @@ type Inbox struct {
 	blobs          *blob.FS
 	quotaDefault   QuotaDefaults
 	accountQuotaFn AccountQuotaDefaultsFunc
+	// quotaMu serializes quota record read-modify-write so usage and limit updates do not overwrite each other.
+	quotaMu sync.Mutex
 }
 
 // NewInbox returns a delivery helper over store and blobs.

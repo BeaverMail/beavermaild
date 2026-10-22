@@ -434,9 +434,12 @@ type patchAccountRequest struct {
 	Role     *string `json:"role"`
 	Password *string `json:"password"`
 	Active   *bool   `json:"active"`
+	// Mailbox quota overrides (0 = unlimited).
+	StorageLimit  *uint64 `json:"storage_limit"`
+	MessagesLimit *uint32 `json:"messages_limit"`
 }
 
-// handlePatchAccount updates role, password, and/or active flag.
+// handlePatchAccount updates role, password, active flag, and/or mailbox quota limits.
 func (s *Server) handlePatchAccount(w http.ResponseWriter, r *http.Request) {
 	p, ok := principal(r.Context())
 	if !ok {
@@ -462,8 +465,13 @@ func (s *Server) handlePatchAccount(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	if req.Role == nil && req.Password == nil && req.Active == nil {
+	setQuota := req.StorageLimit != nil || req.MessagesLimit != nil
+	if req.Role == nil && req.Password == nil && req.Active == nil && !setQuota {
 		writeError(w, http.StatusBadRequest, "no fields to update")
+		return
+	}
+	if setQuota && s.inbox == nil {
+		writeError(w, http.StatusServiceUnavailable, "quota store unavailable")
 		return
 	}
 	self := strings.EqualFold(email, p.Email())
@@ -497,19 +505,33 @@ func (s *Server) handlePatchAccount(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if setQuota {
+		if err := s.inbox.SetQuotaLimits(r.Context(), acc.ID, req.StorageLimit, req.MessagesLimit); err != nil {
+			s.log.Error("http set quota", "err", err)
+			writeError(w, http.StatusInternalServerError, "set quota failed")
+			return
+		}
+	}
 	acc, _, err = s.dir.ResolveEmail(r.Context(), email)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "reload account failed")
 		return
 	}
-	writeJSON(w, http.StatusOK, accountListDTO{
+	dto := accountListDTO{
 		ID:        acc.ID,
 		LocalPart: acc.LocalPart,
 		Email:     acc.LocalPart + "@" + dom.Name,
 		Role:      directory.NormalizeRole(acc.Role),
 		TenantID:  acc.TenantID,
 		Active:    acc.Active,
-	})
+	}
+	if s.inbox != nil {
+		if st, err := s.inbox.QuotaStatus(r.Context(), acc.ID); err == nil {
+			dto.StorageUsed, dto.StorageLimit = st.StorageUsed, st.StorageLimit
+			dto.MessagesUsed, dto.MessagesLimit = st.MessagesUsed, st.MessagesLimit
+		}
+	}
+	writeJSON(w, http.StatusOK, dto)
 }
 
 type createTenantRequest struct {
