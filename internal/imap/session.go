@@ -996,29 +996,48 @@ func parseLogin(arg string) (user, pass string, ok bool) {
 	if arg == "" {
 		return "", "", false
 	}
+	var rest string
 	if arg[0] == '"' {
-		user, rest, found := parseQuoted(arg)
+		var found bool
+		if user, rest, found = parseQuoted(arg); !found {
+			return "", "", false
+		}
+		user = unescapeQuoted(user)
+	} else {
+		i := strings.IndexByte(arg, ' ')
+		if i < 0 {
+			return "", "", false
+		}
+		user, rest = arg[:i], arg[i+1:]
+	}
+	rest = strings.TrimSpace(rest)
+	if rest == "" {
+		return "", "", false
+	}
+	// A quoted password is unquoted whatever the user form (clients send `alice "pass word"`).
+	if rest[0] == '"' {
+		pass, _, found := parseQuoted(rest)
 		if !found {
 			return "", "", false
 		}
-		rest = strings.TrimSpace(rest)
-		if rest == "" {
-			return "", "", false
-		}
-		if rest[0] == '"' {
-			pass, _, found = parseQuoted(rest)
-			if !found {
-				return "", "", false
-			}
-			return user, pass, true
-		}
-		return user, rest, true
+		return user, unescapeQuoted(pass), true
 	}
-	i := strings.IndexByte(arg, ' ')
-	if i < 0 {
-		return "", "", false
+	return user, rest, true
+}
+
+// unescapeQuoted resolves the \" and \\ escapes of an IMAP quoted string (RFC 3501 §4.3).
+func unescapeQuoted(s string) string {
+	if !strings.Contains(s, `\`) {
+		return s
 	}
-	return arg[:i], strings.TrimSpace(arg[i+1:]), true
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) {
+			i++
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
 }
 
 func parseQuoted(s string) (val, rest string, ok bool) {
