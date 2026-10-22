@@ -71,6 +71,7 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 		}
 		return mail.QuotaDefaults{StorageBytes: sb, Messages: msgs}, true
 	})
+	inbox.SetTenantStorageCapFunc(dir.TenantStorageCap)
 	queue := mail.NewQueue(store, blobs)
 
 	certFile, keyFile, _ := cfg.TLSPair()

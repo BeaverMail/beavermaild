@@ -52,6 +52,28 @@ func (ib *Inbox) SetAccountQuotaDefaultsFunc(fn AccountQuotaDefaultsFunc) {
 	ib.accountQuotaFn = fn
 }
 
+// TenantStorageCapFunc returns the storage cap shared by accountID's tenant and the ids of all
+// accounts in it; limit 0 means no tenant cap.
+type TenantStorageCapFunc func(ctx context.Context, accountID uint32) (limit uint64, accountIDs []uint32, err error)
+
+// SetTenantStorageCapFunc enables the tenant-wide storage cap on delivery, APPEND, and copy.
+func (ib *Inbox) SetTenantStorageCapFunc(fn TenantStorageCapFunc) {
+	ib.tenantCapFn = fn
+}
+
+// StorageUsed sums the stored bytes of accountIDs.
+func (ib *Inbox) StorageUsed(ctx context.Context, accountIDs []uint32) (uint64, error) {
+	var total uint64
+	for _, id := range accountIDs {
+		st, err := ib.QuotaStatus(ctx, id)
+		if err != nil {
+			return 0, err
+		}
+		total += st.StorageUsed
+	}
+	return total, nil
+}
+
 // QuotaStatus returns RFC 2087 quota counters for accountID.
 func (ib *Inbox) QuotaStatus(ctx context.Context, accountID uint32) (QuotaStatus, error) {
 	rec, err := ib.loadQuotaRecord(ctx, accountID)
@@ -93,6 +115,20 @@ func (ib *Inbox) checkQuota(ctx context.Context, accountID uint32, addBytes uint
 		return ErrOverQuota
 	}
 	if rec.StorageLimit > 0 && rec.StorageUsed+addBytes > rec.StorageLimit {
+		return ErrOverQuota
+	}
+	if ib.tenantCapFn == nil || addBytes == 0 {
+		return nil
+	}
+	limit, ids, err := ib.tenantCapFn(ctx, accountID)
+	if err != nil || limit == 0 {
+		return err
+	}
+	used, err := ib.StorageUsed(ctx, ids)
+	if err != nil {
+		return err
+	}
+	if used+addBytes > limit {
 		return ErrOverQuota
 	}
 	return nil

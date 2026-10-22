@@ -121,13 +121,22 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 }
 
 type tenantDTO struct {
-	ID         uint32 `json:"id"`
-	Name       string `json:"name"`
-	ExternalID string `json:"external_id,omitempty"`
+	ID           uint32 `json:"id"`
+	Name         string `json:"name"`
+	ExternalID   string `json:"external_id,omitempty"`
+	StorageLimit uint64 `json:"storage_limit"` // 0 = unlimited
+	StorageUsed  uint64 `json:"storage_used"`
 }
 
-func toTenantDTO(t storage.Tenant) tenantDTO {
-	return tenantDTO{ID: t.ID, Name: t.Name, ExternalID: t.ExternalID}
+// tenantToDTO adds the summed mailbox usage of the tenant (0 when the inbox is not wired).
+func (s *Server) tenantToDTO(ctx context.Context, t storage.Tenant) tenantDTO {
+	dto := tenantDTO{ID: t.ID, Name: t.Name, ExternalID: t.ExternalID, StorageLimit: t.StorageLimit}
+	if s.inbox != nil {
+		if ids, err := s.dir.TenantAccountIDs(ctx, t.ID); err == nil {
+			dto.StorageUsed, _ = s.inbox.StorageUsed(ctx, ids)
+		}
+	}
+	return dto
 }
 
 // handleListTenants returns tenants visible to the caller (admin/provisioner: all; tenant_admin: own).
@@ -146,7 +155,7 @@ func (s *Server) handleListTenants(w http.ResponseWriter, r *http.Request) {
 		}
 		out := make([]tenantDTO, 0, len(tenants))
 		for _, t := range tenants {
-			out = append(out, toTenantDTO(t))
+			out = append(out, s.tenantToDTO(r.Context(), t))
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"tenants": out})
 	case directory.RoleTenantAdmin:
@@ -155,7 +164,7 @@ func (s *Server) handleListTenants(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "get tenant failed")
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"tenants": []tenantDTO{toTenantDTO(t)}})
+		writeJSON(w, http.StatusOK, map[string]any{"tenants": []tenantDTO{s.tenantToDTO(r.Context(), t)}})
 	default:
 		writeError(w, http.StatusForbidden, "forbidden")
 	}

@@ -106,3 +106,63 @@ func TestQuotaUsesDomainDefaults(t *testing.T) {
 		t.Fatalf("status %+v", st)
 	}
 }
+
+// The tenant cap sums usage across all domains of the tenant and leaves other tenants alone.
+func TestTenantStorageCap(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, "file:"+t.TempDir()+"/store.sqlite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	dir := directory.NewLocal(store)
+	capped, err := dir.CreateTenant(ctx, "Capped", "", 60)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := dir.CreateTenant(ctx, "Other", "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newAccount := func(tenantID uint32, domain string) uint32 {
+		t.Helper()
+		dom, _, err := dir.EnsureDomain(ctx, tenantID, domain)
+		if err != nil {
+			t.Fatal(err)
+		}
+		acc, err := dir.CreateAccountRole(ctx, dom.ID, "alice", "pw", directory.RoleUser)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return acc.ID
+	}
+	a := newAccount(capped.ID, "one.example")
+	b := newAccount(capped.ID, "two.example")
+	c := newAccount(other.ID, "three.example")
+
+	inbox := mail.NewInbox(store, blob.NewFS(t.TempDir()+"/blobs"))
+	inbox.SetTenantStorageCapFunc(dir.TenantStorageCap)
+	msg := []byte("Subject: x\r\n\r\n0123456789\r\n") // 26 bytes
+
+	if _, err := inbox.Deliver(ctx, a, msg); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := inbox.Deliver(ctx, b, msg); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := inbox.Deliver(ctx, b, msg); err != mail.ErrOverQuota {
+		t.Fatalf("third message (78 > 60) err=%v", err)
+	}
+	for range 3 {
+		if _, err := inbox.Deliver(ctx, c, msg); err != nil {
+			t.Fatalf("uncapped tenant: %v", err)
+		}
+	}
+	if err := dir.SetTenantStorageLimit(ctx, capped.ID, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := inbox.Deliver(ctx, b, msg); err != nil {
+		t.Fatalf("cap removed: %v", err)
+	}
+}

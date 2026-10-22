@@ -7,6 +7,8 @@ type Tenant struct {
 	Name string `msgpack:"n"`
 	// ExternalID is an optional caller-chosen key, unique across tenants (idempotent create).
 	ExternalID string `msgpack:"x,omitempty"`
+	// StorageLimit caps the summed mailbox usage of all accounts in the tenant (bytes, 0 = unlimited).
+	StorageLimit uint64 `msgpack:"sl,omitempty"`
 }
 
 // APIKey is a long-lived integration credential; only the SHA-256 of its secret is stored.

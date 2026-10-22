@@ -24,7 +24,8 @@ const tenantExtLookup = "tenant-ext"
 
 // CreateTenant allocates a new tenant id and stores name. A non-empty externalID must be unique:
 // a repeat returns ErrExists atomically, so retried creates never duplicate a tenant.
-func (d *Local) CreateTenant(ctx context.Context, name, externalID string) (storage.Tenant, error) {
+// storageLimit is the tenant-wide mailbox storage cap (0 = unlimited).
+func (d *Local) CreateTenant(ctx context.Context, name, externalID string, storageLimit uint64) (storage.Tenant, error) {
 	name, err := validateTenantName(name)
 	if err != nil {
 		return storage.Tenant{}, err
@@ -44,7 +45,7 @@ func (d *Local) CreateTenant(ctx context.Context, name, externalID string) (stor
 	if err != nil {
 		return storage.Tenant{}, err
 	}
-	tenant := storage.Tenant{ID: id, Name: name, ExternalID: externalID}
+	tenant := storage.Tenant{ID: id, Name: name, ExternalID: externalID, StorageLimit: storageLimit}
 	batch := storage.NewBatch().WithAccount(systemAccountID)
 	if externalID != "" {
 		suffix := storage.BatchSuffix(0, 0, []byte(tenantExtLookup+"/"+externalID))
@@ -92,6 +93,49 @@ func (d *Local) SetTenantName(ctx context.Context, id uint32, name string) error
 		return err
 	}
 	return d.store.Commit(ctx, batch)
+}
+
+// SetTenantStorageLimit sets the tenant-wide mailbox storage cap (0 = unlimited).
+func (d *Local) SetTenantStorageLimit(ctx context.Context, id uint32, limit uint64) error {
+	tenant, err := d.GetTenant(ctx, id)
+	if err != nil {
+		return err
+	}
+	tenant.StorageLimit = limit
+	batch := storage.NewBatch().WithAccount(systemAccountID)
+	if err := d.putTenant(batch, tenant); err != nil {
+		return err
+	}
+	return d.store.Commit(ctx, batch)
+}
+
+// TenantStorageCap returns the storage cap of accountID's tenant and the ids of all accounts
+// sharing it; limit 0 means no cap. It matches mail.TenantStorageCapFunc.
+// shortcut: scans every account on each call (once per delivery to a capped tenant); add a
+// per-tenant account index or usage counter when instances grow past a few thousand accounts.
+func (d *Local) TenantStorageCap(ctx context.Context, accountID uint32) (uint64, []uint32, error) {
+	acc, err := d.getAccount(ctx, accountID)
+	if errors.Is(err, ErrNotFound) {
+		return 0, nil, nil
+	}
+	if err != nil {
+		return 0, nil, err
+	}
+	if acc.TenantID == 0 {
+		return 0, nil, nil
+	}
+	tenant, err := d.GetTenant(ctx, acc.TenantID)
+	if errors.Is(err, ErrNotFound) {
+		return 0, nil, nil
+	}
+	if err != nil || tenant.StorageLimit == 0 {
+		return 0, nil, err
+	}
+	ids, err := d.TenantAccountIDs(ctx, tenant.ID)
+	if err != nil {
+		return 0, nil, err
+	}
+	return tenant.StorageLimit, ids, nil
 }
 
 // DeleteTenant removes a tenant after cascading DeleteDomain on all its domains.

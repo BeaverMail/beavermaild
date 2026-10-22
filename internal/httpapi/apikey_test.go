@@ -137,3 +137,80 @@ func TestCreateTenantExternalIDIdempotent(t *testing.T) {
 		t.Fatalf("conflict body %s err=%v", res.Body.String(), err)
 	}
 }
+
+// Only admin/provisioner set the tenant cap; tenants report summed mailbox usage.
+func TestTenantStorageLimitAPI(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, "file:"+t.TempDir()+"/store.sqlite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	dir := directory.NewLocal(store)
+	root, _, err := dir.EnsureDomain(ctx, directory.DefaultTenantID, "api.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dir.CreateAccountRole(ctx, root.ID, "admin", "secret", directory.RoleAdmin); err != nil {
+		t.Fatal(err)
+	}
+	tenant, err := dir.CreateTenant(ctx, "Customer", "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dom, _, err := dir.EnsureDomain(ctx, tenant.ID, "customer.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	boss, err := dir.CreateAccountRole(ctx, dom.ID, "boss", "pw", directory.RoleTenantAdmin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blobs := blob.NewFS(filepath.Join(t.TempDir(), "blobs"))
+	inbox := mail.NewInbox(store, blobs)
+	raw := []byte("Subject: usage\r\n\r\nhello\r\n")
+	if _, err := inbox.Deliver(ctx, boss.ID, raw); err != nil {
+		t.Fatal(err)
+	}
+	srv, err := httpapi.New(httpapi.Options{
+		Listen: "127.0.0.1:0", Dir: dir, AuthKey: "0123456789abcdef0123456789abcdef",
+		AuthGate: security.NopGate{}, Blobs: blobs, Inbox: inbox,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := "/api/v1/tenants/" + itoa(tenant.ID)
+	patch := func(tok, body string) int {
+		res := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(res, authedJSON(t, http.MethodPatch, path, tok, []byte(body)))
+		return res.Code
+	}
+	bossTok := login(t, srv, "boss@customer.example", "pw")
+	if code := patch(bossTok, `{"storage_limit":999999}`); code != http.StatusForbidden {
+		t.Fatalf("tenant_admin raising cap want 403 got %d", code)
+	}
+	if code := patch(bossTok, `{"name":"Renamed"}`); code != http.StatusOK {
+		t.Fatalf("tenant_admin rename want 200 got %d", code)
+	}
+	if code := patch(login(t, srv, "admin@api.test", "secret"), `{"storage_limit":1000}`); code != http.StatusOK {
+		t.Fatalf("admin set cap want 200 got %d", code)
+	}
+
+	res := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(res, authedJSON(t, http.MethodGet, "/api/v1/tenants", bossTok, nil))
+	var out struct {
+		Tenants []struct {
+			Name         string `json:"name"`
+			StorageLimit uint64 `json:"storage_limit"`
+			StorageUsed  uint64 `json:"storage_used"`
+		} `json:"tenants"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Tenants) != 1 || out.Tenants[0].Name != "Renamed" || out.Tenants[0].StorageLimit != 1000 ||
+		out.Tenants[0].StorageUsed != uint64(len(raw)) {
+		t.Fatalf("tenants %+v", out.Tenants)
+	}
+}

@@ -105,10 +105,13 @@ Paths are relative to `/api/v1`. "Who" is the minimum role.
 
 | Method | Path | Who | Body | Response |
 |--------|------|-----|------|----------|
-| GET | `/tenants` | tenant_admin (own) / provisioner, admin (all) | | `{"tenants":[{id, name, external_id?}]}` |
-| POST | `/tenants` | provisioner / admin | `{name, external_id?}` | `201` `{id, name, external_id?}` |
-| PATCH | `/tenants/{id}` | tenant_admin (own) / provisioner, admin | `{name}` | `{id, name, external_id?}` |
+| GET | `/tenants` | tenant_admin (own) / provisioner, admin (all) | | `{"tenants":[Tenant]}` |
+| POST | `/tenants` | provisioner / admin | `{name, external_id?, storage_limit?}` | `201` Tenant |
+| PATCH | `/tenants/{id}` | `name`: tenant_admin (own) / provisioner, admin. `storage_limit`: provisioner, admin | any of `{name, storage_limit}` | Tenant |
 | DELETE | `/tenants/{id}` | provisioner / admin | `{"confirm": "<tenant name>"}` | `{id, name, domains_deleted, accounts_deleted}` |
+
+**Tenant**: `id`, `name`, `external_id?`, `storage_limit` (bytes, `0` = unlimited), `storage_used` (sum of all its
+mailboxes).
 
 Deleting a tenant deletes all its domains, accounts and mail. The default tenant (`id=1`) cannot be deleted.
 
@@ -118,7 +121,7 @@ already exists returns `409` with the existing tenant, so a retrying client gets
 
 ```json
 409 Conflict
-{"error":"tenant already exists","tenant":{"id":5,"name":"Customer","external_id":"cust-42"}}
+{"error":"tenant already exists","tenant":{"id":5,"name":"Customer","external_id":"cust-42","storage_limit":0,"storage_used":0}}
 ```
 
 Tenant names are not unique; without `external_id`, a repeated create makes another tenant. After a tenant is
@@ -193,18 +196,26 @@ existing hash is not supported. Empty passwords are rejected; bcrypt rejects pas
 |------|-----|
 | Read usage of one mailbox | `GET /domains/{domain}/accounts`: `storage_used` / `messages_used` per account |
 | Read usage of a domain | `GET /domains/{domain}`: `storage_used` (sum of its accounts) |
+| Read usage of a tenant | `GET /tenants`: `storage_used` (sum of all mailboxes on all its domains) |
+| Cap the total size of a tenant | `storage_limit` on the tenant (POST or PATCH); admin and provisioner only |
 | Set a default mailbox quota for a domain | `storage_bytes` / `messages_quota` on the domain (POST or full PATCH) |
 | Set the quota of one mailbox | `PATCH /accounts/{email}` with `storage_limit` (bytes) and/or `messages_limit`; `0` = unlimited, an omitted field keeps its value |
-| Cap the total size of a domain | **not available**: limits are per mailbox |
+| Cap the total size of a domain | **not available**: cap the tenant or each mailbox |
 
 The domain default is copied into a mailbox's quota record the first time that mailbox is used (delivery, IMAP,
 usage read). Changing the domain default later does **not** update mailboxes that already have a record: set each
 mailbox explicitly with PATCH. A new limit below current usage blocks further delivery but deletes nothing. Usage is
 in bytes and counts stored messages only.
 
-Who can set mailbox limits: `admin`, `provisioner`, and `tenant_admin` for accounts in its own tenant (same rule as the domain
-defaults). A customer who holds a `tenant_admin` login can therefore raise its own limits; there is no server-side
-tenant-wide cap yet.
+Who can set mailbox limits: `admin`, `provisioner`, and `tenant_admin` for accounts in its own tenant (same rule as the
+domain defaults). The tenant cap can be set only by `admin` and `provisioner`, so a customer with a `tenant_admin`
+login can move space between its mailboxes but never exceed its plan.
+
+**Tenant cap.** Every message stored (delivery, IMAP APPEND, copy) must fit both its mailbox limit and the tenant
+`storage_limit`. Over the cap, SMTP answers `552 5.2.2 Mailbox full` (the sender gets a bounce) and IMAP APPEND
+fails; nothing already stored is deleted. Lowering the cap below current usage only blocks new mail. Concurrent
+deliveries can overshoot the cap by at most the messages in flight. Typical use for a hosting plan: set
+`storage_limit = plan - web space used`, and update it when web usage changes.
 
 ### Aliases and forwarding
 

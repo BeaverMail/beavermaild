@@ -18,6 +18,7 @@ type Inbox struct {
 	blobs          *blob.FS
 	quotaDefault   QuotaDefaults
 	accountQuotaFn AccountQuotaDefaultsFunc
+	tenantCapFn    TenantStorageCapFunc
 	// quotaMu serializes quota record read-modify-write so usage and limit updates do not overwrite each other.
 	quotaMu sync.Mutex
 }

@@ -20,7 +20,7 @@ func TestTenantCRUD(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	t1, err := d.CreateTenant(ctx, " Acme ", "")
+	t1, err := d.CreateTenant(ctx, " Acme ", "", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,7 +28,7 @@ func TestTenantCRUD(t *testing.T) {
 		t.Fatalf("tenant %+v", t1)
 	}
 
-	t2, err := d.CreateTenant(ctx, "Beta", "")
+	t2, err := d.CreateTenant(ctx, "Beta", "", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func TestTenantExternalIDUnique(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := d.CreateTenant(ctx, "Bad", "has space"); err == nil {
+	if _, err := d.CreateTenant(ctx, "Bad", "has space", 0); err == nil {
 		t.Fatal("external_id with space must be rejected")
 	}
 
@@ -90,7 +90,7 @@ func TestTenantExternalIDUnique(t *testing.T) {
 	errs := make(chan error, n)
 	for range n {
 		go func() {
-			_, err := d.CreateTenant(ctx, "Acme", "cust-42")
+			_, err := d.CreateTenant(ctx, "Acme", "cust-42", 0)
 			errs <- err
 		}()
 	}
@@ -114,7 +114,7 @@ func TestTenantExternalIDUnique(t *testing.T) {
 	if _, err := d.DeleteTenant(ctx, got.ID, blobs); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.CreateTenant(ctx, "Acme again", "cust-42"); err != nil {
+	if _, err := d.CreateTenant(ctx, "Acme again", "cust-42", 0); err != nil {
 		t.Fatalf("external_id must be reusable after delete: %v", err)
 	}
 }

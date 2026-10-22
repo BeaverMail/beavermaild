@@ -535,8 +535,9 @@ func (s *Server) handlePatchAccount(w http.ResponseWriter, r *http.Request) {
 }
 
 type createTenantRequest struct {
-	Name       string `json:"name"`
-	ExternalID string `json:"external_id"`
+	Name         string `json:"name"`
+	ExternalID   string `json:"external_id"`
+	StorageLimit uint64 `json:"storage_limit"`
 }
 
 // handleCreateTenant creates a tenant (admin or provisioner). A repeated external_id is 409 with the
@@ -556,12 +557,12 @@ func (s *Server) handleCreateTenant(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	tenant, err := s.dir.CreateTenant(r.Context(), req.Name, req.ExternalID)
+	tenant, err := s.dir.CreateTenant(r.Context(), req.Name, req.ExternalID, req.StorageLimit)
 	if err != nil {
 		if errors.Is(err, directory.ErrExists) {
 			body := map[string]any{"error": "tenant already exists"}
 			if existing, err := s.dir.TenantByExternalID(r.Context(), req.ExternalID); err == nil {
-				body["tenant"] = toTenantDTO(existing)
+				body["tenant"] = s.tenantToDTO(r.Context(), existing)
 			}
 			writeJSON(w, http.StatusConflict, body)
 			return
@@ -569,14 +570,16 @@ func (s *Server) handleCreateTenant(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusCreated, toTenantDTO(tenant))
+	writeJSON(w, http.StatusCreated, s.tenantToDTO(r.Context(), tenant))
 }
 
 type patchTenantRequest struct {
-	Name string `json:"name"`
+	Name         *string `json:"name"`
+	StorageLimit *uint64 `json:"storage_limit"`
 }
 
-// handlePatchTenant renames a tenant.
+// handlePatchTenant renames a tenant and/or sets its storage cap. Only admin and provisioner may
+// change the cap, so a tenant_admin cannot raise its own customer plan.
 func (s *Server) handlePatchTenant(w http.ResponseWriter, r *http.Request) {
 	p, ok := principal(r.Context())
 	if !ok {
@@ -588,29 +591,45 @@ func (s *Server) handlePatchTenant(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid tenant id")
 		return
 	}
-	if !canRenameTenant(p, id) {
-		writeError(w, http.StatusForbidden, "forbidden")
-		return
-	}
 	var req patchTenantRequest
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	if err := s.dir.SetTenantName(r.Context(), id, req.Name); err != nil {
-		if errors.Is(err, directory.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "tenant not found")
+	if req.Name == nil && req.StorageLimit == nil {
+		writeError(w, http.StatusBadRequest, "no fields to update")
+		return
+	}
+	if (req.Name != nil && !canRenameTenant(p, id)) || (req.StorageLimit != nil && !canCreateOrDeleteTenant(p)) {
+		writeError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+	if req.Name != nil {
+		if err := s.dir.SetTenantName(r.Context(), id, *req.Name); err != nil {
+			if errors.Is(err, directory.ErrNotFound) {
+				writeError(w, http.StatusNotFound, "tenant not found")
+				return
+			}
+			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
+	}
+	if req.StorageLimit != nil {
+		if err := s.dir.SetTenantStorageLimit(r.Context(), id, *req.StorageLimit); err != nil {
+			if errors.Is(err, directory.ErrNotFound) {
+				writeError(w, http.StatusNotFound, "tenant not found")
+				return
+			}
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 	tenant, err := s.dir.GetTenant(r.Context(), id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "reload tenant failed")
 		return
 	}
-	writeJSON(w, http.StatusOK, toTenantDTO(tenant))
+	writeJSON(w, http.StatusOK, s.tenantToDTO(r.Context(), tenant))
 }
 
 type confirmTenantRequest struct {
