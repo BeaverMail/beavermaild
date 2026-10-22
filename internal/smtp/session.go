@@ -18,6 +18,7 @@ import (
 	"github.com/BeaverMail/beaver/internal/mail"
 	"github.com/BeaverMail/beaver/internal/mailauth"
 	"github.com/BeaverMail/beaver/internal/security"
+	"github.com/BeaverMail/beaver/internal/storage"
 	"github.com/BeaverMail/beaver/internal/tlsload"
 )
 
@@ -382,33 +383,34 @@ func (s *session) handleRcpt(ctx context.Context, arg string, mailBlocked bool) 
 		orcpt:   rcptParams.Orcpt,
 		report:  reportKindForAddress(addr),
 	}
+	targets := []rcptTarget{target}
 	// Report addresses skip account lookup so a catch-all cannot swallow them.
 	if target.report == "" {
-		acc, _, err := s.dir.ResolveEmail(ctx, addr)
+		accounts, err := s.resolveLocalRcpt(ctx, addr, domName)
+		if errors.Is(err, directory.ErrNotFound) {
+			return s.writef(replyUserUnknown)
+		}
 		if err != nil {
-			if errors.Is(err, directory.ErrNotFound) {
-				acc, _, err = s.dir.ResolveCatchAll(ctx, domName)
-				if err != nil {
-					if errors.Is(err, directory.ErrNotFound) {
-						return s.writef(replyUserUnknown)
-					}
-					return err
-				}
-			} else {
-				return err
+			return err
+		}
+		targets = targets[:0]
+		for _, acc := range accounts {
+			if acc.Active {
+				t := target
+				t.accountID = acc.ID
+				targets = append(targets, t)
 			}
 		}
-		if !acc.Active {
+		if len(targets) == 0 {
 			return s.writef(replyUserInactive)
 		}
-		target.accountID = acc.ID
 	}
 	if ok, err := s.allowGreylist(ctx, addr); err != nil {
 		return err
 	} else if !ok {
 		return s.writef("452 4.2.2 Try again later")
 	}
-	s.rcpt = append(s.rcpt, target)
+	s.rcpt = append(s.rcpt, targets...)
 	if out, err := s.runFilter(ctx, FilterPhaseRcpt, []string{normalizeEnvelopeAddress(addr)}, ""); err != nil {
 		return err
 	} else if out.Action != FilterActionAccept {
@@ -661,6 +663,30 @@ func (s *session) reset() {
 	s.authDone = false
 }
 
+// resolveLocalRcpt maps a hosted address to its accounts: the mailbox itself, else the alias
+// targets, else the domain catch-all. ErrNotFound when none applies.
+func (s *session) resolveLocalRcpt(ctx context.Context, addr, domName string) ([]storage.Account, error) {
+	acc, _, err := s.dir.ResolveEmail(ctx, addr)
+	if err == nil {
+		return []storage.Account{acc}, nil
+	}
+	if !errors.Is(err, directory.ErrNotFound) {
+		return nil, err
+	}
+	accounts, err := s.dir.ResolveAlias(ctx, addr)
+	if err == nil && len(accounts) > 0 {
+		return accounts, nil
+	}
+	if err != nil && !errors.Is(err, directory.ErrNotFound) {
+		return nil, err
+	}
+	acc, _, err = s.dir.ResolveCatchAll(ctx, domName)
+	if err != nil {
+		return nil, err
+	}
+	return []storage.Account{acc}, nil
+}
+
 // finishDelivery stores the message for local recipients and enqueues remote ones.
 func (s *session) finishDelivery(ctx context.Context, raw []byte) error {
 	if s.submission && s.principal.AccountID != 0 {
@@ -677,6 +703,7 @@ func (s *session) finishDelivery(ctx context.Context, raw []byte) error {
 	// Final delivery (RFC 5321 §4.4): local copies carry the envelope sender as Return-Path,
 	// replacing any the message brought along; relayed copies get none (the last hop adds it).
 	local := prependHeader(stripHeaderFields(raw, "Return-Path", nil), "Return-Path", "<"+s.mailFrom+">")
+	delivered := make(map[uint32]bool) // one copy per mailbox even when aliases or catch-all overlap
 	for _, t := range s.rcpt {
 		if t.report != "" {
 			if err := s.storeReport(ctx, t, raw); err != nil {
@@ -693,6 +720,10 @@ func (s *session) finishDelivery(ctx context.Context, raw []byte) error {
 			remotes = append(remotes, t.address)
 			continue
 		}
+		if delivered[t.accountID] {
+			continue
+		}
+		delivered[t.accountID] = true
 		if _, err := s.inbox.Deliver(ctx, t.accountID, local); err != nil {
 			if errors.Is(err, mail.ErrOverQuota) {
 				if err := s.writef(replyMailboxFull); err != nil {

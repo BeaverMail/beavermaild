@@ -95,3 +95,31 @@ func TestReservedReportLocalParts(t *testing.T) {
 		}
 	}
 }
+
+// Deleting a domain removes its alias rows (keyed by the old domain id).
+func TestDeleteDomainRemovesAliases(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, "file:"+t.TempDir()+"/store.sqlite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	d := NewLocal(store)
+	dom, _, err := d.EnsureDomain(ctx, DefaultTenantID, "one.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.CreateAccountRole(ctx, dom.ID, "alice", "pw", RoleUser); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.CreateAlias(ctx, "one.example", "sales", []string{"alice@one.example"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.DeleteDomain(ctx, "one.example", blob.NewFS(filepath.Join(t.TempDir(), "blobs"))); err != nil {
+		t.Fatal(err)
+	}
+	if left, err := d.domainAliases(ctx, dom.ID); err != nil || len(left) != 0 {
+		t.Fatalf("alias rows left %+v err=%v", left, err)
+	}
+}

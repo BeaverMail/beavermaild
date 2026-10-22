@@ -241,10 +241,28 @@ users.
 Already open IMAP connections and API session tokens (up to 12 h) are not cut: suspension applies from the next
 login.
 
-### Aliases and forwarding
+### Aliases
 
-Not supported. The only routing option is the per-domain `catch_all` (one local part that receives mail for unknown
-addresses on that domain).
+| Method | Path | Who | Body | Response |
+|--------|------|-----|------|----------|
+| GET | `/domains/{domain}/aliases` | tenant_admin / provisioner / admin | | `{"aliases":[Alias]}` |
+| POST | `/domains/{domain}/aliases` | tenant_admin / provisioner / admin | `{local_part, targets:[email]}` | `201` Alias |
+| PATCH | `/aliases/{email}` | tenant_admin / provisioner / admin | `{targets:[email]}` (replaces all targets) | Alias |
+| DELETE | `/aliases/{email}` | tenant_admin / provisioner / admin | | `{email}` |
+
+**Alias**: `email`, `local_part`, `targets` (addresses).
+
+An alias delivers one copy of each message to every target mailbox (e.g. `info@` → `mario@`, `anna@`).
+
+- Targets must be existing mailboxes on this server **in the same tenant** (any of its domains), 1 to 50 of them.
+  Forwarding to external addresses is not supported.
+- An address is either a mailbox or an alias: creating one over the other returns `409`. `dmarc-reports` and
+  `tls-reports` are reserved.
+- Routing order for incoming mail: mailbox, then alias, then the domain `catch_all`.
+- A mailbox addressed both directly and through an alias in the same message gets one copy.
+- Each copy counts against the quota of the mailbox that receives it. Targets that are `active: false` are skipped;
+  if no target is left, the sender gets `550`. Deleting a target mailbox leaves the alias with the remaining targets.
+- Deleting a domain deletes its aliases.
 
 ### DKIM
 
@@ -312,7 +330,7 @@ milliseconds.
 | 400 | Invalid JSON, unknown field, or validation error (message in `error`) |
 | 401 | Missing, invalid, expired or revoked token / API key |
 | 403 | Outside the caller's role or tenant, or a forbidden self-action |
-| 404 | Domain, account, tenant or queue entry not found |
+| 404 | Domain, account, alias, tenant or queue entry not found |
 | 409 | Already exists (tenant `409` includes the existing tenant), or setup already complete |
 | 429 | Too many login attempts from this IP |
 | 503 | Feature not wired on this instance (queue, logs, delivery probe, blob store, quota store) |
@@ -321,10 +339,10 @@ milliseconds.
 
 | Operation | Repeated call |
 |-----------|---------------|
-| Create domain / account | `409` (already exists): nothing changed. Treat `409` as "exists" if you only need it to exist. |
+| Create domain / account / alias | `409` (already exists): nothing changed. Treat `409` as "exists" if you only need it to exist. |
 | Create tenant | with `external_id`: `409` plus the existing tenant. Without it: creates a duplicate (names are not unique) |
 | PATCH domain / account / tenant | idempotent (same body, same result) |
-| DELETE domain / account / tenant | second call returns `404` |
+| DELETE domain / account / tenant / alias | second call returns `404` |
 | Queue retry / hold / unhold | idempotent (`200`) |
 
 ## Examples
@@ -444,6 +462,7 @@ DELETE /api/v1/domains/example.org
 - `PATCH` on domains, accounts and tenants changes only the fields you send; send `0` or `""` to clear a value.
 - Do not invent fields; unknown keys fail the whole request.
 - Always send `external_id` when creating a tenant, so a retried call cannot create a duplicate.
+- `PATCH /aliases/{email}` replaces the whole target list; to add one target, GET the alias and send the full list.
 - Prefer an API key (`provisioner`) over a password login; on `401` with an API key, stop and ask: the key was
   revoked. With a session token, log in again (tokens expire after 12 h).
 - Never put passwords or API keys in logs or prompts. For an agent that serves one customer, a `tenant_admin`

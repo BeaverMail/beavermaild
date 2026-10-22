@@ -22,6 +22,12 @@ type APIKey struct {
 	Created int64  `msgpack:"c"` // Unix seconds
 }
 
+// Alias delivers mail for LocalPart@<domain> to existing accounts of the same tenant.
+type Alias struct {
+	LocalPart string   `msgpack:"lp"`
+	Targets   []uint32 `msgpack:"t"` // account ids
+}
+
 // Domain is a mail domain (e.g. example.com) with optional hosting settings.
 type Domain struct {
 	ID       uint32 `msgpack:"id"`

@@ -145,6 +145,11 @@ func (d *Local) CreateAccountRole(ctx context.Context, domainID uint32, localPar
 	if err != nil {
 		return storage.Account{}, err
 	}
+	if isAlias, err := d.aliasExists(ctx, domainID, localPart); err != nil {
+		return storage.Account{}, err
+	} else if isAlias {
+		return storage.Account{}, ErrExists
+	}
 	if dom.TenantID == 0 {
 		return storage.Account{}, fmt.Errorf("directory: domain %d missing tenant_id", domainID)
 	}

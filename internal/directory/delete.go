@@ -51,6 +51,9 @@ func (d *Local) DeleteDomain(ctx context.Context, name string, blobs *blob.FS) (
 	if dom.MailHostname != "" {
 		_ = batch.Delete(storage.SubspaceLookup, storage.BatchSuffix(0, 0, []byte("mhost/"+dom.MailHostname)))
 	}
+	if err := d.deleteDomainAliases(ctx, batch, dom.ID); err != nil {
+		return DeleteDomainResult{}, err
+	}
 	if err := d.store.Commit(ctx, batch); err != nil {
 		return DeleteDomainResult{}, err
 	}
