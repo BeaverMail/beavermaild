@@ -96,7 +96,7 @@ Restore blobs to the same path configured under `data_dir` before starting `serv
 |------|------|
 | Full instance DR (MySQL backend) | `mariadb-dump --hex-blob` + `rsync` of `blobs/` |
 | Portable KV across sqlite/mysql (lab / backend switch) | `beaver store export` / `import` (still copy `blobs/` separately) |
-| Daily KV-only snapshot while serve runs | `beaver store export -o -` (best-effort; not a substitute for DB+blobs DR) |
+| Daily KV-only snapshot while serve runs | `beaver store export -o -`, then copy `blobs/` (see below) |
 
 ## KV export / import (BEAVERKV1)
 
@@ -104,10 +104,14 @@ Dumps **metadata KV only** (not `blobs/`). Use the same `data_dir/blobs` (or rsy
 
 | Command | Notes |
 |---------|--------|
-| `beaver store export -c … -o file` | Online OK (best-effort snapshot; fine for daily backups) |
+| `beaver store export -c … -o file` | Online OK: all rows are read from one consistent DB snapshot |
 | `beaver store export -c … -o -` | Write dump to stdout (pipe to `zstd` / `gpg`) |
 | `beaver store import -c … -i file` | Stop `serve` first. Fails if target already has any KV row |
 | `beaver store import … --force` | Upsert into a non-empty store |
+
+With `serve` running, export first and copy `blobs/` after: blobs are content-addressed and never rewritten, so
+the copy holds every blob the dump references, except those of messages expunged between the two steps (their
+file is removed right away). Extra blobs are harmless. Skip `put-*` temp files in `blobs/`.
 
 Format: magic `BEAVERKV1\n`, then `schema_version` (u32 BE), then length-prefixed key/value records. Import rejects dumps with schema newer than this binary.
 

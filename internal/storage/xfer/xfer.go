@@ -35,8 +35,24 @@ type ImportOptions struct {
 }
 
 // Export writes all subspace keys from store to w as BEAVERKV1.
+// Stores implementing storage.Snapshotter are read from one snapshot, so the dump
+// is consistent while the server keeps writing.
 // Returns the number of key/value records written.
 func Export(ctx context.Context, store storage.Store, w io.Writer) (int, error) {
+	snap, ok := store.(storage.Snapshotter)
+	if !ok {
+		return export(ctx, store.Iterate, w)
+	}
+	var n int
+	err := snap.Snapshot(ctx, func(iterate storage.IterateFunc) error {
+		var err error
+		n, err = export(ctx, iterate, w)
+		return err
+	})
+	return n, err
+}
+
+func export(ctx context.Context, iterate storage.IterateFunc, w io.Writer) (int, error) {
 	if _, err := io.WriteString(w, Magic); err != nil {
 		return 0, err
 	}
@@ -50,7 +66,7 @@ func Export(ctx context.Context, store storage.Store, w io.Writer) (int, error) 
 	var lenBuf [4]byte
 	for _, sub := range storage.Subspaces() {
 		from, to := subspaceRange(sub)
-		err := store.Iterate(ctx, from, to, func(k, v []byte) error {
+		err := iterate(ctx, from, to, func(k, v []byte) error {
 			if err := ctx.Err(); err != nil {
 				return err
 			}

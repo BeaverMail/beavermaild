@@ -22,7 +22,10 @@ type Store struct {
 	db *sql.DB
 }
 
-var _ storage.Store = (*Store)(nil)
+var (
+	_ storage.Store       = (*Store)(nil)
+	_ storage.Snapshotter = (*Store)(nil)
+)
 
 // Open opens path, configures pragmas, migrates, and returns a Store.
 func Open(ctx context.Context, path string) (*Store, error) {
@@ -116,6 +119,28 @@ func (s *Store) GetMany(ctx context.Context, keys [][]byte) (map[string][]byte, 
 
 // Iterate scans [from, to) in one subspace table and calls fn for each row.
 func (s *Store) Iterate(ctx context.Context, from, to []byte, fn func(k, v []byte) error) error {
+	return iterate(ctx, s.db, from, to, fn)
+}
+
+// Snapshot runs fn with an iterator that reads every range from one snapshot.
+// A deferred SQLite tx pins its WAL snapshot at the first read and keeps it until rollback.
+func (s *Store) Snapshot(ctx context.Context, fn func(storage.IterateFunc) error) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	return fn(func(ctx context.Context, from, to []byte, fn func(k, v []byte) error) error {
+		return iterate(ctx, tx, from, to, fn)
+	})
+}
+
+// querier is *sql.DB or *sql.Tx.
+type querier interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+func iterate(ctx context.Context, q querier, from, to []byte, fn func(k, v []byte) error) error {
 	if len(from) == 0 || len(to) == 0 {
 		return fmt.Errorf("sqlite iterate: empty range bound")
 	}
@@ -127,7 +152,7 @@ func (s *Store) Iterate(ctx context.Context, from, to []byte, fn func(k, v []byt
 		return err
 	}
 	query := fmt.Sprintf("SELECT k, v FROM %s WHERE k >= ? AND k < ? ORDER BY k", table)
-	rows, err := s.db.QueryContext(ctx, query, from, to)
+	rows, err := q.QueryContext(ctx, query, from, to)
 	if err != nil {
 		return err
 	}

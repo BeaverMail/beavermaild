@@ -228,3 +228,57 @@ func openStore(t *testing.T) *sqlite.Store {
 	t.Cleanup(func() { _ = store.Close() })
 	return store
 }
+
+// Rows committed after the snapshot's first read stay invisible to it, in every subspace.
+func TestStoreSnapshotIgnoresLaterWrites(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, "file:"+t.TempDir()+"/store.sqlite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	account := uint32(3)
+	put := func(sub byte, doc uint32) {
+		t.Helper()
+		batch := storage.NewBatch().WithAccount(account)
+		if err := batch.Set(sub, storage.BatchSuffix(1, doc, nil), []byte("v")); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Commit(ctx, batch); err != nil {
+			t.Fatal(err)
+		}
+	}
+	count := func(iterate storage.IterateFunc, sub byte) int {
+		t.Helper()
+		from := storage.AppendKeyPrefix(nil, sub, account, 0, 0, 5)
+		to := storage.AppendKeyPrefix(nil, sub, account+1, 0, 0, 5)
+		var n int
+		if err := iterate(ctx, from, to, func(k, v []byte) error { n++; return nil }); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+
+	put(storage.SubspaceMail, 1)
+	err = store.Snapshot(ctx, func(iterate storage.IterateFunc) error {
+		if n := count(iterate, storage.SubspaceMail); n != 1 {
+			t.Fatalf("mail rows before write: %d", n)
+		}
+		put(storage.SubspaceMail, 2)
+		put(storage.SubspaceAdmin, 1)
+		if n := count(iterate, storage.SubspaceMail); n != 1 {
+			t.Errorf("snapshot sees %d mail rows, want 1", n)
+		}
+		if n := count(iterate, storage.SubspaceAdmin); n != 0 {
+			t.Errorf("snapshot sees %d admin rows, want 0", n)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := count(store.Iterate, storage.SubspaceAdmin); n != 1 {
+		t.Fatalf("admin rows after snapshot: %d, want 1", n)
+	}
+}
