@@ -407,31 +407,45 @@ func (d *Local) getRecord(ctx context.Context, key []byte, v any) error {
 	return storage.UnmarshalPersist(wire, v)
 }
 
+// nextID increments the named counter with a CAS so concurrent writers (other
+// goroutines or another process on the same store) never get the same id.
 func (d *Local) nextID(ctx context.Context, counter string) (uint32, error) {
 	key := counterKey(counter)
-	wire, err := d.store.Get(ctx, key)
-	var next uint32 = 1
-	if err == nil {
-		if err := storage.UnmarshalPersist(wire, &next); err != nil {
+	suffix := storage.BatchSuffix(0, 0, []byte("meta/"+counter))
+	for range 64 {
+		wire, err := d.store.Get(ctx, key)
+		var next uint32 = 1
+		if err == nil {
+			if err := storage.UnmarshalPersist(wire, &next); err != nil {
+				return 0, err
+			}
+			next++
+		} else if errors.Is(err, storage.ErrNotFound) {
+			wire = nil
+		} else {
 			return 0, err
 		}
-		next++
-	} else if !errors.Is(err, storage.ErrNotFound) {
-		return 0, err
-	}
 
-	encoded, err := storage.MarshalPersist(nil, 1, next)
-	if err != nil {
-		return 0, err
+		encoded, err := storage.MarshalPersist(nil, 1, next)
+		if err != nil {
+			return 0, err
+		}
+		batch := storage.NewBatch().WithAccount(systemAccountID)
+		if err := batch.Assert(storage.SubspaceLookup, suffix, wire); err != nil {
+			return 0, err
+		}
+		if err := batch.Set(storage.SubspaceLookup, suffix, encoded); err != nil {
+			return 0, err
+		}
+		err = d.store.Commit(ctx, batch)
+		if err == nil {
+			return next, nil
+		}
+		if !errors.Is(err, storage.ErrCASConflict) {
+			return 0, err
+		}
 	}
-	batch := storage.NewBatch().WithAccount(systemAccountID)
-	if err := batch.Set(storage.SubspaceLookup, storage.BatchSuffix(0, 0, []byte("meta/"+counter)), encoded); err != nil {
-		return 0, err
-	}
-	if err := d.store.Commit(ctx, batch); err != nil {
-		return 0, err
-	}
-	return next, nil
+	return 0, fmt.Errorf("directory: counter %s: too much contention", counter)
 }
 
 func (d *Local) putDomain(batch *storage.Batch, dom storage.Domain) error {

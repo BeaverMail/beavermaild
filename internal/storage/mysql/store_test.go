@@ -3,8 +3,10 @@ package mysql_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -204,5 +206,48 @@ func TestStorePing(t *testing.T) {
 	store := openStore(t)
 	if err := store.Ping(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Concurrent Assert(absent)+Set on one key must let exactly one writer through.
+func TestStoreCASConcurrentInsert(t *testing.T) {
+	store := openStore(t)
+	ctx := context.Background()
+
+	docID := uint32(time.Now().UnixNano())
+	suffix := storage.BatchSuffix(1, docID, []byte("cas"))
+	const n = 16
+	var wg sync.WaitGroup
+	errCh := make(chan error, n)
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			batch := storage.NewBatch().WithAccount(9)
+			if err := batch.Assert(storage.SubspaceLookup, suffix, nil); err != nil {
+				errCh <- err
+				return
+			}
+			if err := batch.Set(storage.SubspaceLookup, suffix, []byte{byte(i)}); err != nil {
+				errCh <- err
+				return
+			}
+			errCh <- store.Commit(ctx, batch)
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+	var won int
+	for err := range errCh {
+		switch {
+		case err == nil:
+			won++
+		case errors.Is(err, storage.ErrCASConflict):
+		default:
+			t.Fatal(err)
+		}
+	}
+	if won != 1 {
+		t.Fatalf("%d writers passed the CAS, want 1", won)
 	}
 }

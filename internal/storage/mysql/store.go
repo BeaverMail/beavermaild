@@ -12,7 +12,7 @@ import (
 
 	"github.com/BeaverMail/beaver/internal/storage"
 
-	_ "github.com/go-sql-driver/mysql"
+	"github.com/go-sql-driver/mysql"
 )
 
 // getManyChunk caps bind parameters per IN query.
@@ -154,12 +154,36 @@ func (s *Store) Iterate(ctx context.Context, from, to []byte, fn func(k, v []byt
 	return rows.Err()
 }
 
-// Commit runs all batch ops in one SQL transaction.
+// Commit runs all batch ops in one SQL transaction, retrying it when InnoDB aborts
+// it for a lock or snapshot conflict (concurrent CAS on the same key).
 func (s *Store) Commit(ctx context.Context, batch *storage.Batch) error {
 	ops := batch.Ops()
 	if len(ops) == 0 {
 		return nil
 	}
+	var err error
+	for attempt := 0; attempt < conflictRetryAttempts; attempt++ {
+		err = s.commitOnce(ctx, batch, ops)
+		if !isTxConflict(err) {
+			return err
+		}
+		time.Sleep(conflictRetryBase * time.Duration(attempt+1))
+	}
+	return err
+}
+
+const (
+	conflictRetryAttempts = 12
+	conflictRetryBase     = 5 * time.Millisecond
+)
+
+// isTxConflict reports deadlock (1213) or MariaDB snapshot-isolation conflict (1020).
+func isTxConflict(err error) bool {
+	var me *mysql.MySQLError
+	return errors.As(err, &me) && (me.Number == 1213 || me.Number == 1020)
+}
+
+func (s *Store) commitOnce(ctx context.Context, batch *storage.Batch, ops []storage.BatchOp) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -221,8 +245,9 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
+// readValue is a locking read: a plain SELECT sees the tx snapshot and would let two CAS pass.
 func readValue(ctx context.Context, tx *sql.Tx, table string, key []byte) ([]byte, error) {
-	q := fmt.Sprintf("SELECT `v` FROM `%s` WHERE `k` = ?", table)
+	q := fmt.Sprintf("SELECT `v` FROM `%s` WHERE `k` = ? FOR UPDATE", table)
 	var value []byte
 	err := tx.QueryRowContext(ctx, q, key).Scan(&value)
 	if errors.Is(err, sql.ErrNoRows) {
