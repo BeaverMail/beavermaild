@@ -74,8 +74,16 @@ func TestDomainDNSRecommended(t *testing.T) {
 		t.Fatalf("dkim record not the real key: %+v", dkim)
 	}
 
-	// DMARC / MTA-STS / TLS-RPT are inactive: placeholder-only rows must not be returned.
-	for _, host := range []string{"_dmarc.hosted.test", "_mta-sts.hosted.test", "_smtp._tls.hosted.test"} {
+	// DMARC and TLS-RPT point at the report addresses the SMTP server ingests.
+	if r := find("TXT", "_dmarc.hosted.test"); r.Placeholder || r.Value != "v=DMARC1; p=none; rua=mailto:dmarc-reports@hosted.test" {
+		t.Fatalf("dmarc record %+v", r)
+	}
+	if r := find("TXT", "_smtp._tls.hosted.test"); r.Placeholder || r.Value != "v=TLSRPTv1; rua=mailto:tls-reports@hosted.test" {
+		t.Fatalf("tls-rpt record %+v", r)
+	}
+
+	// MTA-STS has no inbound policy endpoint: its row must not be returned.
+	for _, host := range []string{"_mta-sts.hosted.test"} {
 		for _, r := range out.Records {
 			if r.Host == host {
 				t.Fatalf("%s must be hidden while placeholder-only: %+v", host, r)

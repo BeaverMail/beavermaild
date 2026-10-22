@@ -39,8 +39,8 @@ func dnsRecommendedRecords(dom storage.Domain, dkimName, dkimVal string, dkimErr
 		{Type: "TXT", Host: dom.Name, Value: "v=spf1 mx a:" + mailHost + " ~all", Placeholder: hostPlaceholder, Note: hostNote},
 	}
 
-	// Inactive features emit no row: no DKIM row while no key is generated, and no
-	// DMARC / MTA-STS / TLS-RPT rows while their rua/id values are not real yet.
+	// Inactive features emit no row: no DKIM row while no key is generated, and no MTA-STS
+	// row because the server does not serve an inbound policy (https://mta-sts.<domain>/.well-known/mta-sts.txt).
 	switch {
 	case dkimName != "" && dkimVal != "":
 		recs = append(recs, dnsRecordDTO{Type: "TXT", Host: dkimName, Value: dkimVal})
@@ -59,7 +59,19 @@ func dnsRecommendedRecords(dom storage.Domain, dkimName, dkimVal string, dkimErr
 		})
 	}
 
+	// DMARC (RFC 9989/9990) and TLS-RPT (RFC 8460) reports land on addresses the SMTP server
+	// already ingests on every hosted domain (smtp.reportKindForAddress). Same-domain rua needs
+	// no _report._dmarc authorization record. p=none only asks for reports, it changes no delivery.
 	recs = append(recs,
+		dnsRecordDTO{
+			Type: "TXT", Host: "_dmarc." + dom.Name,
+			Value: "v=DMARC1; p=none; rua=mailto:dmarc-reports@" + dom.Name,
+			Note:  "monitoring only; move to p=quarantine or p=reject once reports show all legitimate mail passes. If a DMARC record already exists, add this rua to it: two DMARC records invalidate both",
+		},
+		dnsRecordDTO{
+			Type: "TXT", Host: "_smtp._tls." + dom.Name,
+			Value: "v=TLSRPTv1; rua=mailto:tls-reports@" + dom.Name,
+		},
 		dnsRecordDTO{Type: "CNAME", Host: "autoconfig." + dom.Name, Value: mailHost, Placeholder: hostPlaceholder, Note: hostNote},
 		dnsRecordDTO{Type: "CNAME", Host: "autodiscover." + dom.Name, Value: mailHost, Placeholder: hostPlaceholder, Note: hostNote},
 	)

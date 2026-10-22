@@ -234,6 +234,27 @@ Set `dkim_enabled: true` on the domain (POST or PATCH). The server generates the
 
 Key rotation and importing your own key are not available through the API.
 
+### Recommended DNS records
+
+`GET /domains/{domain}/dns-recommended` returns MX, SPF, DKIM (when enabled), DMARC, TLS-RPT and the
+autoconfig/autodiscover CNAMEs. Rows flagged `placeholder: true` contain an invented value (e.g. no `mail_hostname`
+yet) and must not be published as is.
+
+| Record | Value | Why |
+|--------|-------|-----|
+| `_dmarc.<domain>` TXT | `v=DMARC1; p=none; rua=mailto:dmarc-reports@<domain>` | Aggregate reports, no change to delivery. Tighten `p` after the reports show all legitimate mail passing (RFC 9989, Appendix B.2). |
+| `_smtp._tls.<domain>` TXT | `v=TLSRPTv1; rua=mailto:tls-reports@<domain>` | Daily reports of TLS failures when other servers deliver to this domain (RFC 8460). |
+
+The server accepts mail for `dmarc-reports@` and `tls-reports@` on every hosted domain and stores it as reports
+(read them with `GET /domains/{domain}/reports`); no mailbox is needed and a catch-all does not capture them. Because
+the report address is in the same domain as the policy, no `_report._dmarc` authorization record is required
+(RFC 9990, Section 4). If the domain already has a DMARC record, add the `rua` to it instead of publishing a second
+one.
+
+**MTA-STS is not returned**: publishing `_mta-sts.<domain>` requires serving the policy at
+`https://mta-sts.<domain>/.well-known/mta-sts.txt` with a valid certificate (RFC 8461, Section 3), and this server
+does not serve inbound policies yet.
+
 ### Outbound queue (admin)
 
 | Method | Path | Query | Response |
@@ -364,6 +385,8 @@ GET /api/v1/domains/example.org/dns-recommended
  {"type":"MX","host":"example.org","value":"10 mail.example.org"},
  {"type":"TXT","host":"example.org","value":"v=spf1 mx a:mail.example.org ~all"},
  {"type":"TXT","host":"beaver._domainkey.example.org","value":"v=DKIM1; k=rsa; p=MIIBIjANBg..."},
+ {"type":"TXT","host":"_dmarc.example.org","value":"v=DMARC1; p=none; rua=mailto:dmarc-reports@example.org","note":"monitoring only; ..."},
+ {"type":"TXT","host":"_smtp._tls.example.org","value":"v=TLSRPTv1; rua=mailto:tls-reports@example.org"},
  {"type":"CNAME","host":"autoconfig.example.org","value":"mail.example.org"},
  {"type":"CNAME","host":"autodiscover.example.org","value":"mail.example.org"}]}
 ```
