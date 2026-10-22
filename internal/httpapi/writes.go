@@ -157,22 +157,30 @@ func (s *Server) handleCreateDomain(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, s.domainToDTO(r.Context(), dom))
 }
 
+// patchDomainRequest is a partial update: nil fields keep the stored value.
 type patchDomainRequest struct {
-	CatchAll        string `json:"catch_all"`
-	MailHostname    string `json:"mail_hostname"`
-	SSLMode         string `json:"ssl_mode"`
-	CertPEM         string `json:"cert_pem"`
-	KeyPEM          string `json:"key_pem"`
-	DKIMEnabled     bool   `json:"dkim_enabled"`
-	AntiSpam        bool   `json:"antispam"`
-	SendMaxMessages int    `json:"send_max_messages"`
-	SendWindow      string `json:"send_window"`
-	StorageBytes    uint64 `json:"storage_bytes"`
-	MessagesQuota   uint32 `json:"messages_quota"`
-	RelayHost       string `json:"relay_host"`
-	RelayUser       string `json:"relay_user"`
-	RelayPassword   string `json:"relay_password"`
-	RelayStartTLS   bool   `json:"relay_starttls"`
+	CatchAll        *string `json:"catch_all"`
+	MailHostname    *string `json:"mail_hostname"`
+	SSLMode         *string `json:"ssl_mode"`
+	CertPEM         string  `json:"cert_pem"` // empty keeps the stored cert/key
+	KeyPEM          string  `json:"key_pem"`
+	DKIMEnabled     *bool   `json:"dkim_enabled"`
+	AntiSpam        *bool   `json:"antispam"`
+	SendMaxMessages *int    `json:"send_max_messages"`
+	SendWindow      *string `json:"send_window"`
+	StorageBytes    *uint64 `json:"storage_bytes"`
+	MessagesQuota   *uint32 `json:"messages_quota"`
+	RelayHost       *string `json:"relay_host"`
+	RelayUser       *string `json:"relay_user"`
+	RelayPassword   string  `json:"relay_password"` // empty keeps the stored password
+	RelayStartTLS   *bool   `json:"relay_starttls"`
+}
+
+// setIf overwrites *dst with *v when v is set.
+func setIf[T any](dst *T, v *T) {
+	if v != nil {
+		*dst = *v
+	}
 }
 
 // handleGetDomain returns one domain with hosting stats when in scope.
@@ -200,7 +208,7 @@ func (s *Server) handleGetDomain(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.domainToDTO(r.Context(), dom))
 }
 
-// handlePatchDomain updates hosting settings for an existing domain.
+// handlePatchDomain updates the hosting settings sent in the body; omitted fields keep their value.
 func (s *Server) handlePatchDomain(w http.ResponseWriter, r *http.Request) {
 	p, ok := principal(r.Context())
 	if !ok {
@@ -226,27 +234,39 @@ func (s *Server) handlePatchDomain(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	if strings.TrimSpace(req.MailHostname) == "" {
-		writeError(w, http.StatusBadRequest, "mail_hostname required")
+	if req.MailHostname != nil && strings.TrimSpace(*req.MailHostname) == "" {
+		writeError(w, http.StatusBadRequest, "mail_hostname cannot be empty")
 		return
 	}
 	opts := directory.DomainCreateOpts{
-		CatchAllLocal:   req.CatchAll,
-		MailHostname:    req.MailHostname,
-		SSLMode:         req.SSLMode,
+		CatchAllLocal:   dom.CatchAllLocal,
+		MailHostname:    dom.MailHostname,
+		SSLMode:         dom.SSLMode,
 		CertPEM:         req.CertPEM,
 		KeyPEM:          req.KeyPEM,
-		DKIMEnabled:     req.DKIMEnabled,
-		AntiSpam:        req.AntiSpam,
-		SendMaxMessages: req.SendMaxMessages,
-		SendWindow:      req.SendWindow,
-		StorageBytes:    req.StorageBytes,
-		Messages:        req.MessagesQuota,
-		RelayHost:       req.RelayHost,
-		RelayUser:       req.RelayUser,
+		DKIMEnabled:     dom.DKIMEnabled,
+		AntiSpam:        dom.AntiSpam,
+		SendMaxMessages: dom.SendMaxMessages,
+		SendWindow:      dom.SendWindow,
+		StorageBytes:    dom.StorageBytes,
+		Messages:        dom.Messages,
+		RelayHost:       dom.RelayHost,
+		RelayUser:       dom.RelayUser,
 		RelayPassword:   req.RelayPassword,
-		RelayStartTLS:   req.RelayStartTLS,
+		RelayStartTLS:   dom.RelayStartTLS,
 	}
+	setIf(&opts.CatchAllLocal, req.CatchAll)
+	setIf(&opts.MailHostname, req.MailHostname)
+	setIf(&opts.SSLMode, req.SSLMode)
+	setIf(&opts.DKIMEnabled, req.DKIMEnabled)
+	setIf(&opts.AntiSpam, req.AntiSpam)
+	setIf(&opts.SendMaxMessages, req.SendMaxMessages)
+	setIf(&opts.SendWindow, req.SendWindow)
+	setIf(&opts.StorageBytes, req.StorageBytes)
+	setIf(&opts.Messages, req.MessagesQuota)
+	setIf(&opts.RelayHost, req.RelayHost)
+	setIf(&opts.RelayUser, req.RelayUser)
+	setIf(&opts.RelayStartTLS, req.RelayStartTLS)
 	updated, err := s.dir.UpdateDomainWithOpts(r.Context(), domainName, opts)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())

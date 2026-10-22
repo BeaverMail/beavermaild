@@ -852,3 +852,41 @@ func authedJSON(t *testing.T, method, path, token string, body []byte) *http.Req
 	r.Header.Set("Authorization", "Bearer "+token)
 	return r
 }
+
+// Domain PATCH changes only the fields sent; explicit zero values clear them.
+func TestPatchDomainPartial(t *testing.T) {
+	t.Parallel()
+	srv, _ := newTestAPI(t)
+	tok := login(t, srv, "admin@api.test", "secret")
+	do := func(method, path, body string) (int, map[string]any) {
+		t.Helper()
+		res := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(res, authedJSON(t, method, path, tok, []byte(body)))
+		var out map[string]any
+		_ = json.Unmarshal(res.Body.Bytes(), &out)
+		return res.Code, out
+	}
+	code, _ := do(http.MethodPost, "/api/v1/domains", `{"name":"part.example","mail_hostname":"mail.part.example",`+
+		`"catch_all":"info","antispam":true,"storage_bytes":1000,"relay_host":"relay.example:587","relay_user":"u","relay_password":"p"}`)
+	if code != http.StatusCreated {
+		t.Fatalf("create %d", code)
+	}
+
+	code, dom := do(http.MethodPatch, "/api/v1/domains/part.example", `{"antispam":false}`)
+	if code != http.StatusOK {
+		t.Fatalf("patch %d %v", code, dom)
+	}
+	if dom["antispam"] != nil || dom["catch_all"] != "info" || dom["storage_bytes"] != float64(1000) ||
+		dom["mail_hostname"] != "mail.part.example" || dom["relay_host"] != "relay.example:587" {
+		t.Fatalf("partial patch changed other fields: %v", dom)
+	}
+
+	code, dom = do(http.MethodPatch, "/api/v1/domains/part.example", `{"storage_bytes":0,"catch_all":""}`)
+	if code != http.StatusOK || dom["storage_bytes"] != nil || dom["catch_all"] != nil {
+		t.Fatalf("explicit zero must clear: %d %v", code, dom)
+	}
+
+	if code, _ := do(http.MethodPatch, "/api/v1/domains/part.example", `{"mail_hostname":""}`); code != http.StatusBadRequest {
+		t.Fatalf("empty mail_hostname want 400 got %d", code)
+	}
+}

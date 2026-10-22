@@ -134,7 +134,7 @@ deleted its `external_id` can be used again.
 | GET | `/domains` | any (scoped) | | `{"domains":[Domain]}` |
 | POST | `/domains` | tenant_admin / admin | DomainInput | `201` Domain |
 | GET | `/domains/{domain}` | any (scoped) | | Domain |
-| PATCH | `/domains/{domain}` | tenant_admin / admin | DomainInput (no `name`, `tenant_id`) | Domain |
+| PATCH | `/domains/{domain}` | tenant_admin / admin | any DomainInput fields (not `name`, `tenant_id`) | Domain |
 | DELETE | `/domains/{domain}` | tenant_admin / admin | `{"confirm": "<domain name>"}` | `{name, accounts_deleted}` |
 | GET | `/domains/{domain}/dns-recommended` | any (scoped) | | `{domain, records:[{type, host, value, placeholder?, note?}]}` |
 | GET | `/domains/{domain}/reports` | any (scoped) | | `{domain, reports:[...], dmarc?, tls?}` |
@@ -145,7 +145,7 @@ deleted its `external_id` can be used again.
 |-------|------|-------|
 | `name` | string | POST only, required |
 | `tenant_id` | number | POST only; admin and provisioner may choose (default `1`), tenant_admin is forced to its own |
-| `mail_hostname` | string | **required** (e.g. `mail.example.com`) |
+| `mail_hostname` | string | **required** on POST (e.g. `mail.example.com`); on PATCH it cannot be set to empty |
 | `ssl_mode` | string | `none` (default), `acme`, `custom` |
 | `cert_pem`, `key_pem` | string | required with `custom` on create; on PATCH omit them to keep the stored cert |
 | `catch_all` | string | local part that receives mail for unknown addresses |
@@ -155,8 +155,10 @@ deleted its `external_id` can be used again.
 | `storage_bytes`, `messages_quota` | number | default per-account quotas; `0` = global default |
 | `relay_host`, `relay_user`, `relay_password`, `relay_starttls` | | per-domain outbound relay; on PATCH an empty `relay_password` keeps the stored one |
 
-> **PATCH is a full replace**, not a merge. Every field you leave out is reset (catch-all cleared, DKIM and antispam
-> off, quotas and rate limits back to global). Read the domain with GET, change what you need, send the whole object.
+**PATCH is a partial update**: only the fields in the body change, omitted fields keep their stored value. To clear
+a value send it explicitly (`"catch_all": ""`, `"storage_bytes": 0`). `cert_pem`/`key_pem` and `relay_password` keep
+the stored secret when empty. There is no version check (ETag): two clients that change the same field at the same
+time still race, last write wins.
 
 **Domain** (response) has the input fields (except secrets and PEMs) plus `id`, `dkim_selector`, `dkim_dns_name`,
 `dkim_dns_value`, `account_count`, `storage_used`, `ssl_active`, `dkim_active`, `antispam_active`. Empty or false
@@ -392,7 +394,7 @@ DELETE /api/v1/domains/example.org
 - **Destructive calls**: `DELETE /tenants/{id}`, `DELETE /domains/{domain}`, `DELETE /accounts/{email}`,
   `DELETE /queue/{id}`. They permanently delete mail or cancel delivery. Ask the human before calling them. Tenant and
   domain deletes also require a `confirm` field equal to the name.
-- `PATCH /domains/{domain}` resets every field you omit: always GET first and send the full object back.
+- `PATCH` on domains, accounts and tenants changes only the fields you send; send `0` or `""` to clear a value.
 - Do not invent fields; unknown keys fail the whole request.
 - Always send `external_id` when creating a tenant, so a retried call cannot create a duplicate.
 - Prefer an API key (`provisioner`) over a password login; on `401` with an API key, stop and ask: the key was

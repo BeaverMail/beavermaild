@@ -221,10 +221,11 @@ function domainHostingBody(input: PatchDomainInput): Record<string, unknown> {
   if (input.key_pem) body.key_pem = input.key_pem
   body.dkim_enabled = !!input.dkim_enabled
   body.antispam = !!input.antispam
-  if (input.send_max_messages) body.send_max_messages = input.send_max_messages
-  if (input.send_window) body.send_window = input.send_window
-  if (input.storage_bytes) body.storage_bytes = input.storage_bytes
-  if (input.messages_quota) body.messages_quota = input.messages_quota
+  // Always sent: PATCH is partial, so an omitted 0/'' would keep the old value instead of clearing it.
+  body.send_max_messages = input.send_max_messages ?? 0
+  body.send_window = input.send_window ?? ''
+  body.storage_bytes = input.storage_bytes ?? 0
+  body.messages_quota = input.messages_quota ?? 0
   body.relay_host = input.relay_host ?? ''
   body.relay_user = input.relay_user ?? ''
   if (input.relay_password) body.relay_password = input.relay_password
