@@ -30,7 +30,8 @@ import (
 	"github.com/BeaverMail/beaver/plugin"
 )
 
-const version = "0.0.0-dev"
+// version is set at release build time: -ldflags "-X main.version=..." (make dist).
+var version = "0.0.0-dev"
 
 // configFlag registers -c with DefaultConfigPath (BEAVER_CONFIG or /etc/beavermail/config.json).
 func configFlag(fs *flag.FlagSet) *string {

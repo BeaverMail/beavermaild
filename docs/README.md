@@ -2,6 +2,7 @@
 
 | Document | Audience |
 |----------|----------|
+| [install.md](install.md) | Operators: install from the release tarball (dev VM, or next to nginx) |
 | [api.md](api.md) | Integrators and LLM agents: HTTP admin API `/api/v1` (auth, endpoints, roles) |
 | [plugins.md](plugins.md) | Plugin authors: SDK, CLI JSONL protocol, capabilities, install |
 | [plugins-smtp-daemon.md](plugins-smtp-daemon.md) | SMTP daemon filter protocol (v2.2) |

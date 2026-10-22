@@ -50,4 +50,4 @@ With systemd, keep `TimeoutStopSec` at 10 s or more so the drain is not cut shor
 
 ## systemd
 
-[`contrib/systemd/beaver.service`](../contrib/systemd/beaver.service) is a ready example: dedicated `beavermail` user, `CAP_NET_BIND_SERVICE` for low ports, `Restart=on-failure` (Beaver exits non-zero when a listener fails), `TimeoutStopSec=15s` for the drain, and a sandbox where only `/var/lib/beavermail` is writable. Install steps are in the file header. Plugins run from `<data_dir>/plugins` under the same sandbox (Unix sockets in `<data_dir>/run/plugins`). Plugin-only config changes need no restart: `beaver filter reload`.
+[`contrib/systemd/beavermail.service`](../contrib/systemd/beavermail.service) is a ready example: dedicated `beavermail` user, `CAP_NET_BIND_SERVICE` for low ports, `Restart=on-failure` (Beaver exits non-zero when a listener fails), `TimeoutStopSec=15s` for the drain, and a sandbox where only `/var/lib/beavermail` is writable. Install steps are in the file header. Plugins run from `<data_dir>/plugins` under the same sandbox (Unix sockets in `<data_dir>/run/plugins`). Plugin-only config changes need no restart: `beaver filter reload`.

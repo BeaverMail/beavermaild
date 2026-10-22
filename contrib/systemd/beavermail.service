@@ -5,8 +5,8 @@
 #   install -m 755 beaver-plugin-antispam /var/lib/beavermail/plugins/
 #   BEAVER_CONFIG=/etc/beavermail/config.json beaver init -data-dir /var/lib/beavermail -hostname mx.example.com
 #   chown -R beavermail:beavermail /var/lib/beavermail /etc/beavermail
-#   cp beaver.service /etc/systemd/system/ && systemctl daemon-reload && systemctl enable --now beaver
-# Logs: journalctl -u beaver (stderr) and log.file under the data dir.
+#   cp beavermail.service /etc/systemd/system/ && systemctl daemon-reload && systemctl enable --now beavermail
+# Logs: journalctl -u beavermail (stderr) and log.file under the data dir.
 
 [Unit]
 Description=BeaverMail mail server (SMTP, IMAP, admin UI)
