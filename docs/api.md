@@ -263,6 +263,7 @@ An alias delivers one copy of each message to every target mailbox (e.g. `info@`
 - Each copy counts against the quota of the mailbox that receives it. Targets that are `active: false` are skipped;
   if no target is left, the sender gets `550`. Deleting a target mailbox leaves the alias with the remaining targets.
 - Deleting a domain deletes its aliases.
+- Also available from the CLI (`beaver alias add|list|set|delete`) and in the admin UI on the domain page.
 
 ### DKIM
 
@@ -450,7 +451,7 @@ DELETE /api/v1/domains/example.org
 
 ```json
 409 Conflict
-{"error":"account already exists"}
+{"error":"address already used by a mailbox or alias"}
 ```
 
 ## Notes for LLM agents and tool builders

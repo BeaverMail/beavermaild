@@ -33,8 +33,8 @@ func runAPIKey(args []string) int {
 	}
 }
 
-// openAPIKeyDirectory loads config and opens the directory for an apikey subcommand.
-func openAPIKeyDirectory(ctx context.Context, cmd, configPath string) (*directory.Local, func(), bool) {
+// openCLIDirectory loads config and opens the directory for a CLI subcommand.
+func openCLIDirectory(ctx context.Context, cmd, configPath string) (*directory.Local, func(), bool) {
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%s: load config: %v\n", cmd, err)
@@ -63,7 +63,7 @@ func runAPIKeyCreate(args []string) int {
 		return cli.ExitUsage
 	}
 	ctx := context.Background()
-	dir, closeStore, ok := openAPIKeyDirectory(ctx, "apikey create", *configPath)
+	dir, closeStore, ok := openCLIDirectory(ctx, "apikey create", *configPath)
 	if !ok {
 		return cli.ExitError
 	}
@@ -98,7 +98,7 @@ func runAPIKeyList(args []string) int {
 		return cli.ExitUsage
 	}
 	ctx := context.Background()
-	dir, closeStore, ok := openAPIKeyDirectory(ctx, "apikey list", *configPath)
+	dir, closeStore, ok := openCLIDirectory(ctx, "apikey list", *configPath)
 	if !ok {
 		return cli.ExitError
 	}
@@ -144,7 +144,7 @@ func runAPIKeyRevoke(args []string) int {
 		return cli.ExitUsage
 	}
 	ctx := context.Background()
-	dir, closeStore, ok := openAPIKeyDirectory(ctx, "apikey revoke", *configPath)
+	dir, closeStore, ok := openCLIDirectory(ctx, "apikey revoke", *configPath)
 	if !ok {
 		return cli.ExitError
 	}

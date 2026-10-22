@@ -73,6 +73,8 @@ func run(args []string) int {
 		return runAccount(args[1:])
 	case "apikey":
 		return runAPIKey(args[1:])
+	case "alias":
+		return runAlias(args[1:])
 	case "plugins":
 		return runPlugins(args[1:])
 	case "help", "-h", "--help":
@@ -791,7 +793,7 @@ func runAccountCreate(args []string) int {
 	acc, err := dir.CreateAccountRole(ctx, dom.ID, *localPart, *password, *role)
 	if err != nil {
 		if errors.Is(err, directory.ErrExists) {
-			fmt.Fprintf(os.Stderr, "account create: account already exists\n")
+			fmt.Fprintf(os.Stderr, "account create: address already used by a mailbox or alias\n")
 		} else {
 			fmt.Fprintf(os.Stderr, "account create: %v\n", err)
 		}
@@ -1212,6 +1214,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  beaver account info [-c path] -email addr [-json]")
 	fmt.Fprintln(os.Stderr, "  beaver account set-role [-c path] -email addr -role user|admin|tenant_admin")
 	fmt.Fprintln(os.Stderr, "  beaver account delete [-c path] -email addr")
+	printAliasUsageLines()
 	printAPIKeyUsageLines()
 	fmt.Fprintln(os.Stderr, "  beaver plugins list [-c path]")
 	printPluginUsageLines()

@@ -403,7 +403,7 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 	acc, err := s.dir.CreateAccountRole(r.Context(), dom.ID, req.LocalPart, req.Password, role)
 	if err != nil {
 		if errors.Is(err, directory.ErrExists) {
-			writeError(w, http.StatusConflict, "account already exists")
+			writeError(w, http.StatusConflict, "address already used by a mailbox or alias")
 			return
 		}
 		writeError(w, http.StatusBadRequest, err.Error())

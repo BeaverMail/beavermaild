@@ -265,6 +265,32 @@ export async function patchAccount(
   })
 }
 
+/** Local alias: delivers to existing mailboxes of the same tenant. */
+export type Alias = {
+  email: string
+  local_part: string
+  targets: string[]
+}
+
+export async function fetchAliases(domain: string): Promise<Alias[]> {
+  const out = await api<{ aliases: Alias[] }>(`/domains/${encodeURIComponent(domain)}/aliases`)
+  return out.aliases ?? []
+}
+
+export async function createAlias(domain: string, localPart: string, targets: string[]): Promise<Alias> {
+  return api<Alias>(`/domains/${encodeURIComponent(domain)}/aliases`, {
+    body: { local_part: localPart, targets }
+  })
+}
+
+export async function patchAlias(email: string, targets: string[]): Promise<Alias> {
+  return api<Alias>(`/aliases/${encodeURIComponent(email)}`, { method: 'PATCH', body: { targets } })
+}
+
+export async function deleteAlias(email: string): Promise<void> {
+  await api(`/aliases/${encodeURIComponent(email)}`, { method: 'DELETE' })
+}
+
 export type QueueRecipient = {
   address: string
   retry: number

@@ -1,12 +1,16 @@
 <script lang="ts">
-    import { KeyRound, MoreHorizontal, Pencil, Plus, Trash2, Users, X } from "@lucide/svelte";
+    import { AtSign, KeyRound, MoreHorizontal, Pencil, Plus, Trash2, Users, X } from "@lucide/svelte";
     import ConfirmDialog from "$lib/ConfirmDialog.svelte";
     import { page } from "$app/state";
     import {
+        type Alias,
         ApiError,
         createAccount,
+        createAlias,
         deleteAccount,
+        deleteAlias,
         fetchAccounts,
+        fetchAliases,
         fetchDomain,
         fetchDnsRecommended,
         type DnsRecord,
@@ -14,6 +18,7 @@
         type ListedAccount,
         type PatchDomainInput,
         patchAccount,
+        patchAlias,
         patchDomain,
     } from "$lib/api";
     import { me } from "$lib/session";
@@ -41,6 +46,18 @@
     let showPassword = $state(false);
     let resetBusy = $state(false);
     let resetError = $state("");
+
+    // Aliases: list, add form, inline target edit, delete confirmation.
+    let aliases = $state<Alias[]>([]);
+    let aliasError = $state("");
+    let aliasLocal = $state("");
+    let aliasTargets = $state("");
+    let aliasBusy = $state(false);
+    let aliasEditFor = $state<string | null>(null);
+    let aliasEditTargets = $state("");
+    let aliasDeleteTarget = $state<Alias | null>(null);
+    let aliasDeleteBusy = $state(false);
+    let aliasDeleteError = $state("");
 
     let editOpen = $state(false);
     let editBusy = $state(false);
@@ -122,6 +139,18 @@
             .finally(() => {
                 if (!cancelled) loading = false;
             });
+        // Aliases are visible to managers only (the API answers 403 to users).
+        aliases = [];
+        aliasError = "";
+        if (canWrite) {
+            void fetchAliases(name)
+                .then((list) => {
+                    if (!cancelled) aliases = list;
+                })
+                .catch((e) => {
+                    if (!cancelled) aliasError = e instanceof ApiError ? e.message : "failed to load aliases";
+                });
+        }
         // DNS records load separately: a failure here must not blank accounts/domain.
         void fetchDnsRecommended(name)
             .then((dns) => {
@@ -313,6 +342,75 @@
             resetBusy = false;
         }
     }
+    // Targets are typed as a comma- or space-separated list of addresses.
+    function parseTargets(text: string): string[] {
+        return text
+            .split(/[\s,;]+/)
+            .map((t) => t.trim())
+            .filter(Boolean);
+    }
+
+    async function reloadAliases() {
+        try {
+            aliases = await fetchAliases(domain);
+        } catch (err) {
+            aliasError = err instanceof ApiError ? err.message : "failed to load aliases";
+        }
+    }
+
+    async function onCreateAlias(e: Event) {
+        e.preventDefault();
+        aliasError = "";
+        aliasBusy = true;
+        try {
+            await createAlias(domain, aliasLocal.trim(), parseTargets(aliasTargets));
+            aliasLocal = "";
+            aliasTargets = "";
+            await reloadAliases();
+        } catch (err) {
+            aliasError = err instanceof ApiError ? err.message : "create alias failed";
+        } finally {
+            aliasBusy = false;
+        }
+    }
+
+    function startEditAlias(a: Alias) {
+        aliasError = "";
+        aliasEditFor = a.email;
+        aliasEditTargets = a.targets.join(", ");
+    }
+
+    async function saveEditAlias(e: Event) {
+        e.preventDefault();
+        if (!aliasEditFor) return;
+        aliasError = "";
+        aliasBusy = true;
+        try {
+            await patchAlias(aliasEditFor, parseTargets(aliasEditTargets));
+            aliasEditFor = null;
+            await reloadAliases();
+        } catch (err) {
+            aliasError = err instanceof ApiError ? err.message : "update alias failed";
+        } finally {
+            aliasBusy = false;
+        }
+    }
+
+    async function confirmDeleteAlias() {
+        if (!aliasDeleteTarget) return;
+        aliasDeleteBusy = true;
+        aliasDeleteError = "";
+        try {
+            await deleteAlias(aliasDeleteTarget.email);
+            aliasDeleteTarget = null;
+            await reloadAliases();
+        } catch (err) {
+            aliasDeleteError = err instanceof ApiError ? err.message : "delete alias failed";
+        } finally {
+            aliasDeleteBusy = false;
+        }
+    }
+
     async function copyDnsValue(r: DnsRecord) {
         try {
             await navigator.clipboard.writeText(r.value);
@@ -550,6 +648,135 @@
             </tbody>
         </table>
     </div>
+{/if}
+
+{#if canWrite}
+    <div class="mb-3 mt-8 flex items-center gap-2">
+        <AtSign class="size-5 text-gray-700" />
+        <h2 class="text-lg font-semibold text-gray-900">Aliases</h2>
+    </div>
+    <p class="mb-3 text-xs text-gray-500">
+        An alias delivers a copy to each target mailbox. Targets must be mailboxes of this customer, on any of
+        its domains.
+    </p>
+    <form
+        class="mb-4 flex flex-wrap items-end gap-3 rounded-xl border border-gray-200 bg-white p-4 shadow-sm"
+        onsubmit={onCreateAlias}
+    >
+        <div>
+            <label for="alias-local" class="mb-1 block text-xs font-medium text-gray-600">Alias</label>
+            <div class="flex items-center gap-1 text-sm text-gray-500">
+                <input
+                    id="alias-local"
+                    required
+                    bind:value={aliasLocal}
+                    placeholder="info"
+                    class="w-32 rounded-lg border-gray-200 px-3 py-2 text-sm focus:border-brand-600 focus:ring-brand-600/30"
+                />
+                @{domain}
+            </div>
+        </div>
+        <div class="min-w-64 flex-1">
+            <label for="alias-targets" class="mb-1 block text-xs font-medium text-gray-600"
+                >Delivers to (comma separated)</label
+            >
+            <input
+                id="alias-targets"
+                required
+                list="alias-target-options"
+                bind:value={aliasTargets}
+                placeholder="alice@{domain}, bob@{domain}"
+                class="block w-full rounded-lg border-gray-200 px-3 py-2 text-sm focus:border-brand-600 focus:ring-brand-600/30"
+            />
+            <datalist id="alias-target-options">
+                {#each accounts as a (a.id)}
+                    <option value={a.email}></option>
+                {/each}
+            </datalist>
+        </div>
+        <button
+            type="submit"
+            disabled={aliasBusy}
+            class="inline-flex items-center gap-1 rounded-lg bg-brand-700 px-3 py-2 text-sm font-medium text-white hover:bg-brand-800 disabled:opacity-50"
+        >
+            <Plus class="size-4" />
+            Add alias
+        </button>
+    </form>
+    {#if aliasError}
+        <p class="mb-4 text-sm text-red-600">{aliasError}</p>
+    {/if}
+    {#if aliases.length === 0}
+        <p class="text-sm text-gray-500">No aliases on this domain.</p>
+    {:else}
+        <div class="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
+            <table class="min-w-full divide-y divide-gray-200 text-sm">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th class="px-4 py-3 text-left font-medium text-gray-600">Alias</th>
+                        <th class="px-4 py-3 text-left font-medium text-gray-600">Delivers to</th>
+                        <th class="px-4 py-3 text-right font-medium text-gray-600">Actions</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100">
+                    {#each aliases as al (al.email)}
+                        <tr class="hover:bg-gray-50">
+                            <td class="px-4 py-3 font-medium text-gray-900">{al.email}</td>
+                            <td class="px-4 py-3 text-gray-600">
+                                {#if aliasEditFor === al.email}
+                                    <form class="flex flex-wrap items-center gap-2" onsubmit={saveEditAlias}>
+                                        <input
+                                            aria-label="Targets for {al.email}"
+                                            required
+                                            list="alias-target-options"
+                                            bind:value={aliasEditTargets}
+                                            class="min-w-64 flex-1 rounded-lg border-gray-200 px-2 py-1 text-sm"
+                                        />
+                                        <button
+                                            type="submit"
+                                            disabled={aliasBusy}
+                                            class="rounded-lg bg-brand-700 px-2 py-1 text-xs font-medium text-white hover:bg-brand-800 disabled:opacity-50"
+                                            >Save</button
+                                        >
+                                        <button
+                                            type="button"
+                                            class="rounded-lg px-2 py-1 text-xs text-gray-700 hover:bg-gray-100"
+                                            onclick={() => (aliasEditFor = null)}>Cancel</button
+                                        >
+                                    </form>
+                                {:else if al.targets.length === 0}
+                                    <span class="text-amber-700">no mailbox left: mail is rejected</span>
+                                {:else}
+                                    {al.targets.join(", ")}
+                                {/if}
+                            </td>
+                            <td class="px-4 py-3 text-right whitespace-nowrap">
+                                <button
+                                    type="button"
+                                    class="rounded-lg p-1.5 text-gray-500 hover:bg-gray-100"
+                                    aria-label="Edit {al.email}"
+                                    onclick={() => startEditAlias(al)}
+                                >
+                                    <Pencil class="size-4" />
+                                </button>
+                                <button
+                                    type="button"
+                                    class="rounded-lg p-1.5 text-red-600 hover:bg-red-50"
+                                    aria-label="Delete {al.email}"
+                                    onclick={() => {
+                                        aliasDeleteError = "";
+                                        aliasDeleteTarget = al;
+                                    }}
+                                >
+                                    <Trash2 class="size-4" />
+                                </button>
+                            </td>
+                        </tr>
+                    {/each}
+                </tbody>
+            </table>
+        </div>
+    {/if}
 {/if}
 
 {#if dnsError}
@@ -903,6 +1130,23 @@
             <span class="font-medium">{formatBytes(deleteTarget.storage_used)}</span>.
         </p>
         <p class="text-red-700">This cannot be undone.</p>
+    </ConfirmDialog>
+{/if}
+
+{#if aliasDeleteTarget}
+    <ConfirmDialog
+        title="Delete alias"
+        confirmLabel="Delete alias"
+        danger
+        busy={aliasDeleteBusy}
+        error={aliasDeleteError}
+        onconfirm={confirmDeleteAlias}
+        oncancel={() => (aliasDeleteTarget = null)}
+    >
+        <p>
+            Mail to <span class="font-medium">{aliasDeleteTarget.email}</span> will be rejected (or go to the
+            catch-all). Mail already delivered stays in the target mailboxes.
+        </p>
     </ConfirmDialog>
 {/if}
 
