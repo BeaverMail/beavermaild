@@ -38,7 +38,7 @@ dist: web-build
 	$(DIST_GO) -o dist/$(DIST_NAME)/beaver ./cmd/beaver
 	$(DIST_GO) -o dist/$(DIST_NAME)/beaver-plugin-antispam ./cmd/beaver-plugin-antispam
 	cp contrib/systemd/beavermail.service docs/install.md docs/api.md LICENSE dist/$(DIST_NAME)/
-	tar -C dist -czf dist/$(DIST_NAME).tar.gz $(DIST_NAME)
+	tar -C dist --owner=0 --group=0 --numeric-owner -czf dist/$(DIST_NAME).tar.gz $(DIST_NAME)
 	cd dist && sha256sum $(DIST_NAME).tar.gz > $(DIST_NAME).tar.gz.sha256
 
 web-dev:
