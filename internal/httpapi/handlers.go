@@ -121,8 +121,13 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 }
 
 type tenantDTO struct {
-	ID   uint32 `json:"id"`
-	Name string `json:"name"`
+	ID         uint32 `json:"id"`
+	Name       string `json:"name"`
+	ExternalID string `json:"external_id,omitempty"`
+}
+
+func toTenantDTO(t storage.Tenant) tenantDTO {
+	return tenantDTO{ID: t.ID, Name: t.Name, ExternalID: t.ExternalID}
 }
 
 // handleListTenants returns tenants visible to the caller (admin/provisioner: all; tenant_admin: own).
@@ -141,7 +146,7 @@ func (s *Server) handleListTenants(w http.ResponseWriter, r *http.Request) {
 		}
 		out := make([]tenantDTO, 0, len(tenants))
 		for _, t := range tenants {
-			out = append(out, tenantDTO{ID: t.ID, Name: t.Name})
+			out = append(out, toTenantDTO(t))
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"tenants": out})
 	case directory.RoleTenantAdmin:
@@ -150,7 +155,7 @@ func (s *Server) handleListTenants(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "get tenant failed")
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"tenants": []tenantDTO{{ID: t.ID, Name: t.Name}}})
+		writeJSON(w, http.StatusOK, map[string]any{"tenants": []tenantDTO{toTenantDTO(t)}})
 	default:
 		writeError(w, http.StatusForbidden, "forbidden")
 	}

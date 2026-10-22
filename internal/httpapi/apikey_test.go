@@ -101,3 +101,39 @@ func TestProvisionerAPIKey(t *testing.T) {
 		t.Fatalf("bad key want 401 got %d", res.Code)
 	}
 }
+
+// A retried tenant create with the same external_id is 409 and returns the existing tenant.
+func TestCreateTenantExternalIDIdempotent(t *testing.T) {
+	t.Parallel()
+	srv, _ := newTestAPI(t)
+	tok := login(t, srv, "admin@api.test", "secret")
+	type tenantOut struct {
+		ID         uint32 `json:"id"`
+		ExternalID string `json:"external_id"`
+	}
+	create := func() *httptest.ResponseRecorder {
+		res := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(res, authedJSON(t, http.MethodPost, "/api/v1/tenants", tok,
+			[]byte(`{"name":"Customer","external_id":"cust-42"}`)))
+		return res
+	}
+	res := create()
+	if res.Code != http.StatusCreated {
+		t.Fatalf("create %d %s", res.Code, res.Body.String())
+	}
+	var first tenantOut
+	if err := json.Unmarshal(res.Body.Bytes(), &first); err != nil || first.ExternalID != "cust-42" {
+		t.Fatalf("create body %s err=%v", res.Body.String(), err)
+	}
+	res = create()
+	if res.Code != http.StatusConflict {
+		t.Fatalf("repeat want 409 got %d", res.Code)
+	}
+	var conflict struct {
+		Error  string    `json:"error"`
+		Tenant tenantOut `json:"tenant"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &conflict); err != nil || conflict.Tenant.ID != first.ID {
+		t.Fatalf("conflict body %s err=%v", res.Body.String(), err)
+	}
+}

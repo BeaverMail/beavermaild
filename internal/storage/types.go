@@ -5,6 +5,8 @@ package storage
 type Tenant struct {
 	ID   uint32 `msgpack:"id"`
 	Name string `msgpack:"n"`
+	// ExternalID is an optional caller-chosen key, unique across tenants (idempotent create).
+	ExternalID string `msgpack:"x,omitempty"`
 }
 
 // APIKey is a long-lived integration credential; only the SHA-256 of its secret is stored.

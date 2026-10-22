@@ -535,10 +535,12 @@ func (s *Server) handlePatchAccount(w http.ResponseWriter, r *http.Request) {
 }
 
 type createTenantRequest struct {
-	Name string `json:"name"`
+	Name       string `json:"name"`
+	ExternalID string `json:"external_id"`
 }
 
-// handleCreateTenant creates a tenant (instance admin only).
+// handleCreateTenant creates a tenant (admin or provisioner). A repeated external_id is 409 with the
+// existing tenant in the body, so a retrying client learns its id without a second call.
 func (s *Server) handleCreateTenant(w http.ResponseWriter, r *http.Request) {
 	p, ok := principal(r.Context())
 	if !ok {
@@ -554,12 +556,20 @@ func (s *Server) handleCreateTenant(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	tenant, err := s.dir.CreateTenant(r.Context(), req.Name)
+	tenant, err := s.dir.CreateTenant(r.Context(), req.Name, req.ExternalID)
 	if err != nil {
+		if errors.Is(err, directory.ErrExists) {
+			body := map[string]any{"error": "tenant already exists"}
+			if existing, err := s.dir.TenantByExternalID(r.Context(), req.ExternalID); err == nil {
+				body["tenant"] = toTenantDTO(existing)
+			}
+			writeJSON(w, http.StatusConflict, body)
+			return
+		}
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusCreated, tenantDTO{ID: tenant.ID, Name: tenant.Name})
+	writeJSON(w, http.StatusCreated, toTenantDTO(tenant))
 }
 
 type patchTenantRequest struct {
@@ -600,7 +610,7 @@ func (s *Server) handlePatchTenant(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "reload tenant failed")
 		return
 	}
-	writeJSON(w, http.StatusOK, tenantDTO{ID: tenant.ID, Name: tenant.Name})
+	writeJSON(w, http.StatusOK, toTenantDTO(tenant))
 }
 
 type confirmTenantRequest struct {

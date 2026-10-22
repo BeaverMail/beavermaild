@@ -105,12 +105,24 @@ Paths are relative to `/api/v1`. "Who" is the minimum role.
 
 | Method | Path | Who | Body | Response |
 |--------|------|-----|------|----------|
-| GET | `/tenants` | tenant_admin (own) / provisioner, admin (all) | | `{"tenants":[{id, name}]}` |
-| POST | `/tenants` | provisioner / admin | `{name}` | `201` `{id, name}` |
-| PATCH | `/tenants/{id}` | tenant_admin (own) / admin | `{name}` | `{id, name}` |
+| GET | `/tenants` | tenant_admin (own) / provisioner, admin (all) | | `{"tenants":[{id, name, external_id?}]}` |
+| POST | `/tenants` | provisioner / admin | `{name, external_id?}` | `201` `{id, name, external_id?}` |
+| PATCH | `/tenants/{id}` | tenant_admin (own) / provisioner, admin | `{name}` | `{id, name, external_id?}` |
 | DELETE | `/tenants/{id}` | provisioner / admin | `{"confirm": "<tenant name>"}` | `{id, name, domains_deleted, accounts_deleted}` |
 
 Deleting a tenant deletes all its domains, accounts and mail. The default tenant (`id=1`) cannot be deleted.
+
+`external_id` is an optional key chosen by the caller (e.g. the panel's customer id): up to 128 bytes, no spaces or
+control characters, unique across tenants, immutable after create. Creating a tenant with an `external_id` that
+already exists returns `409` with the existing tenant, so a retrying client gets its `id` without a second call:
+
+```json
+409 Conflict
+{"error":"tenant already exists","tenant":{"id":5,"name":"Customer","external_id":"cust-42"}}
+```
+
+Tenant names are not unique; without `external_id`, a repeated create makes another tenant. After a tenant is
+deleted its `external_id` can be used again.
 
 ### Domains
 
@@ -243,7 +255,7 @@ milliseconds.
 | 401 | Missing, invalid, expired or revoked token / API key |
 | 403 | Outside the caller's role or tenant, or a forbidden self-action |
 | 404 | Domain, account, tenant or queue entry not found |
-| 409 | Already exists, or setup already complete |
+| 409 | Already exists (tenant `409` includes the existing tenant), or setup already complete |
 | 429 | Too many login attempts from this IP |
 | 503 | Feature not wired on this instance (queue, logs, delivery probe, blob store, quota store) |
 
@@ -252,7 +264,7 @@ milliseconds.
 | Operation | Repeated call |
 |-----------|---------------|
 | Create domain / account | `409` (already exists): nothing changed. Treat `409` as "exists" if you only need it to exist. |
-| Create tenant | creates another tenant with the same name (names are not unique); check `GET /tenants` first |
+| Create tenant | with `external_id`: `409` plus the existing tenant. Without it: creates a duplicate (names are not unique) |
 | PATCH domain / account / tenant | idempotent (same body, same result) |
 | DELETE domain / account / tenant | second call returns `404` |
 | Queue retry / hold / unhold | idempotent (`200`) |
@@ -371,6 +383,7 @@ DELETE /api/v1/domains/example.org
   domain deletes also require a `confirm` field equal to the name.
 - `PATCH /domains/{domain}` resets every field you omit: always GET first and send the full object back.
 - Do not invent fields; unknown keys fail the whole request.
+- Always send `external_id` when creating a tenant, so a retried call cannot create a duplicate.
 - Prefer an API key (`provisioner`) over a password login; on `401` with an API key, stop and ask: the key was
   revoked. With a session token, log in again (tokens expire after 12 h).
 - Never put passwords or API keys in logs or prompts. For an agent that serves one customer, a `tenant_admin`
