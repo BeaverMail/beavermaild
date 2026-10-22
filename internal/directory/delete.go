@@ -92,6 +92,9 @@ func (d *Local) deleteAccount(ctx context.Context, acc storage.Account, domName 
 	if err := lookup.Delete(storage.SubspaceLookup, storage.BatchSuffix(0, 0, []byte("acc/"+email))); err != nil {
 		return DeleteAccountResult{}, err
 	}
+	if err := lookup.Delete(storage.SubspaceLookup, storage.BatchSuffix(0, 0, daccKey(acc.DomainID, acc.ID))); err != nil {
+		return DeleteAccountResult{}, err
+	}
 	if err := lookup.Delete(storage.SubspaceLookup, storage.BatchSuffix(0, 0, fmt.Appendf(nil, "meta/email/%d", acc.ID))); err != nil {
 		return DeleteAccountResult{}, err
 	}

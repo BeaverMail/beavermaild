@@ -110,9 +110,8 @@ func (d *Local) SetTenantStorageLimit(ctx context.Context, id uint32, limit uint
 }
 
 // TenantStorageCap returns the storage cap of accountID's tenant and the ids of all accounts
-// sharing it; limit 0 means no cap. It matches mail.TenantStorageCapFunc.
-// shortcut: scans every account on each call (once per delivery to a capped tenant); add a
-// per-tenant account index or usage counter when instances grow past a few thousand accounts.
+// sharing it; limit 0 means no cap. It matches mail.TenantStorageCapFunc. Cost per call is the
+// tenant's domains and accounts (domain → account index), not the whole instance.
 func (d *Local) TenantStorageCap(ctx context.Context, accountID uint32) (uint64, []uint32, error) {
 	acc, err := d.getAccount(ctx, accountID)
 	if errors.Is(err, ErrNotFound) {

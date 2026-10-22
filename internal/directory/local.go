@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync/atomic"
 
 	"github.com/BeaverMail/beaver/internal/storage"
 )
@@ -28,8 +29,9 @@ func (p Principal) Email() string {
 
 // Local is a filesystem-backed directory using the logical KV store.
 type Local struct {
-	store   storage.Store
-	dataDir string // optional; required for TLS/DKIM domain asset paths
+	store     storage.Store
+	dataDir   string      // optional; required for TLS/DKIM domain asset paths
+	daccReady atomic.Bool // domain → account index backfilled (see ensureDomainAccountIndex)
 }
 
 // NewLocal returns a directory over store.
@@ -171,6 +173,9 @@ func (d *Local) CreateAccountRole(ctx context.Context, domainID uint32, localPar
 		return storage.Account{}, err
 	}
 	if err := d.putLookup(batch, "acc", email, id); err != nil {
+		return storage.Account{}, err
+	}
+	if err := d.putDomainAccount(batch, domainID, id); err != nil {
 		return storage.Account{}, err
 	}
 	if err := d.putCred(batch, id, cred); err != nil {
