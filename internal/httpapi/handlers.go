@@ -285,6 +285,8 @@ type accountListDTO struct {
 	Role      string `json:"role"`
 	TenantID  uint32 `json:"tenant_id"`
 	Active    bool   `json:"active"`
+	// LoginDisabled blocks login while incoming mail is still accepted.
+	LoginDisabled bool `json:"login_disabled"`
 	// Mailbox usage and limits (0 limit = unlimited); omitted when the inbox is not wired.
 	StorageUsed   uint64 `json:"storage_used"`
 	StorageLimit  uint64 `json:"storage_limit"`
@@ -321,12 +323,13 @@ func (s *Server) handleListAccounts(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		dto := accountListDTO{
-			ID:        a.ID,
-			LocalPart: a.LocalPart,
-			Email:     email,
-			Role:      role,
-			TenantID:  a.TenantID,
-			Active:    a.Active,
+			ID:            a.ID,
+			LocalPart:     a.LocalPart,
+			Email:         email,
+			Role:          role,
+			TenantID:      a.TenantID,
+			Active:        a.Active,
+			LoginDisabled: a.LoginDisabled,
 		}
 		if s.inbox != nil {
 			if st, err := s.inbox.QuotaStatus(r.Context(), a.ID); err == nil {

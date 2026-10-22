@@ -136,10 +136,24 @@ func TestLoginDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.CreateAccountRole(ctx, dom.ID, "alice", "pw", directory.RoleUser); err != nil {
+	alice, err := d.CreateAccountRole(ctx, dom.ID, "alice", "pw", directory.RoleUser)
+	if err != nil {
 		t.Fatal(err)
 	}
 	const email = "alice@customer.example"
+
+	if err := d.SetAccountLoginDisabled(ctx, alice.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Authenticate(ctx, email, "pw"); !errors.Is(err, directory.ErrInactive) {
+		t.Fatalf("account disabled: err=%v", err)
+	}
+	if acc, _, err := d.ResolveEmail(ctx, email); err != nil || !acc.Active {
+		t.Fatalf("account must stay active for delivery: %+v err=%v", acc, err)
+	}
+	if err := d.SetAccountLoginDisabled(ctx, alice.ID, false); err != nil {
+		t.Fatal(err)
+	}
 
 	if _, err := d.SetDomainLoginDisabled(ctx, "customer.example", true); err != nil {
 		t.Fatal(err)

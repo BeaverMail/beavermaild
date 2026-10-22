@@ -79,6 +79,8 @@ type Account struct {
 	LocalPart string `msgpack:"lp"`
 	Role      string `msgpack:"role,omitempty"` // user | admin | tenant_admin; empty = user
 	Active    bool   `msgpack:"act"`
+	// LoginDisabled blocks IMAP/SMTP/API login while mail is still received (unlike Active=false).
+	LoginDisabled bool `msgpack:"ld,omitempty"`
 }
 
 // Mailbox is an IMAP/JMAP mailbox belonging to an account.

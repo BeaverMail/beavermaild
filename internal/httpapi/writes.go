@@ -474,6 +474,7 @@ type patchAccountRequest struct {
 	// Mailbox quota overrides (0 = unlimited).
 	StorageLimit  *uint64 `json:"storage_limit"`
 	MessagesLimit *uint32 `json:"messages_limit"`
+	LoginDisabled *bool   `json:"login_disabled"` // admin/provisioner only
 }
 
 // handlePatchAccount updates role, password, active flag, and/or mailbox quota limits.
@@ -503,8 +504,12 @@ func (s *Server) handlePatchAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	setQuota := req.StorageLimit != nil || req.MessagesLimit != nil
-	if req.Role == nil && req.Password == nil && req.Active == nil && !setQuota {
+	if req.Role == nil && req.Password == nil && req.Active == nil && req.LoginDisabled == nil && !setQuota {
 		writeError(w, http.StatusBadRequest, "no fields to update")
+		return
+	}
+	if req.LoginDisabled != nil && !canSuspend(p) {
+		writeError(w, http.StatusForbidden, "forbidden")
 		return
 	}
 	if setQuota && s.inbox == nil {
@@ -518,6 +523,10 @@ func (s *Server) handlePatchAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	if self && req.Active != nil && !*req.Active {
 		writeError(w, http.StatusForbidden, "cannot deactivate own account")
+		return
+	}
+	if self && req.LoginDisabled != nil && *req.LoginDisabled {
+		writeError(w, http.StatusForbidden, "cannot disable own login")
 		return
 	}
 	if req.Role != nil {
@@ -542,6 +551,12 @@ func (s *Server) handlePatchAccount(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if req.LoginDisabled != nil {
+		if err := s.dir.SetAccountLoginDisabled(r.Context(), acc.ID, *req.LoginDisabled); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
 	if setQuota {
 		if err := s.inbox.SetQuotaLimits(r.Context(), acc.ID, req.StorageLimit, req.MessagesLimit); err != nil {
 			s.log.Error("http set quota", "err", err)
@@ -555,12 +570,13 @@ func (s *Server) handlePatchAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dto := accountListDTO{
-		ID:        acc.ID,
-		LocalPart: acc.LocalPart,
-		Email:     acc.LocalPart + "@" + dom.Name,
-		Role:      directory.NormalizeRole(acc.Role),
-		TenantID:  acc.TenantID,
-		Active:    acc.Active,
+		ID:            acc.ID,
+		LocalPart:     acc.LocalPart,
+		Email:         acc.LocalPart + "@" + dom.Name,
+		Role:          directory.NormalizeRole(acc.Role),
+		TenantID:      acc.TenantID,
+		Active:        acc.Active,
+		LoginDisabled: acc.LoginDisabled,
 	}
 	if s.inbox != nil {
 		if st, err := s.inbox.QuotaStatus(r.Context(), acc.ID); err == nil {

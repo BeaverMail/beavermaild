@@ -177,10 +177,10 @@ that kind parsed.
 |--------|------|-----|------|----------|
 | GET | `/domains/{domain}/accounts` | any (user: only itself) | | `{"accounts":[Account]}` |
 | POST | `/domains/{domain}/accounts` | tenant_admin / provisioner / admin | `{local_part, password, role?}` | `201` Account |
-| PATCH | `/accounts/{email}` | tenant_admin / provisioner / admin | any of `{role, password, active, storage_limit, messages_limit}` | Account |
+| PATCH | `/accounts/{email}` | tenant_admin / provisioner / admin (`login_disabled`: provisioner / admin) | any of `{role, password, active, login_disabled, storage_limit, messages_limit}` | Account |
 | DELETE | `/accounts/{email}` | tenant_admin / provisioner / admin | | `{email, messages_removed, blobs_removed}` |
 
-**Account**: `id`, `local_part`, `email`, `role`, `tenant_id`, `active`, `storage_used`, `storage_limit`,
+**Account**: `id`, `local_part`, `email`, `role`, `tenant_id`, `active`, `login_disabled`, `storage_used`, `storage_limit`,
 `messages_used`, `messages_limit` (limit `0` = unlimited; usage is filled on list and PATCH, not on create).
 
 - `role` defaults to `user`. A tenant_admin or provisioner can assign only `user` or `tenant_admin`.
@@ -228,12 +228,13 @@ deliveries can overshoot the cap by at most the messages in flight. Typical use 
 | Goal | Call | Login (IMAP, SMTP, API) | Sending | Incoming mail |
 |------|------|------------------------|---------|---------------|
 | Suspend (e.g. unpaid, after notices) | `PATCH /tenants/{id}` or `/domains/{domain}` with `{"login_disabled": true}` | blocked | blocked (needs SMTP AUTH) | **accepted**, up to the quota |
+| Suspend one mailbox | `PATCH /accounts/{email}` with `{"login_disabled": true}` | blocked | blocked | **accepted**, up to the quota |
 | Disable one mailbox completely | `PATCH /accounts/{email}` with `{"active": false}` | blocked | blocked | **rejected** (`550 5.1.1 User inactive`, sender gets a bounce) |
 | Remove | `DELETE` on tenant, domain or account | | | mail deleted permanently |
 
 `login_disabled` is restored with `false`. Only `admin` and `provisioner` can change it, so a customer's
-`tenant_admin` cannot lift its own suspension. The default tenant and the caller's own tenant or domain cannot be
-disabled. A blocked login gets the same answer as a wrong password (`401`, IMAP `NO`, SMTP `535`), and it is checked
+`tenant_admin` cannot lift its own suspension. The default tenant and the caller's own tenant, domain or account cannot be
+disabled. A login is blocked when any of account, domain or tenant has `login_disabled`. A blocked login gets the same answer as a wrong password (`401`, IMAP `NO`, SMTP `535`), and it is checked
 only after the password, so it does not reveal the suspension to someone without it. Retries with the right password
 do not count toward the IP rate limit, so a suspended client polling through a shared webmail cannot lock out other
 users.

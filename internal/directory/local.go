@@ -64,7 +64,7 @@ func (d *Local) Authenticate(ctx context.Context, email, password string) (Princ
 		return Principal{}, ErrInvalidCredentials
 	}
 	// Suspension is checked after the password so it is not revealed to someone without it.
-	if dom.LoginDisabled {
+	if acc.LoginDisabled || dom.LoginDisabled {
 		return Principal{}, ErrInactive
 	}
 	if tenant, err := d.GetTenant(ctx, acc.TenantID); err == nil && tenant.LoginDisabled {
@@ -359,6 +359,20 @@ func (d *Local) SetActive(ctx context.Context, accountID uint32, active bool) er
 		return err
 	}
 	acc.Active = active
+	batch := storage.NewBatch().WithAccount(acc.ID)
+	if err := d.putAccount(batch, acc); err != nil {
+		return err
+	}
+	return d.store.Commit(ctx, batch)
+}
+
+// SetAccountLoginDisabled blocks or restores login for one account; incoming mail is still accepted.
+func (d *Local) SetAccountLoginDisabled(ctx context.Context, accountID uint32, disabled bool) error {
+	acc, err := d.getAccount(ctx, accountID)
+	if err != nil {
+		return err
+	}
+	acc.LoginDisabled = disabled
 	batch := storage.NewBatch().WithAccount(acc.ID)
 	if err := d.putAccount(batch, acc); err != nil {
 		return err

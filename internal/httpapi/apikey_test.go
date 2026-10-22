@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -249,11 +250,29 @@ func TestLoginDisabledAPI(t *testing.T) {
 	if code := patch(adminTok, "/api/v1/domains/api.test", `{"login_disabled":true}`); code != http.StatusForbidden {
 		t.Fatalf("own domain want 403 got %d", code)
 	}
+	bossPath := "/api/v1/accounts/boss@customer.example"
+	if code := patch(bossTok, bossPath, `{"login_disabled":false}`); code != http.StatusForbidden {
+		t.Fatalf("tenant_admin on account want 403 got %d", code)
+	}
+	if code := patch(adminTok, "/api/v1/accounts/admin@api.test", `{"login_disabled":true}`); code != http.StatusForbidden {
+		t.Fatalf("own account want 403 got %d", code)
+	}
+	if code := patch(adminTok, bossPath, `{"login_disabled":true}`); code != http.StatusOK {
+		t.Fatalf("admin suspend account want 200 got %d", code)
+	}
+	res := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(res, authedJSON(t, http.MethodGet, "/api/v1/domains/customer.example/accounts", adminTok, nil))
+	if !strings.Contains(res.Body.String(), `"login_disabled":true`) {
+		t.Fatalf("account list must report login_disabled: %s", res.Body.String())
+	}
+	if code := patch(adminTok, bossPath, `{"login_disabled":false}`); code != http.StatusOK {
+		t.Fatalf("admin restore account want 200 got %d", code)
+	}
 	if code := patch(adminTok, tenantPath, `{"login_disabled":true}`); code != http.StatusOK {
 		t.Fatalf("admin suspend tenant want 200 got %d", code)
 	}
 
-	res := httptest.NewRecorder()
+	res = httptest.NewRecorder()
 	srv.Handler().ServeHTTP(res, authedJSON(t, http.MethodPost, "/api/v1/auth/login", "",
 		[]byte(`{"email":"boss@customer.example","password":"pw"}`)))
 	if res.Code != http.StatusUnauthorized {
