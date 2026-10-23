@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/BeaverMail/beaver/internal/storage"
 )
@@ -48,17 +49,28 @@ func (s *session) cmdMailboxList(ctx context.Context, tag, arg, cmd string, subs
 	if !ok {
 		return s.tagged(tag, "BAD "+cmd+" syntax")
 	}
-	if opt.ref != "" && opt.ref != "/" {
-		if _, err := s.inbox.ResolveMailbox(ctx, s.principal.AccountID, opt.ref); err != nil {
-			return s.tagged(tag, "OK "+cmd+" completed")
+	// RFC 3501 §6.3.8: an empty LIST pattern returns only the delimiter and the reference's root name.
+	if cmd == "LIST" && opt.pattern == "" {
+		root := ""
+		if i := strings.IndexByte(opt.ref, '/'); i >= 0 {
+			root = opt.ref[:i+1]
 		}
+		if err := s.untagged(`LIST (\Noselect) "/" ` + formatListMailbox(root)); err != nil {
+			return err
+		}
+		return s.tagged(tag, "OK LIST completed")
+	}
+	// RFC 3501 §6.3.8: names are matched against reference and pattern joined; a bare "/" reference means the root.
+	ref := opt.ref
+	if ref == "/" {
+		ref = ""
 	}
 	mboxes, err := s.inbox.ListMailboxes(ctx, s.principal.AccountID)
 	if err != nil {
 		return err
 	}
 	filterSubscribed := subscribedOnly || opt.subscribedOnly
-	match := compileListPattern(opt.pattern)
+	match := compileListPattern(ref + opt.pattern)
 	names := make([]string, len(mboxes))
 	for i, mb := range mboxes {
 		names[i] = mb.Name

@@ -83,3 +83,145 @@ func TestIMAPListPatternAndSpecialUse(t *testing.T) {
 	expectPrefix(t, read, "* SEARCH 1")
 	expectPrefix(t, read, "l11 OK")
 }
+
+func TestIMAPListEmptyPatternReturnsDelimiter(t *testing.T) {
+	t.Parallel()
+
+	_, _, _, ln, cleanup := startIMAPTestServer(t)
+	defer cleanup()
+
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	read := bufio.NewReader(conn)
+	expectPrefix(t, read, "* OK")
+	send(t, conn, "d1 LOGIN alice@localhost beaver")
+	expectPrefix(t, read, "d1 OK")
+
+	for _, tc := range []struct{ cmd, want string }{
+		{`d2 LIST "" ""`, `* LIST (\Noselect) "/" ""`},
+		{`d3 LIST "Archive/2024" ""`, `* LIST (\Noselect) "/" "Archive/"`},
+	} {
+		send(t, conn, tc.cmd)
+		line, err := read.ReadString('\n')
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.TrimRight(line, "\r\n"); got != tc.want {
+			t.Fatalf("%s: got %q, want %q", tc.cmd, got, tc.want)
+		}
+		expectPrefix(t, read, strings.Fields(tc.cmd)[0]+" OK")
+	}
+}
+
+func TestIMAPListJoinsReferenceAndPattern(t *testing.T) {
+	t.Parallel()
+
+	_, _, _, ln, cleanup := startIMAPTestServer(t)
+	defer cleanup()
+
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	read := bufio.NewReader(conn)
+	expectPrefix(t, read, "* OK")
+	send(t, conn, "r1 LOGIN alice@localhost beaver")
+	expectPrefix(t, read, "r1 OK")
+	send(t, conn, "r2 CREATE Archive/2024")
+	expectPrefix(t, read, "r2 OK")
+
+	for _, tc := range []struct{ cmd, want string }{
+		{`r3 LIST "Archive/" "%"`, `"Archive/2024"`},
+		{`r4 LIST "" "Archive/*"`, `"Archive/2024"`},
+		{`r5 LIST "Archive" "%"`, ``},
+	} {
+		tag := strings.Fields(tc.cmd)[0]
+		send(t, conn, tc.cmd)
+		var got []string
+		for {
+			line, err := read.ReadString('\n')
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.HasPrefix(line, tag+" ") {
+				if !strings.HasPrefix(line, tag+" OK") {
+					t.Fatalf("%s: %q", tc.cmd, line)
+				}
+				break
+			}
+			got = append(got, strings.TrimRight(line, "\r\n"))
+		}
+		if tc.want == "" {
+			if len(got) != 0 {
+				t.Fatalf("%s: unexpected %q", tc.cmd, got)
+			}
+			continue
+		}
+		if len(got) != 1 || !strings.HasSuffix(got[0], tc.want) {
+			t.Fatalf("%s: got %q, want one line ending %s", tc.cmd, got, tc.want)
+		}
+	}
+}
+
+func TestIMAPCreateUnderInbox(t *testing.T) {
+	t.Parallel()
+
+	_, _, _, ln, cleanup := startIMAPTestServer(t)
+	defer cleanup()
+
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	read := bufio.NewReader(conn)
+	expectPrefix(t, read, "* OK")
+	send(t, conn, "c1 LOGIN alice@localhost beaver")
+	expectPrefix(t, read, "c1 OK")
+	send(t, conn, "c2 CREATE INBOX/Lists")
+	expectPrefix(t, read, "c2 OK")
+
+	send(t, conn, `c3 LIST "" "INBOX*"`)
+	got := map[string]string{}
+	for {
+		line, err := read.ReadString('\n')
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.HasPrefix(line, "c3 ") {
+			if !strings.HasPrefix(line, "c3 OK") {
+				t.Fatalf("list: %q", line)
+			}
+			break
+		}
+		line = strings.TrimRight(line, "\r\n")
+		got[line[strings.LastIndexByte(line, ' ')+1:]] = line
+	}
+	if !strings.Contains(got["INBOX"], `\HasChildren`) {
+		t.Fatalf("INBOX should have children: %q", got)
+	}
+	if _, ok := got[`"INBOX/Lists"`]; !ok {
+		t.Fatalf("INBOX/Lists missing: %q", got)
+	}
+
+	send(t, conn, "c4 SELECT INBOX/Lists")
+	for {
+		line, err := read.ReadString('\n')
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.HasPrefix(line, "c4 ") {
+			if !strings.HasPrefix(line, "c4 OK") {
+				t.Fatalf("select: %q", line)
+			}
+			break
+		}
+	}
+}
