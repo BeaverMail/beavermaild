@@ -46,11 +46,11 @@ func (s *session) cmdList(ctx context.Context, tag, arg string) error {
 
 func (s *session) cmdMailboxList(ctx context.Context, tag, arg, cmd string, subscribedOnly bool) error {
 	opt, ok := parseListOptions(arg)
-	if !ok {
+	if !ok || (cmd == "LSUB" && opt.extended) {
 		return s.tagged(tag, "BAD "+cmd+" syntax")
 	}
 	// RFC 3501 §6.3.8: an empty LIST pattern returns only the delimiter and the reference's root name.
-	if cmd == "LIST" && opt.pattern == "" {
+	if cmd == "LIST" && !opt.extended && opt.patterns[0] == "" {
 		root := ""
 		if i := strings.IndexByte(opt.ref, '/'); i >= 0 {
 			root = opt.ref[:i+1]
@@ -70,19 +70,67 @@ func (s *session) cmdMailboxList(ctx context.Context, tag, arg, cmd string, subs
 		return err
 	}
 	filterSubscribed := subscribedOnly || opt.subscribedOnly
-	match := compileListPattern(ref + opt.pattern)
+	matchers := make([]func(string) bool, len(opt.patterns))
+	for i, p := range opt.patterns {
+		matchers[i] = compileListPattern(ref + p)
+	}
+	match := func(name string) bool {
+		for _, m := range matchers {
+			if m(name) {
+				return true
+			}
+		}
+		return false
+	}
+	var criteria []string
+	if filterSubscribed {
+		criteria = append(criteria, `"SUBSCRIBED"`)
+	}
+	if opt.specialUseOnly {
+		criteria = append(criteria, `"SPECIAL-USE"`)
+	}
+	// selected reports whether a folder meets the selection options; missing parents meet none.
+	selected := func(c listCandidate) bool {
+		if c.virtual {
+			return len(criteria) == 0
+		}
+		return (!filterSubscribed || c.mb.Subscribed) && (!opt.specialUseOnly || specialUseAttr(c.mb) != "")
+	}
 	names := make([]string, len(mboxes))
 	for i, mb := range mboxes {
 		names[i] = mb.Name
 	}
-	for _, mb := range mboxes {
-		if filterSubscribed && !mb.Subscribed {
+	cands := listCandidates(mboxes)
+	for _, c := range cands {
+		if !match(c.mb.Name) {
 			continue
 		}
-		if !match(mb.Name) {
+		// RFC 5258 §3: RECURSIVEMATCH reports descendants that meet the selection but not the pattern.
+		childInfo := false
+		if opt.recursiveMatch {
+			prefix := strings.ToUpper(c.mb.Name) + "/"
+			for _, d := range cands {
+				if strings.HasPrefix(strings.ToUpper(d.mb.Name), prefix) && selected(d) && !match(d.mb.Name) {
+					childInfo = true
+					break
+				}
+			}
+		}
+		if !selected(c) && !childInfo {
 			continue
 		}
-		line := fmt.Sprintf(`%s (%s) "/" %s`, cmd, listMailboxAttrs(mb, names, filterSubscribed || opt.markSubscribed), formatListMailbox(mb.Name))
+		attrs := listMailboxAttrs(c.mb, names, filterSubscribed || opt.markSubscribed)
+		if c.virtual {
+			// RFC 5258 \NonExistent implies \Noselect; plain RFC 3501 clients only know \Noselect.
+			attrs = `\HasChildren \Noselect`
+			if opt.extended {
+				attrs = `\HasChildren \NonExistent`
+			}
+		}
+		line := fmt.Sprintf(`%s (%s) "/" %s`, cmd, attrs, formatListMailbox(c.mb.Name))
+		if childInfo {
+			line += ` ("CHILDINFO" (` + strings.Join(criteria, " ") + `))`
+		}
 		if err := s.untagged(line); err != nil {
 			return err
 		}

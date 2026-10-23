@@ -139,7 +139,8 @@ func TestIMAPListJoinsReferenceAndPattern(t *testing.T) {
 	for _, tc := range []struct{ cmd, want string }{
 		{`r3 LIST "Archive/" "%"`, `"Archive/2024"`},
 		{`r4 LIST "" "Archive/*"`, `"Archive/2024"`},
-		{`r5 LIST "Archive" "%"`, ``},
+		// RFC 3501 §6.3.8: a missing parent of an existing folder is listed as \Noselect.
+		{`r5 LIST "Archive" "%"`, `"Archive"`},
 	} {
 		tag := strings.Fields(tc.cmd)[0]
 		send(t, conn, tc.cmd)
@@ -223,5 +224,98 @@ func TestIMAPCreateUnderInbox(t *testing.T) {
 			}
 			break
 		}
+	}
+}
+
+func TestIMAPListExtended(t *testing.T) {
+	t.Parallel()
+
+	_, _, _, ln, cleanup := startIMAPTestServer(t)
+	defer cleanup()
+
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	read := bufio.NewReader(conn)
+	expectPrefix(t, read, "* OK")
+	send(t, conn, "x1 LOGIN alice@localhost beaver")
+	expectPrefix(t, read, "x1 OK")
+	// RFC 5258 §5 example tree: Fruit is never created, only its child.
+	for i, c := range []string{
+		"CREATE Fruit/Banana", "CREATE Vegetable", "CREATE Vegetable/Broccoli",
+		"SUBSCRIBE Fruit/Banana", "SUBSCRIBE Vegetable", "SUBSCRIBE Vegetable/Broccoli",
+	} {
+		tag := "s" + string(rune('a'+i))
+		send(t, conn, tag+" "+c)
+		expectPrefix(t, read, tag+" OK")
+	}
+
+	list := func(tag, args string) map[string]string {
+		t.Helper()
+		send(t, conn, tag+" "+args)
+		got := map[string]string{}
+		for {
+			line, err := read.ReadString('\n')
+			if err != nil {
+				t.Fatal(err)
+			}
+			line = strings.TrimRight(line, "\r\n")
+			if strings.HasPrefix(line, tag+" ") {
+				if !strings.HasPrefix(line, tag+" OK") {
+					t.Fatalf("%s: %q", args, line)
+				}
+				return got
+			}
+			rest := line[strings.Index(line, `"/" `)+4:]
+			name, _, _ := strings.Cut(rest, " ")
+			if strings.HasPrefix(rest, `"`) {
+				name = rest[1 : 1+strings.IndexByte(rest[1:], '"')]
+			}
+			got[name] = line
+		}
+	}
+
+	got := list("x2", `LIST (SUBSCRIBED RECURSIVEMATCH) "" "%"`)
+	if l := got["Fruit"]; !strings.Contains(l, `\NonExistent`) || !strings.HasSuffix(l, `("CHILDINFO" ("SUBSCRIBED"))`) {
+		t.Fatalf("Fruit: %q", got)
+	}
+	if l := got["Vegetable"]; !strings.Contains(l, `\Subscribed`) || !strings.HasSuffix(l, `("CHILDINFO" ("SUBSCRIBED"))`) {
+		t.Fatalf("Vegetable: %q", got)
+	}
+
+	got = list("x3", `LIST (SUBSCRIBED RECURSIVEMATCH) "" "*"`)
+	if _, ok := got["Fruit"]; ok {
+		t.Fatalf("Fruit has no unmatched subscribed child under *: %q", got)
+	}
+	for name, l := range got {
+		if strings.Contains(l, "CHILDINFO") {
+			t.Fatalf("%s: unexpected CHILDINFO %q", name, l)
+		}
+	}
+	if _, ok := got["Vegetable/Broccoli"]; !ok {
+		t.Fatalf("Broccoli missing: %q", got)
+	}
+
+	got = list("x4", `LIST "" ("INBOX" "Vegetable" "Nope")`)
+	if len(got) != 2 || got["INBOX"] == "" || got["Vegetable"] == "" {
+		t.Fatalf("multiple patterns: %q", got)
+	}
+
+	got = list("x5", `LIST (SPECIAL-USE) "" "*" RETURN (SPECIAL-USE)`)
+	if len(got) != 3 || !strings.Contains(got["Sent"], `\Sent`) || !strings.Contains(got["Trash"], `\Trash`) || !strings.Contains(got["Drafts"], `\Drafts`) {
+		t.Fatalf("special-use selection: %q", got)
+	}
+
+	got = list("x6", `LIST "" "%"`)
+	if !strings.Contains(got["Fruit"], `\Noselect`) || strings.Contains(got["Fruit"], `\NonExistent`) {
+		t.Fatalf("plain LIST missing parent: %q", got)
+	}
+
+	for _, bad := range []string{`x7 LIST (BOGUS) "" "*"`, `x8 LIST (RECURSIVEMATCH) "" "*"`, `x9 LSUB "" ("*")`} {
+		send(t, conn, bad)
+		expectPrefix(t, read, strings.Fields(bad)[0]+" BAD")
 	}
 }

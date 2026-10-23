@@ -30,18 +30,43 @@ func TestParseListOptions(t *testing.T) {
 	t.Parallel()
 
 	opt, ok := parseListOptions(`"" "*"`)
-	if !ok || opt.ref != "" || opt.pattern != "*" || opt.subscribedOnly {
+	if !ok || opt.ref != "" || opt.patterns[0] != "*" || opt.subscribedOnly {
 		t.Fatalf(`parse star: %+v ok=%v`, opt, ok)
 	}
 
 	opt, ok = parseListOptions(`(SUBSCRIBED) "" "*"`)
-	if !ok || !opt.subscribedOnly || opt.pattern != "*" {
+	if !ok || !opt.subscribedOnly || opt.patterns[0] != "*" {
 		t.Fatalf(`parse subscribed: %+v ok=%v`, opt, ok)
 	}
 
 	opt, ok = parseListOptions(`"" "*" RETURN (SUBSCRIBED CHILDREN)`)
-	if !ok || opt.subscribedOnly || !opt.markSubscribed || opt.pattern != "*" {
+	if !ok || opt.subscribedOnly || !opt.markSubscribed || opt.patterns[0] != "*" {
 		t.Fatalf(`parse return subscribed: %+v ok=%v`, opt, ok)
+	}
+
+	opt, ok = parseListOptions(`(SUBSCRIBED RECURSIVEMATCH) "" ("INBOX" Sent "A B") RETURN (SPECIAL-USE)`)
+	if !ok || !opt.recursiveMatch || !opt.subscribedOnly || len(opt.patterns) != 3 || opt.patterns[1] != "Sent" || opt.patterns[2] != "A B" {
+		t.Fatalf(`parse extended: %+v ok=%v`, opt, ok)
+	}
+
+	opt, ok = parseListOptions(`(SPECIAL-USE) "" "*" RETURN ()`)
+	if !ok || !opt.specialUseOnly || !opt.extended {
+		t.Fatalf(`parse special-use: %+v ok=%v`, opt, ok)
+	}
+
+	for _, bad := range []string{
+		`(RECURSIVEMATCH) "" "*"`,
+		`(REMOTE RECURSIVEMATCH) "" "*"`,
+		`(BOGUS) "" "*"`,
+		`"" "*" RETURN (BOGUS)`,
+		`"" "*" RETURN SUBSCRIBED`,
+		`"" ()`,
+		`"" ("INBOX"`,
+		`"" "*" junk`,
+	} {
+		if _, ok := parseListOptions(bad); ok {
+			t.Errorf("parseListOptions(%s) accepted", bad)
+		}
 	}
 }
 
