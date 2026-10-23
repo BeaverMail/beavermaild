@@ -105,9 +105,10 @@ func (s *session) cmdMailboxList(ctx context.Context, tag, arg, cmd string, subs
 		if !match(c.mb.Name) {
 			continue
 		}
-		// RFC 5258 §3: RECURSIVEMATCH reports descendants that meet the selection but not the pattern.
+		// RFC 5258 §3 RECURSIVEMATCH and RFC 3501 §6.3.9 LSUB "%" both report parents of
+		// descendants that meet the selection but not the pattern.
 		childInfo := false
-		if opt.recursiveMatch {
+		if opt.recursiveMatch || cmd == "LSUB" {
 			prefix := strings.ToUpper(c.mb.Name) + "/"
 			for _, d := range cands {
 				if strings.HasPrefix(strings.ToUpper(d.mb.Name), prefix) && selected(d) && !match(d.mb.Name) {
@@ -120,15 +121,15 @@ func (s *session) cmdMailboxList(ctx context.Context, tag, arg, cmd string, subs
 			continue
 		}
 		attrs := listMailboxAttrs(c.mb, names, filterSubscribed || opt.markSubscribed)
-		if c.virtual {
-			// RFC 5258 \NonExistent implies \Noselect; plain RFC 3501 clients only know \Noselect.
+		switch {
+		case c.virtual && opt.extended:
+			// RFC 5258: \NonExistent implies \Noselect.
+			attrs = `\HasChildren \NonExistent`
+		case c.virtual, cmd == "LSUB" && !selected(c):
 			attrs = `\HasChildren \Noselect`
-			if opt.extended {
-				attrs = `\HasChildren \NonExistent`
-			}
 		}
 		line := fmt.Sprintf(`%s (%s) "/" %s`, cmd, attrs, formatListMailbox(c.mb.Name))
-		if childInfo {
+		if childInfo && opt.recursiveMatch {
 			line += ` ("CHILDINFO" (` + strings.Join(criteria, " ") + `))`
 		}
 		if err := s.untagged(line); err != nil {

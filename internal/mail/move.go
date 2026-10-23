@@ -181,9 +181,10 @@ func (ib *Inbox) mailboxRecord(ctx context.Context, accountID, mailboxID uint32)
 	return mbox, nil
 }
 
-// CreateMailbox adds a user folder and returns its record.
+// CreateMailbox adds a user folder, plus any missing parent folders, and returns its record.
 func (ib *Inbox) CreateMailbox(ctx context.Context, accountID uint32, name string) (Mailbox, error) {
-	name = stringsTrimMailboxName(name)
+	// RFC 3501 §6.3.3: a trailing delimiter only declares the intent to create children.
+	name = strings.TrimRight(stringsTrimMailboxName(name), "/")
 	if err := ValidateMailboxName(name); err != nil {
 		return Mailbox{}, err
 	}
@@ -194,18 +195,44 @@ func (ib *Inbox) CreateMailbox(ctx context.Context, accountID uint32, name strin
 		} else if !errors.Is(err, storage.ErrNotFound) {
 			return err
 		}
-		var err error
-		if id, err = ib.nextCustomMailboxID(ctx, accountID); err != nil {
+		records, err := ib.listMailboxRecords(ctx, accountID)
+		if err != nil {
 			return err
 		}
-		// Reading the new key asserts it is still absent, so two concurrent creates cannot share id.
-		if _, err := t.get(mailboxKey(accountID, id)); !errors.Is(err, storage.ErrNotFound) {
-			if err == nil {
-				err = storage.ErrCASConflict
+		exists := make(map[string]bool, len(records))
+		for _, m := range records {
+			exists[strings.ToUpper(m.Name)] = true
+		}
+		// RFC 3501 §6.3.3: superior names the hierarchy needs are created with the folder.
+		var names []string
+		for i, c := range name {
+			if c != '/' {
+				continue
 			}
+			parent := name[:i]
+			if parent != "" && !strings.HasSuffix(parent, "/") && !exists[strings.ToUpper(parent)] {
+				names = append(names, parent)
+			}
+		}
+		names = append(names, name)
+		first, err := ib.nextCustomMailboxID(ctx, accountID)
+		if err != nil {
 			return err
 		}
-		return t.putMailbox(accountID, storage.Mailbox{ID: id, Name: name, UIDNext: 1, UIDValidity: 1})
+		for i, n := range names {
+			id = first + uint32(i)
+			// Reading the new key asserts it is still absent, so two concurrent creates cannot share id.
+			if _, err := t.get(mailboxKey(accountID, id)); !errors.Is(err, storage.ErrNotFound) {
+				if err == nil {
+					err = storage.ErrCASConflict
+				}
+				return err
+			}
+			if err := t.putMailbox(accountID, storage.Mailbox{ID: id, Name: n, UIDNext: 1, UIDValidity: 1}); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		return Mailbox{}, err

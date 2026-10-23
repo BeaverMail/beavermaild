@@ -139,7 +139,7 @@ func TestIMAPListJoinsReferenceAndPattern(t *testing.T) {
 	for _, tc := range []struct{ cmd, want string }{
 		{`r3 LIST "Archive/" "%"`, `"Archive/2024"`},
 		{`r4 LIST "" "Archive/*"`, `"Archive/2024"`},
-		// RFC 3501 §6.3.8: a missing parent of an existing folder is listed as \Noselect.
+		// CREATE Archive/2024 also created Archive (RFC 3501 §6.3.3); "Archive%" matches it.
 		{`r5 LIST "Archive" "%"`, `"Archive"`},
 	} {
 		tag := strings.Fields(tc.cmd)[0]
@@ -243,10 +243,10 @@ func TestIMAPListExtended(t *testing.T) {
 	expectPrefix(t, read, "* OK")
 	send(t, conn, "x1 LOGIN alice@localhost beaver")
 	expectPrefix(t, read, "x1 OK")
-	// RFC 5258 §5 example tree: Fruit is never created, only its child.
+	// RFC 5258 §5 example tree: Fruit exists but is not subscribed.
 	for i, c := range []string{
 		"CREATE Fruit/Banana", "CREATE Vegetable", "CREATE Vegetable/Broccoli",
-		"SUBSCRIBE Fruit/Banana", "SUBSCRIBE Vegetable", "SUBSCRIBE Vegetable/Broccoli",
+		"UNSUBSCRIBE Fruit", "SUBSCRIBE Fruit/Banana", "SUBSCRIBE Vegetable", "SUBSCRIBE Vegetable/Broccoli",
 	} {
 		tag := "s" + string(rune('a'+i))
 		send(t, conn, tag+" "+c)
@@ -279,7 +279,7 @@ func TestIMAPListExtended(t *testing.T) {
 	}
 
 	got := list("x2", `LIST (SUBSCRIBED RECURSIVEMATCH) "" "%"`)
-	if l := got["Fruit"]; !strings.Contains(l, `\NonExistent`) || !strings.HasSuffix(l, `("CHILDINFO" ("SUBSCRIBED"))`) {
+	if l := got["Fruit"]; strings.Contains(l, `\Subscribed`) || !strings.HasSuffix(l, `("CHILDINFO" ("SUBSCRIBED"))`) {
 		t.Fatalf("Fruit: %q", got)
 	}
 	if l := got["Vegetable"]; !strings.Contains(l, `\Subscribed`) || !strings.HasSuffix(l, `("CHILDINFO" ("SUBSCRIBED"))`) {
@@ -309,9 +309,36 @@ func TestIMAPListExtended(t *testing.T) {
 		t.Fatalf("special-use selection: %q", got)
 	}
 
+	// Deleting a parent leaves its child: the parent is then listed but not selectable.
+	send(t, conn, "sz DELETE Fruit")
+	expectPrefix(t, read, "sz OK")
 	got = list("x6", `LIST "" "%"`)
 	if !strings.Contains(got["Fruit"], `\Noselect`) || strings.Contains(got["Fruit"], `\NonExistent`) {
 		t.Fatalf("plain LIST missing parent: %q", got)
+	}
+	got = list("x6b", `LIST () "" "%"`)
+	if !strings.Contains(got["Fruit"], `\NonExistent`) {
+		t.Fatalf("extended LIST missing parent: %q", got)
+	}
+
+	// RFC 3501 §6.3.9: LSUB "%" returns an unsubscribed parent of a subscribed child as \Noselect.
+	send(t, conn, "sy CREATE Tools/Hammer")
+	expectPrefix(t, read, "sy OK")
+	send(t, conn, "sx UNSUBSCRIBE Tools")
+	expectPrefix(t, read, "sx OK")
+	got = list("x6c", `LSUB "" "%"`)
+	if l := got["Tools"]; !strings.Contains(l, `\Noselect`) || strings.Contains(l, `\Subscribed`) {
+		t.Fatalf("LSUB parent: %q", got)
+	}
+	if _, ok := got["Tools/Hammer"]; ok {
+		t.Fatalf("LSUB %% returned child: %q", got)
+	}
+	got = list("x6d", `LSUB "" "*"`)
+	if _, ok := got["Tools"]; ok {
+		t.Fatalf("LSUB * returned unsubscribed parent: %q", got)
+	}
+	if _, ok := got["Tools/Hammer"]; !ok {
+		t.Fatalf("LSUB * missing child: %q", got)
 	}
 
 	for _, bad := range []string{`x7 LIST (BOGUS) "" "*"`, `x8 LIST (RECURSIVEMATCH) "" "*"`, `x9 LSUB "" ("*")`} {
