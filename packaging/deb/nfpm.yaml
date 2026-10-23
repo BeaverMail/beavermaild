@@ -1,0 +1,47 @@
+# nfpm config for the BeaverMail Debian package; built by `make deb` (env vars set there).
+name: beavermail
+arch: ${DEB_ARCH}
+platform: linux
+version: ${DEB_VERSION}
+section: mail
+priority: optional
+maintainer: ""  # to be decided
+description: |-
+  Mail server for hosting panels: SMTP, submission, IMAP and an HTTP API.
+homepage: https://github.com/BeaverMail/beaver
+license: MIT
+depends:
+  - adduser
+contents:
+  - src: dist/deb/beaver
+    dst: /usr/bin/beaver
+    file_info:
+      mode: 0755
+  - src: dist/deb/beaver-plugin-antispam
+    dst: /var/lib/beavermail/plugins/beaver-plugin-antispam
+    file_info:
+      mode: 0755
+  - src: dist/deb/beavermail.service
+    dst: /lib/systemd/system/beavermail.service
+    file_info:
+      mode: 0644
+  - src: LICENSE
+    dst: /usr/share/doc/beavermail/copyright
+    file_info:
+      mode: 0644
+  - src: docs/install.md
+    dst: /usr/share/doc/beavermail/install.md
+    file_info:
+      mode: 0644
+  - src: docs/api.md
+    dst: /usr/share/doc/beavermail/api.md
+    file_info:
+      mode: 0644
+  - src: cmd/beaver-plugin-antispam/examples/*.example
+    dst: /usr/share/doc/beavermail/examples/antispam/
+    file_info:
+      mode: 0644
+scripts:
+  postinstall: packaging/deb/postinst
+  preremove: packaging/deb/prerm
+  postremove: packaging/deb/postrm

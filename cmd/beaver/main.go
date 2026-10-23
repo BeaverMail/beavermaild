@@ -39,6 +39,7 @@ func configFlag(fs *flag.FlagSet) *string {
 }
 
 func main() {
+	privateUmask()
 	os.Exit(run(os.Args[1:]))
 }
 
@@ -123,6 +124,10 @@ func runInit(args []string) int {
 	ctx := context.Background()
 	if err := migrateStore(ctx, cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "init: migrate store: %v\n", err)
+		return cli.ExitError
+	}
+	if err := cfg.AdoptDataDirOwner(); err != nil {
+		fmt.Fprintf(os.Stderr, "init: hand the store to the data dir owner: %v\n", err)
 		return cli.ExitError
 	}
 	return cli.ExitOK

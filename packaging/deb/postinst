@@ -1,0 +1,41 @@
+#!/bin/sh
+# Debian postinst: system user, data and config dirs, systemd unit. The first install generates a
+# loopback-only config; it is never touched again (format changes are migrated by beaver itself).
+set -e
+
+if [ "$1" = configure ]; then
+	if ! getent passwd beavermail >/dev/null; then
+		adduser --system --group --home /var/lib/beavermail --no-create-home \
+			--shell /usr/sbin/nologin beavermail
+	fi
+	install -d -o beavermail -g beavermail -m 0700 /var/lib/beavermail
+	# dpkg unpacks the plugin root-owned; the data dir holds only service-owned files.
+	chown beavermail:beavermail /var/lib/beavermail/plugins /var/lib/beavermail/plugins/beaver-plugin-antispam
+	# setgid: files created here get group beavermail, and beaver init then writes the config 0640.
+	install -d -o root -g beavermail -m 2750 /etc/beavermail
+	if [ -e /etc/beavermail/config.json ]; then
+		chown root:beavermail /etc/beavermail/config.json
+		chmod 0640 /etc/beavermail/config.json
+	else
+		created=1
+		# No -hostname: nothing listens beyond loopback until the admin configures public listeners.
+		beaver init -c /etc/beavermail/config.json -data-dir /var/lib/beavermail
+	fi
+
+	if [ -d /run/systemd/system ]; then
+		systemctl daemon-reload
+		if [ -n "$2" ]; then
+			systemctl try-restart beavermail.service
+		fi
+	fi
+	if [ -n "${created:-}" ]; then
+		cat <<'EOF'
+BeaverMail installed with a loopback-only config in /etc/beavermail/config.json (not started).
+Before starting, close /setup with an API key or create the first admin:
+  sudo -u beavermail beaver apikey create -name panel
+Public listeners: see /usr/share/doc/beavermail/install.md (section B). Then:
+  systemctl enable --now beavermail
+EOF
+	fi
+fi
+exit 0

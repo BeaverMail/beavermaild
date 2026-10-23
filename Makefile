@@ -7,15 +7,18 @@ DIST_NAME := beavermail-$(VERSION)-linux-$(DIST_ARCH)
 # Static Linux release binaries; -trimpath keeps build-machine paths out of them.
 DIST_GO := CGO_ENABLED=0 GOOS=linux GOARCH=$(DIST_ARCH) go build -trimpath -ldflags "-s -w -X main.version=$(VERSION)"
 
-.PHONY: beaver beaver-go beaver-plugin-antispam plugins test integration web-dev web-build dist
+.PHONY: beaver beaver-go beaver-plugin-antispam plugins test integration web-dev web-build dist deb
 
 # Mail stack + embedded admin UI (needs Node for web-build).
+# Dev builds carry the git version too (e.g. v0.1.2-3-gabc123-dirty), so they are never mistaken for a release.
+DEV_GO := go build -ldflags "-X main.version=$(VERSION)"
+
 beaver: web-build
-	go build -o beaver ./cmd/beaver
+	$(DEV_GO) -o beaver ./cmd/beaver
 
 # Go binary only; embeds whatever is already in internal/webui/dist (no npm).
 beaver-go:
-	go build -o beaver ./cmd/beaver
+	$(DEV_GO) -o beaver ./cmd/beaver
 
 plugins: beaver-plugin-antispam
 
@@ -49,3 +52,13 @@ web-build:
 	cd web && npm run build
 	@test -f $(WEB_DIST)/index.html || (echo "web-build: missing $(WEB_DIST)/index.html" >&2; exit 1)
 	@touch $(WEB_DIST)/.gitkeep # adapter-static wipes dist; keep the tracked embed placeholder
+
+# Debian package from the dist binaries. nfpm is pinned and only needed at build time.
+NFPM := go run github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.47.0
+deb: dist
+	rm -rf dist/deb && mkdir -p dist/deb
+	cp dist/$(DIST_NAME)/beaver dist/$(DIST_NAME)/beaver-plugin-antispam dist/deb/
+	sed -e '1,/^\[Unit\]/{/^#/d;/^$$/d}' -e 's|/usr/local/bin/beaver|/usr/bin/beaver|' \
+		contrib/systemd/beavermail.service > dist/deb/beavermail.service
+	DEB_ARCH=$(DIST_ARCH) DEB_VERSION=$(VERSION:v%=%) \
+		$(NFPM) pkg --packager deb --config packaging/deb/nfpm.yaml --target dist/

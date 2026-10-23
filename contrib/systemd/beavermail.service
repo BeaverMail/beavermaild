@@ -1,11 +1,12 @@
-# Example systemd unit for BeaverMail. Install:
+# Example systemd unit for BeaverMail (the Debian package ships it with /usr/bin/beaver).
+# Tarball install:
 #   useradd --system --home-dir /var/lib/beavermail --shell /usr/sbin/nologin beavermail
+#   install -d -o root -g beavermail -m 2750 /etc/beavermail
 #   install -m 755 beaver /usr/local/bin/beaver
-#   install -d -o beavermail -g beavermail -m 750 /var/lib/beavermail /var/lib/beavermail/plugins
-#   install -m 755 beaver-plugin-antispam /var/lib/beavermail/plugins/
-#   BEAVER_CONFIG=/etc/beavermail/config.json beaver init -data-dir /var/lib/beavermail -hostname mx.example.com
-#   chown -R beavermail:beavermail /var/lib/beavermail /etc/beavermail
+#   install -D -m 755 beaver-plugin-antispam /var/lib/beavermail/plugins/beaver-plugin-antispam
+#   beaver init -data-dir /var/lib/beavermail -hostname mx.example.com
 #   cp beavermail.service /etc/systemd/system/ && systemctl daemon-reload && systemctl enable --now beavermail
+# systemd creates /var/lib/beavermail (StateDirectory) and gives it to beavermail on start.
 # Logs: journalctl -u beavermail (stderr) and log.file under the data dir.
 
 [Unit]
@@ -30,10 +31,14 @@ AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 LimitNOFILE=65536
 
-# Hardening: only the data dir is writable; config is read-only.
+# Hardening: only the data dir is writable; config is read-only; new files are owner-only
+# (beaver also sets this umask itself).
+UMask=0077
+# Created, owned by beavermail and set to 0700 by systemd on every start.
+StateDirectory=beavermail
+StateDirectoryMode=0700
 NoNewPrivileges=true
 ProtectSystem=strict
-ReadWritePaths=/var/lib/beavermail
 ReadOnlyPaths=/etc/beavermail
 ProtectHome=true
 PrivateTmp=true

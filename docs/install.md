@@ -5,19 +5,29 @@ Two paths:
 - [A. Development VM](#a-development-vm): everything on loopback, for trying the HTTP API from a panel.
 - [B. Production next to nginx](#b-production-next-to-nginx): public mail ports, nginx keeps 80/443.
 
-The release tarball contains:
-
-| File | Purpose |
-|------|---------|
-| `beaver` | Mail server and CLI (static Linux binary, no runtime dependencies) |
-| `beaver-plugin-antispam` | Antispam filter plugin (optional) |
-| `beavermail.service` | systemd unit |
-| `install.md` | This file |
-| `api.md` | HTTP API reference |
+Install from the Debian package (Debian/Ubuntu) or from the release tarball (other distributions). Never install a
+`beaver` built in the source tree: it is a dev build (no release version, local build paths inside).
 
 BeaverMail is work in progress: configuration and API may still change between versions.
 
-## Install the files (both paths)
+## Install
+
+### Debian package (recommended)
+
+```sh
+apt install ./beavermail_<version>_amd64.deb
+beaver version                                       # must print the release version, not 0.0.0-dev
+```
+
+The package creates the `beavermail` system user, `/var/lib/beavermail` (`700`) and `/etc/beavermail`
+(`root:beavermail 2750`), and installs `/usr/bin/beaver`, the antispam plugin in `/var/lib/beavermail/plugins` and the
+systemd unit. On first install it runs `beaver init` without `-hostname` (loopback only, as in A.1) and does not
+start the service; upgrades and `dpkg-reconfigure` never touch that config again. Edit it for public listeners as in
+B.1, create an API key (A.2, which also closes `/setup`), then `systemctl enable --now beavermail`. Upgrade by installing the
+newer `.deb`: the config is kept, the service restarts and the store is migrated on start. `apt remove` keeps config
+and mail; `apt purge` deletes the config (with its secrets) but keeps the mail in `/var/lib/beavermail`.
+
+### Release tarball
 
 ```sh
 sha256sum -c beavermail-<version>-linux-amd64.tar.gz.sha256
@@ -25,14 +35,23 @@ tar xzf beavermail-<version>-linux-amd64.tar.gz
 cd beavermail-<version>-linux-amd64
 
 useradd --system --home-dir /var/lib/beavermail --shell /usr/sbin/nologin beavermail
+install -d -o root -g beavermail -m 2750 /etc/beavermail   # init then writes config.json readable by the service
 install -m 755 beaver /usr/local/bin/beaver
-install -d -o beavermail -g beavermail -m 750 /var/lib/beavermail /var/lib/beavermail/plugins
-install -m 755 beaver-plugin-antispam /var/lib/beavermail/plugins/   # optional
-beaver version
+install -D -m 755 beaver-plugin-antispam /var/lib/beavermail/plugins/beaver-plugin-antispam  # optional
+beaver version                                       # must print the release version, not 0.0.0-dev
 ```
 
-`beaver init` (below) writes `/etc/beavermail/config.json` and generates the HTTP signing key in it. All CLI
-commands read that file by default (`-c path` or `BEAVER_CONFIG` to use another).
+The tarball contains `beaver`, `beaver-plugin-antispam`, `beavermail.service`, this file and `api.md`.
+
+### Config file and permissions (both)
+
+`beaver init` writes `/etc/beavermail/config.json` and generates the HTTP signing key in it. All CLI commands read
+that file by default (`-c path` or `BEAVER_CONFIG` to use another). The service reads it through its group: in the
+setgid `/etc/beavermail` init writes it `root:beavermail`, mode `640`. Plugins live in `<data_dir>/plugins`.
+
+Everything BeaverMail creates is owner-only (umask `077`): the data dir is `700` and `store.sqlite` `600`; systemd
+(`StateDirectory=`) and `serve` restore that on every start. Run later CLI commands as the service account
+(`sudo -u beavermail beaver ...`) so no root-owned file ends up in the data dir.
 
 ## A. Development VM
 
@@ -40,9 +59,8 @@ commands read that file by default (`-c path` or `BEAVER_CONFIG` to use another)
 
 ```sh
 beaver init -data-dir /var/lib/beavermail          # no -hostname: loopback only
-chown -R beavermail:beavermail /var/lib/beavermail /etc/beavermail
-install -m 644 beavermail.service /etc/systemd/system/
-systemctl daemon-reload && systemctl enable --now beavermail
+#   tarball only: install -m 644 beavermail.service /etc/systemd/system/ && systemctl daemon-reload
+systemctl enable --now beavermail
 journalctl -u beavermail -f                           # "http api listening" means ready
 ```
 
@@ -128,7 +146,7 @@ In `/etc/beavermail/config.json` set (keep the other generated keys):
 - Outbound mail goes directly to the recipients' MX on port 25. If the provider blocks outbound 25, set a relay
   (`smtp.relay`, see `tls-ops.md` in the source tree).
 
-Then `chown -R beavermail:beavermail /var/lib/beavermail /etc/beavermail`, install the unit and start it as in A.1.
+Then install the unit (tarball) and start the service as in A.1.
 The unit grants `CAP_NET_BIND_SERVICE`, so the server binds 25/143/465/587/993 without running as root.
 
 ### 2. Certificates
@@ -181,6 +199,8 @@ Everything lives in the data dir (`/var/lib/beavermail`): `store.sqlite` (direct
 Deleting a tenant, domain or mailbox through the API deletes its mail immediately: backups are the only way back.
 
 ## Upgrading
+
+Package: `apt install ./beavermail_<new-version>_amd64.deb` (the service restarts by itself). Tarball:
 
 ```sh
 systemctl stop beavermail

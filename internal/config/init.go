@@ -22,7 +22,11 @@ func InitLayout(configPath, dataDir, hostname string) (*Config, error) {
 		if err != nil {
 			return nil, err
 		}
-		return cfg, os.MkdirAll(cfg.BlobDir(), 0o755)
+		if err := os.MkdirAll(cfg.BlobDir(), 0o700); err != nil {
+			return nil, err
+		}
+		_, err = cfg.SecureDataDir()
+		return cfg, err
 	} else if !os.IsNotExist(err) {
 		return nil, err
 	}
@@ -57,14 +61,35 @@ func InitLayout(configPath, dataDir, hostname string) (*Config, error) {
 		cfg.IMAP.TLSListen = ":993"
 	}
 
-	if err := os.MkdirAll(cfg.BlobDir(), 0o755); err != nil {
+	if err := os.MkdirAll(cfg.BlobDir(), 0o700); err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+	// MkdirAll keeps the mode of a data dir that already exists; tighten it explicitly.
+	if _, err := cfg.SecureDataDir(); err != nil {
+		return nil, err
+	}
+	// The config dir must stay traversable for the service user under our 077 umask;
+	// config.json itself is 0600, so only the dir is opened up, and only when init creates it.
+	configDir := filepath.Dir(configPath)
+	if _, err := os.Stat(configDir); os.IsNotExist(err) {
+		if err := os.MkdirAll(configDir, 0o755); err != nil {
+			return nil, err
+		}
+		if err := os.Chmod(configDir, 0o755); err != nil {
+			return nil, err
+		}
+	} else if err != nil {
 		return nil, err
 	}
 	if err := cfg.Save(configPath); err != nil {
 		return nil, err
+	}
+	// A setgid config dir (the package makes /etc/beavermail root:beavermail 2750) hands its
+	// group to new files: let that group, the service, read the config.
+	if st, err := os.Stat(configDir); err == nil && st.Mode()&os.ModeSetgid != 0 {
+		if err := os.Chmod(configPath, 0o640); err != nil {
+			return nil, err
+		}
 	}
 	return cfg, nil
 }

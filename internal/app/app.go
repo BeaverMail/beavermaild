@@ -52,6 +52,15 @@ type App struct {
 
 // Open connects storage using cfg and returns an App.
 func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, error) {
+	// Installs made before owner-only permissions get fixed on the next start.
+	if changed, err := cfg.SecureDataDir(); err != nil {
+		log.Warn("data dir permissions", "err", err)
+	} else if len(changed) > 0 {
+		log.Warn("removed group/other access", "paths", changed)
+	}
+	if cfg.ConfigFileShared() {
+		log.Warn("config file is readable by other users (it holds secrets): chmod 600", "path", cfg.ConfigPath())
+	}
 	store, err := openstore.OpenConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("open store: %w", err)
