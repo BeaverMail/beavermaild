@@ -29,7 +29,9 @@ func TestWorkerWaitsBackoffBeforeRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// A 1s cooldown keeps the "not yet" check below valid on a loaded machine.
 	policy := mail.TestQueuePolicy()
+	policy.RetryIntervals = []time.Duration{time.Second}
 	w := mail.NewWorker(log.New("error"), queue, nil, dir, nil, nil, policy)
 	w.ProcessOnce(ctx)
 
@@ -54,7 +56,7 @@ func TestWorkerWaitsBackoffBeforeRetry(t *testing.T) {
 		t.Fatal("should not retry inside cooldown window")
 	}
 
-	time.Sleep(250 * time.Millisecond)
+	time.Sleep(1100 * time.Millisecond)
 	w.ProcessOnce(ctx)
 	entries, err = queue.ListPending(ctx)
 	if err != nil {

@@ -84,13 +84,17 @@ func TestIMAPShutdownSendsBye(t *testing.T) {
 	t.Parallel()
 	_, _, addr, stop := startIMAPWithTimeout(t)
 
-	_, promptRead := loginSelect(t, addr)
+	promptConn, promptRead := loginSelect(t, addr)
 	idleConn, idleRead := loginSelect(t, addr)
 	send(t, idleConn, "i1 IDLE")
 	expectPrefix(t, idleRead, "+ idling")
 
 	if took := stop(); took > 3*time.Second {
 		t.Fatalf("drain took %s", took)
+	}
+	// Time the BYE from shutdown, not from login: a loaded machine can spend the login deadline on setup.
+	for _, c := range []net.Conn{promptConn, idleConn} {
+		_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
 	}
 	expectPrefix(t, promptRead, "* BYE [UNAVAILABLE]")
 	expectPrefix(t, idleRead, "* BYE [UNAVAILABLE]")
