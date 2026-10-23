@@ -91,43 +91,30 @@ func (ib *Inbox) ResolveMailbox(ctx context.Context, accountID uint32, imapName 
 
 // EnsureMailboxes creates INBOX, Sent, Trash, and Drafts when missing (e.g. after seed upgrade).
 func (ib *Inbox) EnsureMailboxes(ctx context.Context, accountID uint32) error {
-	records, err := ib.listMailboxRecords(ctx, accountID)
-	if err != nil {
-		return err
-	}
-	present := make(map[uint32]struct{}, len(records))
-	for _, m := range records {
-		present[m.ID] = struct{}{}
-	}
-	batch := storage.NewBatch().WithAccount(accountID)
-	changed := false
-	for _, def := range defaultMailboxDefs {
-		if _, ok := present[def.id]; ok {
-			continue
+	return ib.update(ctx, func(t *txn) error {
+		for _, def := range defaultMailboxDefs {
+			// Reading the key asserts it stays absent until this commit.
+			if _, err := t.get(mailboxKey(accountID, def.id)); !errors.Is(err, storage.ErrNotFound) {
+				if err != nil {
+					return err
+				}
+				continue
+			}
+			err := t.putMailbox(accountID, storage.Mailbox{
+				ID:          def.id,
+				Name:        def.name,
+				Role:        def.role,
+				UIDNext:     1,
+				UIDValidity: 1,
+				Subscribed:  true,
+				SubSet:      true,
+			})
+			if err != nil {
+				return err
+			}
 		}
-		mbox := storage.Mailbox{
-			ID:          def.id,
-			Name:        def.name,
-			Role:        def.role,
-			UIDNext:     1,
-			UIDValidity: 1,
-			Subscribed:  true,
-			SubSet:      true,
-		}
-		wire, err := storage.MarshalPersist(nil, 1, mbox)
-		if err != nil {
-			return err
-		}
-		suffix := storage.DocumentSuffix(storage.CollectionMailbox, def.id, nil)
-		if err := batch.Set(storage.SubspaceMail, suffix, wire); err != nil {
-			return err
-		}
-		changed = true
-	}
-	if !changed {
 		return nil
-	}
-	return ib.store.Commit(ctx, batch)
+	})
 }
 
 func (ib *Inbox) listMailboxRecords(ctx context.Context, accountID uint32) ([]storage.Mailbox, error) {

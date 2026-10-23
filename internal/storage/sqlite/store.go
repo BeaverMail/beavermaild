@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/BeaverMail/beaver/internal/storage"
 
@@ -17,9 +19,18 @@ import (
 // getManyChunk caps SQLite bind parameters per IN query.
 const getManyChunk = 500
 
+// checkpointInterval is how often the background loop copies the WAL into the database.
+const checkpointInterval = time.Second
+
 // Store is a SQLite KV store (one table per subspace).
 type Store struct {
-	db *sql.DB
+	db        *sql.DB
+	stop      chan struct{}
+	done      chan struct{}
+	closeOnce sync.Once
+	// writeMu queues this process's writers in Go: SQLite's busy handler sleeps in fixed steps,
+	// so waiting on the file lock costs far more than the commit itself.
+	writeMu sync.Mutex
 }
 
 var (
@@ -41,7 +52,25 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	return &Store{db: db}, nil
+	s := &Store{db: db, stop: make(chan struct{}), done: make(chan struct{})}
+	go s.checkpointLoop()
+	return s, nil
+}
+
+// checkpointLoop runs PASSIVE checkpoints, which never block readers or writers, so that no
+// commit pays for copying a large WAL into the database file.
+func (s *Store) checkpointLoop() {
+	defer close(s.done)
+	t := time.NewTicker(checkpointInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-s.stop:
+			return
+		case <-t.C:
+			_, _ = s.db.ExecContext(context.Background(), "PRAGMA wal_checkpoint(PASSIVE)")
+		}
+	}
 }
 
 // Get returns the raw envelope value for key.
@@ -181,12 +210,26 @@ func (s *Store) Commit(ctx context.Context, batch *storage.Batch) error {
 	})
 }
 
+// commitOnce runs ops in a BEGIN IMMEDIATE transaction: the write lock is taken up front
+// (waiting up to busy_timeout), so Assert reads see the latest commit and the read-to-write
+// upgrade cannot fail with SQLITE_BUSY, which SQLite returns without waiting.
 func (s *Store) commitOnce(ctx context.Context, batch *storage.Batch, ops []storage.BatchOp) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	tx, err := s.db.Conn(ctx)
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer tx.Close()
+	if _, err := tx.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		return err
+	}
+	done := false
+	defer func() {
+		if !done {
+			_, _ = tx.ExecContext(context.Background(), "ROLLBACK")
+		}
+	}()
 
 	for _, op := range ops {
 		table, err := subspaceTable(op.Subspace)
@@ -219,9 +262,10 @@ func (s *Store) commitOnce(ctx context.Context, batch *storage.Batch, ops []stor
 		}
 	}
 
-	if err := tx.Commit(); err != nil {
+	if _, err := tx.ExecContext(ctx, "COMMIT"); err != nil {
 		return err
 	}
+	done = true
 	batch.Reset()
 	return nil
 }
@@ -238,10 +282,14 @@ func (s *Store) Ping(ctx context.Context) error {
 
 // Close closes the underlying database.
 func (s *Store) Close() error {
+	s.closeOnce.Do(func() {
+		close(s.stop)
+		<-s.done
+	})
 	return s.db.Close()
 }
 
-func readValue(ctx context.Context, tx *sql.Tx, table string, key []byte) ([]byte, error) {
+func readValue(ctx context.Context, tx *sql.Conn, table string, key []byte) ([]byte, error) {
 	q := fmt.Sprintf("SELECT v FROM %s WHERE k = ?", table)
 	var value []byte
 	err := tx.QueryRowContext(ctx, q, key).Scan(&value)

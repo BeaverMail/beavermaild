@@ -3,6 +3,7 @@ package mail
 
 import (
 	"context"
+	"errors"
 
 	"github.com/BeaverMail/beaver/internal/storage"
 )
@@ -26,28 +27,26 @@ func (ib *Inbox) repairMailboxSubscriptions(ctx context.Context, accountID uint3
 	if err != nil {
 		return err
 	}
-	batch := storage.NewBatch().WithAccount(accountID)
-	changed := false
-	for _, m := range records {
-		if m.ID <= DraftsMailboxID || !m.SubSet || m.Subscribed {
-			continue
+	return ib.update(ctx, func(t *txn) error {
+		for _, r := range records {
+			if r.ID <= DraftsMailboxID || !r.SubSet || r.Subscribed {
+				continue
+			}
+			m, err := t.mailbox(accountID, r.ID)
+			if errors.Is(err, storage.ErrNotFound) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			m.SubSet = false
+			m.Subscribed = false
+			if err := t.putMailbox(accountID, m); err != nil {
+				return err
+			}
 		}
-		m.SubSet = false
-		m.Subscribed = false
-		wire, err := storage.MarshalPersist(nil, 1, m)
-		if err != nil {
-			return err
-		}
-		suffix := storage.DocumentSuffix(storage.CollectionMailbox, m.ID, nil)
-		if err := batch.Set(storage.SubspaceMail, suffix, wire); err != nil {
-			return err
-		}
-		changed = true
-	}
-	if !changed {
 		return nil
-	}
-	return ib.store.Commit(ctx, batch)
+	})
 }
 
 // SetMailboxSubscribed updates the IMAP subscription flag for an existing folder.
@@ -56,20 +55,13 @@ func (ib *Inbox) SetMailboxSubscribed(ctx context.Context, accountID uint32, ima
 	if err != nil {
 		return err
 	}
-	rec, err := ib.mailboxRecord(ctx, accountID, mb.ID)
-	if err != nil {
-		return err
-	}
-	rec.Subscribed = subscribed
-	rec.SubSet = true
-	wire, err := storage.MarshalPersist(nil, 1, rec)
-	if err != nil {
-		return err
-	}
-	batch := storage.NewBatch().WithAccount(accountID)
-	suffix := storage.DocumentSuffix(storage.CollectionMailbox, mb.ID, nil)
-	if err := batch.Set(storage.SubspaceMail, suffix, wire); err != nil {
-		return err
-	}
-	return ib.store.Commit(ctx, batch)
+	return ib.update(ctx, func(t *txn) error {
+		rec, err := t.mailbox(accountID, mb.ID)
+		if err != nil {
+			return err
+		}
+		rec.Subscribed = subscribed
+		rec.SubSet = true
+		return t.putMailbox(accountID, rec)
+	})
 }

@@ -66,36 +66,46 @@ func (ib *Inbox) ClearRecentFlags(ctx context.Context, accountID, mailboxID uint
 	if err != nil {
 		return 0, err
 	}
-	var recent int
-	batch := storage.NewBatch().WithAccount(accountID)
+	var ids []uint32
 	for _, m := range msgs {
-		if m.Meta.Flags&FlagRecent == 0 {
-			continue
-		}
-		recent++
-		meta := m.Meta
-		meta.Flags &^= FlagRecent
-		modSeq, err := ib.allocateModSeq(ctx, accountID, mailboxID)
-		if err != nil {
-			return 0, err
-		}
-		meta.ModSeq = modSeq
-		wire, err := storage.MarshalPersist(nil, 1, meta)
-		if err != nil {
-			return 0, err
-		}
-		suffix := storage.DocumentSuffix(storage.CollectionEmail, m.EmailID, nil)
-		if err := batch.Set(storage.SubspaceMail, suffix, wire); err != nil {
-			return 0, err
+		if m.Meta.Flags&FlagRecent != 0 {
+			ids = append(ids, m.EmailID)
 		}
 	}
-	if recent == 0 {
+	if len(ids) == 0 {
 		return 0, nil
 	}
-	if err := ib.store.Commit(ctx, batch); err != nil {
-		return 0, err
-	}
-	return recent, nil
+	var recent int
+	err = ib.update(ctx, func(t *txn) error {
+		recent = 0
+		mbox, err := t.mailbox(accountID, mailboxID)
+		if err != nil {
+			return err
+		}
+		for _, id := range ids {
+			meta, err := t.meta(accountID, id)
+			if errors.Is(err, storage.ErrNotFound) {
+				continue // expunged meanwhile
+			}
+			if err != nil {
+				return err
+			}
+			if meta.Flags&FlagRecent == 0 || meta.MailboxID != mailboxID {
+				continue
+			}
+			recent++
+			meta.Flags &^= FlagRecent
+			meta.ModSeq = nextModSeq(&mbox)
+			if err := t.putMeta(accountID, id, meta); err != nil {
+				return err
+			}
+		}
+		if recent == 0 {
+			return nil
+		}
+		return t.putMailbox(accountID, mbox)
+	})
+	return recent, err
 }
 
 // GetMeta loads EmailMeta for accountID and emailID.

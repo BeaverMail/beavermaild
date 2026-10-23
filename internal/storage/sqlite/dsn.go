@@ -14,7 +14,10 @@ func dsn(path string) string {
 	if !strings.HasPrefix(path, "file:") {
 		base = "file:" + path
 	}
-	pragma := "_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(30000)"
+	// Commits never checkpoint (Store.checkpointLoop does, off the request path);
+	// journal_size_limit truncates the WAL file when it restarts after a burst.
+	pragma := "_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(30000)" +
+		"&_pragma=wal_autocheckpoint(0)&_pragma=journal_size_limit(67108864)"
 	if strings.Contains(base, "?") {
 		return base + "&" + pragma
 	}

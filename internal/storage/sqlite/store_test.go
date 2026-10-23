@@ -3,7 +3,9 @@ package sqlite_test
 import (
 	"bytes"
 	"context"
+	"os"
 	"testing"
+	"time"
 
 	"github.com/BeaverMail/beaver/internal/storage"
 	"github.com/BeaverMail/beaver/internal/storage/sqlite"
@@ -280,5 +282,45 @@ func TestStoreSnapshotIgnoresLaterWrites(t *testing.T) {
 	}
 	if n := count(store.Iterate, storage.SubspaceAdmin); n != 1 {
 		t.Fatalf("admin rows after snapshot: %d, want 1", n)
+	}
+}
+
+// The background checkpoint lets the WAL restart, so a second equal burst reuses the file
+// instead of growing it (commits themselves never checkpoint).
+func TestStoreWALCheckpointedInBackground(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	dir := t.TempDir()
+	store, err := sqlite.Open(ctx, "file:"+dir+"/store.sqlite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	burst := func(fill byte) int64 {
+		t.Helper()
+		// Distinct bytes per burst: SQLite skips writing a row whose value is unchanged.
+		value := bytes.Repeat([]byte{fill}, 1024)
+		for i := uint32(0); i < 2000; i++ {
+			batch := storage.NewBatch().WithAccount(1)
+			if err := batch.Set(storage.SubspaceMail, storage.BatchSuffix(1, i, nil), value); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.Commit(ctx, batch); err != nil {
+				t.Fatal(err)
+			}
+		}
+		st, err := os.Stat(dir + "/store.sqlite-wal")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return st.Size()
+	}
+
+	first := burst('a')
+	time.Sleep(2500 * time.Millisecond)
+	second := burst('b')
+	if second > first+first/4 {
+		t.Fatalf("WAL grew from %d to %d bytes: not checkpointed between bursts", first, second)
 	}
 }

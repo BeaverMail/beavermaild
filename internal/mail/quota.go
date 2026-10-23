@@ -91,19 +91,24 @@ func (ib *Inbox) QuotaStatus(ctx context.Context, accountID uint32) (QuotaStatus
 
 // SetQuotaLimits overrides the stored limits for accountID (0 = unlimited); nil keeps the current value.
 func (ib *Inbox) SetQuotaLimits(ctx context.Context, accountID uint32, storageBytes *uint64, messages *uint32) error {
-	ib.quotaMu.Lock()
-	defer ib.quotaMu.Unlock()
-	rec, err := ib.loadQuotaRecord(ctx, accountID)
-	if err != nil {
-		return err
-	}
-	if storageBytes != nil {
-		rec.StorageLimit = *storageBytes
-	}
-	if messages != nil {
-		rec.MessageLimit = *messages
-	}
-	return ib.saveQuotaRecord(ctx, accountID, rec)
+	return ib.update(ctx, func(t *txn) error {
+		key := ib.quotaLookupKey(accountID)
+		var rec quotaRecord
+		err := t.getPersist(key, &rec)
+		if errors.Is(err, storage.ErrNotFound) {
+			rec, err = ib.newQuotaRecord(ctx, accountID)
+		}
+		if err != nil {
+			return err
+		}
+		if storageBytes != nil {
+			rec.StorageLimit = *storageBytes
+		}
+		if messages != nil {
+			rec.MessageLimit = *messages
+		}
+		return t.setPersist(key, rec)
+	})
 }
 
 func (ib *Inbox) checkQuota(ctx context.Context, accountID uint32, addBytes uint64, addMessages uint32) error {
@@ -134,38 +139,6 @@ func (ib *Inbox) checkQuota(ctx context.Context, accountID uint32, addBytes uint
 	return nil
 }
 
-func (ib *Inbox) addQuotaUsage(ctx context.Context, accountID uint32, addBytes uint64, addMessages uint32) error {
-	ib.quotaMu.Lock()
-	defer ib.quotaMu.Unlock()
-	rec, err := ib.loadQuotaRecord(ctx, accountID)
-	if err != nil {
-		return err
-	}
-	rec.StorageUsed += addBytes
-	rec.MessagesUsed += addMessages
-	return ib.saveQuotaRecord(ctx, accountID, rec)
-}
-
-func (ib *Inbox) subQuotaUsage(ctx context.Context, accountID uint32, subBytes uint64, subMessages uint32) error {
-	ib.quotaMu.Lock()
-	defer ib.quotaMu.Unlock()
-	rec, err := ib.loadQuotaRecord(ctx, accountID)
-	if err != nil {
-		return err
-	}
-	if rec.StorageUsed >= subBytes {
-		rec.StorageUsed -= subBytes
-	} else {
-		rec.StorageUsed = 0
-	}
-	if rec.MessagesUsed >= subMessages {
-		rec.MessagesUsed -= subMessages
-	} else {
-		rec.MessagesUsed = 0
-	}
-	return ib.saveQuotaRecord(ctx, accountID, rec)
-}
-
 func (ib *Inbox) quotaLookupKey(accountID uint32) []byte {
 	return storage.AppendKey(nil, storage.SubspaceLookup, 0, 0, 0,
 		fmt.Appendf(nil, "meta/quota/%d", accountID))
@@ -184,6 +157,23 @@ func (ib *Inbox) loadQuotaRecord(ctx context.Context, accountID uint32) (quotaRe
 	if !errors.Is(err, storage.ErrNotFound) {
 		return quotaRecord{}, err
 	}
+	// Materialize once; addQuota on a missing record keeps the winner of a concurrent create.
+	var rec quotaRecord
+	err = ib.update(ctx, func(t *txn) error {
+		err := t.getPersist(key, &rec)
+		if !errors.Is(err, storage.ErrNotFound) {
+			return err
+		}
+		if rec, err = ib.newQuotaRecord(ctx, accountID); err != nil {
+			return err
+		}
+		return t.setPersist(key, rec)
+	})
+	return rec, err
+}
+
+// newQuotaRecord builds the initial record: default limits and usage recomputed from stored messages.
+func (ib *Inbox) newQuotaRecord(ctx context.Context, accountID uint32) (quotaRecord, error) {
 	usedStorage, usedMessages, err := ib.recomputeQuotaUsage(ctx, accountID)
 	if err != nil {
 		return quotaRecord{}, err
@@ -199,29 +189,12 @@ func (ib *Inbox) loadQuotaRecord(ctx context.Context, accountID uint32) (quotaRe
 			}
 		}
 	}
-	rec := quotaRecord{
+	return quotaRecord{
 		StorageLimit: defaults.StorageBytes,
 		MessageLimit: defaults.Messages,
 		StorageUsed:  usedStorage,
 		MessagesUsed: usedMessages,
-	}
-	if err := ib.saveQuotaRecord(ctx, accountID, rec); err != nil {
-		return quotaRecord{}, err
-	}
-	return rec, nil
-}
-
-func (ib *Inbox) saveQuotaRecord(ctx context.Context, accountID uint32, rec quotaRecord) error {
-	wire, err := storage.MarshalPersist(nil, 1, rec)
-	if err != nil {
-		return err
-	}
-	batch := storage.NewBatch().WithAccount(0)
-	suffix := storage.BatchSuffix(0, 0, fmt.Appendf(nil, "meta/quota/%d", accountID))
-	if err := batch.Set(storage.SubspaceLookup, suffix, wire); err != nil {
-		return err
-	}
-	return ib.store.Commit(ctx, batch)
+	}, nil
 }
 
 func (ib *Inbox) recomputeQuotaUsage(ctx context.Context, accountID uint32) (storageUsed uint64, messagesUsed uint32, err error) {

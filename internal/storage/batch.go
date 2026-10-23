@@ -81,18 +81,33 @@ func (b *Batch) Set(subspace byte, suffix, value []byte) error {
 
 // SetRaw queues an upsert using a full wire key (no WithAccount required).
 func (b *Batch) SetRaw(key, value []byte) error {
-	if len(key) < KeyPrefixLen {
+	return b.rawOp(BatchOp{Kind: OpSet, Key: key, Value: append([]byte(nil), value...)})
+}
+
+// AssertRaw queues a CAS check on a full wire key. expect nil means the key must be absent.
+func (b *Batch) AssertRaw(key, expect []byte) error {
+	op := BatchOp{Kind: OpAssert, Key: key}
+	if expect != nil {
+		op.Expect = append([]byte(nil), expect...)
+	}
+	return b.rawOp(op)
+}
+
+// DeleteRaw queues a key removal using a full wire key.
+func (b *Batch) DeleteRaw(key []byte) error {
+	return b.rawOp(BatchOp{Kind: OpDelete, Key: key})
+}
+
+func (b *Batch) rawOp(op BatchOp) error {
+	if len(op.Key) < KeyPrefixLen {
 		return ErrKeyTooShort
 	}
-	if err := checkSubspace(key[0]); err != nil {
+	if err := checkSubspace(op.Key[0]); err != nil {
 		return err
 	}
-	b.ops = append(b.ops, BatchOp{
-		Kind:     OpSet,
-		Subspace: key[0],
-		Key:      append([]byte(nil), key...),
-		Value:    append([]byte(nil), value...),
-	})
+	op.Subspace = op.Key[0]
+	op.Key = append([]byte(nil), op.Key...)
+	b.ops = append(b.ops, op)
 	return nil
 }
 

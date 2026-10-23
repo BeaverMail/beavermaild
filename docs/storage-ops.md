@@ -126,6 +126,14 @@ beaver migrate -c .data/config.json
 beaver store import -c .data/config.json -i /tmp/kv.beaverkv
 ```
 
+## SQLite maintenance
+
+Nothing to schedule. The store runs in WAL mode; a background loop checkpoints the WAL into
+`store.sqlite` every second without blocking readers or writers, and commits never checkpoint.
+The WAL can grow under sustained read+write load (readers keep old frames alive) and is
+truncated to 64 MB at the first write after load drops. Space freed by deletions is reused, so
+`VACUUM` is not needed; the file does not shrink on its own.
+
 ## Tests
 
 ### Unit (package)
@@ -142,4 +150,14 @@ Skips when `BEAVER_TEST_MYSQL_DSN` is unset. Wipes Beaver KV tables in that data
 ```bash
 export BEAVER_TEST_MYSQL_DSN='beaver:secret@tcp(127.0.0.1:3306)/beaver_e2e?parseTime=true'
 ./tests/integration/mysql_smoke.sh
+```
+
+### Load test (sqlite)
+
+`tests/load/populate` fills a data dir through the normal delivery path (tenants, accounts,
+messages; one large mailbox), so `serve` can then be measured with any IMAP/SMTP client.
+
+```bash
+beaver init -c .data/load/config.json -data-dir .data/load
+go run ./tests/load/populate -c .data/load/config.json -tenants 100 -accounts 3 -per 6400 -big 100000
 ```
