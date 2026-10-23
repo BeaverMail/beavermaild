@@ -95,7 +95,7 @@ Paths are relative to `/api/v1`. "Who" is the minimum role.
 | Method | Path | Who | Body | Response |
 |--------|------|-----|------|----------|
 | GET | `/health` | public | | `{"status":"ok"}` |
-| GET | `/setup` | public | | `{"needed": bool}` |
+| GET | `/setup` | public | | `{"needed": bool}`: true until an account or an API key exists |
 | POST | `/setup` | public, only while `needed` | `{email, password}` | same as login; `409` once setup is done |
 | POST | `/auth/login` | public | `{email, password}` | `{token, account:{email, role, tenant_id}}` |
 | POST | `/auth/logout` | public | | `{"status":"ok"}` |

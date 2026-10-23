@@ -80,3 +80,19 @@ func TestSetPasswordAndSetActive(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestNeedsSetupClosedByAPIKey(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	d := openDir(t)
+	if _, _, err := d.CreateAPIKey(ctx, "panel", directory.RoleProvisioner); err != nil {
+		t.Fatal(err)
+	}
+	needed, err := d.NeedsSetup(ctx)
+	if err != nil || needed {
+		t.Fatalf("with an API key NeedsSetup=%v err=%v", needed, err)
+	}
+	if _, err := d.BootstrapAdmin(ctx, "root@mail.example.com", "s3cret"); !errors.Is(err, directory.ErrSetupComplete) {
+		t.Fatalf("bootstrap with an API key: %v", err)
+	}
+}

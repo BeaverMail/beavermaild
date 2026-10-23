@@ -9,8 +9,16 @@ import (
 	"github.com/BeaverMail/beaver/internal/storage"
 )
 
-// NeedsSetup reports whether the directory has no accounts yet (greenfield).
+// NeedsSetup reports whether the directory has no accounts and no API keys yet (greenfield).
+// An API key counts: provisioner-only installs never create an account and must not leave /setup open.
 func (d *Local) NeedsSetup(ctx context.Context) (bool, error) {
+	keys, err := d.ListAPIKeys(ctx)
+	if err != nil {
+		return false, err
+	}
+	if len(keys) > 0 {
+		return false, nil
+	}
 	domains, err := d.ListDomains(ctx)
 	if err != nil {
 		return false, err
