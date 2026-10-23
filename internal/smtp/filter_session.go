@@ -242,6 +242,10 @@ func (s *session) deliverAfterFilter(ctx context.Context, raw []byte) error {
 		s.reset()
 		return nil
 	}
+	// Before the filter, so it judges the message as it will leave the MSA.
+	if s.submission && s.principal.AccountID != 0 {
+		raw = completeSubmission(raw, s.hostname, time.Now())
+	}
 	out, err := s.filterEom(ctx, raw)
 	if err != nil {
 		s.log.Warn("smtp filter error", slog.Any("err", err))

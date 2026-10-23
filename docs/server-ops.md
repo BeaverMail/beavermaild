@@ -32,6 +32,13 @@ Received: from client.example.org (client.example.org [192.0.2.10])
 
 `with` is `SMTP` (HELO), `ESMTP`, `ESMTPS` (TLS), `ESMTPA`/`ESMTPSA` (authenticated); `id` is the transaction id also used on the filter wire; `for` appears for a single recipient. Copies delivered to a local mailbox also get `Return-Path: <envelope sender>` (any `Return-Path` the message carried is replaced); relayed copies do not. A message already carrying more than 50 `Received` fields is rejected with `554 5.4.6` (mail loop).
 
+## Submission header fixes (RFC 6409 §8)
+
+On authenticated submission (`:587`/`:465`) a missing or malformed `Message-ID` is added or
+replaced (`<random@smtp.hostname>`, §8.3) and a missing or unparsable `Date` is set to the
+current time (§8.2). This runs before the antispam filter, so scripts and minimal clients that
+omit these fields are not scored for it. Other header fields are left as sent.
+
 ## Queue history
 
 `queue.keep_completed` (default `7d`, `"0"` deletes at once) keeps delivered and failed entries in the admin UI Completed tab and in `beaver queue list -all`. Each recipient shows `last_diag`: the last error, or the accepting server's reply once delivered (e.g. `mx.example.org:25: 250 2.0.0 OK ...`).
