@@ -132,7 +132,7 @@ type QueueMessage struct {
 	ReceivedFromIP [16]byte         `msgpack:"ip"`
 	Flags          uint64           `msgpack:"fl"`
 	Size           uint64           `msgpack:"sz"`
-	Ret            string           `msgpack:"ret,omitempty"`  // FULL or HDRS
+	Ret            string           `msgpack:"ret,omitempty"` // FULL or HDRS
 	Envid          string           `msgpack:"envid,omitempty"`
 	Body           string           `msgpack:"body,omitempty"` // 7BIT or 8BITMIME
 	Done           int64            `msgpack:"dn,omitempty"`   // unix ms when no recipient was left pending; kept as history until retention

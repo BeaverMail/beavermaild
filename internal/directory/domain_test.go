@@ -221,10 +221,10 @@ func TestCreateDomainWithOptsDKIMAndStats(t *testing.T) {
 	}
 
 	updated, err := d.UpdateDomainWithOpts(ctx, "hosted.test", directory.DomainCreateOpts{
-		MailHostname: "mail2.hosted.test",
-		SSLMode:      "acme",
-		DKIMEnabled:  true,
-		AntiSpam:     false,
+		MailHostname:  "mail2.hosted.test",
+		SSLMode:       "acme",
+		DKIMEnabled:   true,
+		AntiSpam:      false,
 		CatchAllLocal: "postmaster",
 	})
 	if err != nil {

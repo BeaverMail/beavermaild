@@ -12,9 +12,9 @@ import (
 
 // bodySectionFetch is one BODY[...] or RFC822.* literal item in a FETCH response.
 type bodySectionFetch struct {
-	itemName   string
-	section    string
-	hdrFields  []string // set for HEADER.FIELDS sections
+	itemName  string
+	section   string
+	hdrFields []string // set for HEADER.FIELDS sections
 }
 
 func parseAllBodyFetches(rest string) []bodySectionFetch {

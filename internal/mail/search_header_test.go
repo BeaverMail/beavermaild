@@ -39,7 +39,7 @@ func TestMatchSearchSinceBeforeOn(t *testing.T) {
 
 	day := time.Date(2024, 3, 15, 18, 0, 0, 0, time.UTC)
 	msgs := []mail.Message{{
-		UID: 1,
+		UID:  1,
 		Meta: storage.EmailMeta{ReceivedAt: day.Unix()},
 	}}
 	since := time.Date(2024, 3, 15, 0, 0, 0, 0, time.UTC)

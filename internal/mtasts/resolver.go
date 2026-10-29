@@ -27,11 +27,11 @@ type PolicyFetcher func(ctx context.Context, domain string) ([]byte, error)
 
 // Resolver caches MTA-STS policies keyed by recipient domain.
 type Resolver struct {
-	mu      sync.Mutex
+	mu       sync.Mutex
 	byDomain map[string]*cacheEntry
-	lookup  TXTLookup
-	fetch   PolicyFetcher
-	now     func() time.Time
+	lookup   TXTLookup
+	fetch    PolicyFetcher
+	now      func() time.Time
 }
 
 type cacheEntry struct {

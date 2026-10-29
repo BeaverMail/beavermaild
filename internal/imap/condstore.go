@@ -45,7 +45,7 @@ func parseUnchangedSince(rest string) (since uint64, remaining string, ok bool) 
 		if end < 0 {
 			return 0, rest, false
 		}
-		num := strings.TrimSpace(rest[len(paren) : end])
+		num := strings.TrimSpace(rest[len(paren):end])
 		n, err := strconv.ParseUint(num, 10, 64)
 		if err != nil {
 			return 0, rest, false

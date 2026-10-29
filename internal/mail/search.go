@@ -27,19 +27,19 @@ type SearchCriteria struct {
 	UIDMax   uint32
 	UIDSet   bool
 
-	From    string
-	To      string
-	CC      string
-	BCC     string
-	Subject string
-	Text    string
-	Body    string
-	Headers []HeaderCriterion
-	Larger  *uint32 // RFC822 size strictly greater than this
-	Smaller *uint32 // RFC822 size strictly less than this
-	Since   *time.Time // inclusive, start of day UTC (ReceivedAt)
-	Before  *time.Time // exclusive, start of day UTC (ReceivedAt)
-	On      *time.Time // calendar day UTC (ReceivedAt)
+	From       string
+	To         string
+	CC         string
+	BCC        string
+	Subject    string
+	Text       string
+	Body       string
+	Headers    []HeaderCriterion
+	Larger     *uint32    // RFC822 size strictly greater than this
+	Smaller    *uint32    // RFC822 size strictly less than this
+	Since      *time.Time // inclusive, start of day UTC (ReceivedAt)
+	Before     *time.Time // exclusive, start of day UTC (ReceivedAt)
+	On         *time.Time // calendar day UTC (ReceivedAt)
 	SentSince  *time.Time // Date header, inclusive day UTC
 	SentBefore *time.Time // Date header, exclusive day UTC
 	SentOn     *time.Time // Date header, calendar day UTC

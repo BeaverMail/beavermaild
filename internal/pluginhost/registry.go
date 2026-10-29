@@ -15,12 +15,12 @@ import (
 
 // Entry describes one installed plugin discovered from a binary metadata probe.
 type Entry struct {
-	Name             string                 `json:"name"`
-	Command          []string               `json:"command"`
-	Exe              string                 `json:"exe"`
-	CliFlags         []plugin.CliFlag       `json:"cli_flags,omitempty"`
-	CliSubcommands   []plugin.CliSubcommand `json:"cli_subcommands,omitempty"`
-	CliKind          string                 `json:"cli_kind,omitempty"`
+	Name           string                 `json:"name"`
+	Command        []string               `json:"command"`
+	Exe            string                 `json:"exe"`
+	CliFlags       []plugin.CliFlag       `json:"cli_flags,omitempty"`
+	CliSubcommands []plugin.CliSubcommand `json:"cli_subcommands,omitempty"`
+	CliKind        string                 `json:"cli_kind,omitempty"`
 	// Capabilities: cli = ephemeral CLI jobs; smtp/web = persistent daemon under beaver serve (see docs/plugins.md).
 	Capabilities []string `json:"capabilities"`
 }

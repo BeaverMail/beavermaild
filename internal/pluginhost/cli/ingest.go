@@ -20,20 +20,20 @@ type IngesterOptions struct {
 
 // Ingester applies plugin JSONL events to the mail store via the host mail adapter.
 type Ingester struct {
-	mail         *pluginhost.HostMail
-	accountID    uint32
-	dryRun       bool
-	verbose      bool
-	skipLog      io.Writer
-	preloaded    map[string]string
-	known        map[string]struct{}
-	jobFirstIMAP map[string]string
-	mboxCache    map[string]uint32
-	touched      map[string]struct{}
-	mboxStats    map[string]*plugin.MailboxCounts
-	imported     uint32
-	skipped      uint32
-	errors       uint32
+	mail          *pluginhost.HostMail
+	accountID     uint32
+	dryRun        bool
+	verbose       bool
+	skipLog       io.Writer
+	preloaded     map[string]string
+	known         map[string]struct{}
+	jobFirstIMAP  map[string]string
+	mboxCache     map[string]uint32
+	touched       map[string]struct{}
+	mboxStats     map[string]*plugin.MailboxCounts
+	imported      uint32
+	skipped       uint32
+	errors        uint32
 	skipBreakdown plugin.SkipBreakdown
 }
 

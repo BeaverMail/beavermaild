@@ -20,7 +20,7 @@ func TestMailboxNameFromArg(t *testing.T) {
 	if err != nil || name != "Archive" {
 		t.Fatalf("name %q err %v", name, err)
 	}
-	if _, err := mailboxNameFromArg(`"bad`+"\r"+`name"`); err == nil {
+	if _, err := mailboxNameFromArg(`"bad` + "\r" + `name"`); err == nil {
 		t.Fatal("expected reject")
 	}
 }

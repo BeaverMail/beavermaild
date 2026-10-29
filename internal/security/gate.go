@@ -12,6 +12,6 @@ type AuthGate interface {
 // NopGate disables auth rate limiting (tests and explicit opt-out).
 type NopGate struct{}
 
-func (NopGate) AllowAuth(string, string) bool        { return true }
-func (NopGate) RecordAuthFailure(string, string)      {}
-func (NopGate) RecordAuthSuccess(string, string)      {}
+func (NopGate) AllowAuth(string, string) bool    { return true }
+func (NopGate) RecordAuthFailure(string, string) {}
+func (NopGate) RecordAuthSuccess(string, string) {}

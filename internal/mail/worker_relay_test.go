@@ -14,10 +14,10 @@ import (
 	"github.com/BeaverMail/beavermaild/internal/log"
 	"github.com/BeaverMail/beavermaild/internal/mail"
 	"github.com/BeaverMail/beavermaild/internal/smtp"
-	"github.com/BeaverMail/beavermaild/internal/tlsload"
-	"github.com/BeaverMail/beavermaild/internal/tlsload/tlstest"
 	"github.com/BeaverMail/beavermaild/internal/storage/blob"
 	"github.com/BeaverMail/beavermaild/internal/storage/sqlite"
+	"github.com/BeaverMail/beavermaild/internal/tlsload"
+	"github.com/BeaverMail/beavermaild/internal/tlsload/tlstest"
 )
 
 // relayRemote adapts smtp.DeliverRemote for queue worker tests.

@@ -11,13 +11,13 @@ import (
 type NotifyFlags uint8
 
 const (
-	NotifyFailure  NotifyFlags = 1 << 0
-	NotifyDelay    NotifyFlags = 1 << 1
-	NotifySuccess  NotifyFlags = 1 << 2
-	NotifyNever    NotifyFlags = 1 << 3
-	NotifyDefault  NotifyFlags = NotifyFailure | NotifyDelay
-	notifyStorageNever uint8 = 255
-	rcptDelayNotifiedFlag uint64 = 1 << 2
+	NotifyFailure         NotifyFlags = 1 << 0
+	NotifyDelay           NotifyFlags = 1 << 1
+	NotifySuccess         NotifyFlags = 1 << 2
+	NotifyNever           NotifyFlags = 1 << 3
+	NotifyDefault         NotifyFlags = NotifyFailure | NotifyDelay
+	notifyStorageNever    uint8       = 255
+	rcptDelayNotifiedFlag uint64      = 1 << 2
 )
 
 // RetMode is MAIL FROM RET= (RFC 3461).

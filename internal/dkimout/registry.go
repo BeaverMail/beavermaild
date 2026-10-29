@@ -7,8 +7,8 @@ import (
 
 // Registry signs with a per-domain signer, falling back to a global signer.
 type Registry struct {
-	mu      sync.RWMutex
-	byDom   map[string]*Signer // domain name → signer
+	mu       sync.RWMutex
+	byDom    map[string]*Signer // domain name → signer
 	fallback *Signer
 }
 

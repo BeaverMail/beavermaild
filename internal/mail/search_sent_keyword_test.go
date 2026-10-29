@@ -21,7 +21,7 @@ func TestMatchSearchSentAndKeyword(t *testing.T) {
 			Keywords:   []string{"Flag_007"},
 		},
 	}, {
-		UID: 2,
+		UID:  2,
 		Meta: storage.EmailMeta{Flags: mail.FlagSeen},
 	}}
 	load := func(m mail.Message) ([]byte, error) {

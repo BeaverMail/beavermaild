@@ -9,13 +9,13 @@ import (
 
 // MsgHeaders holds parsed header fields used for SORT and THREAD.
 type MsgHeaders struct {
-	Date      string
-	From      string
-	To        string
-	Cc        string
-	Subject   string
-	MessageID string
-	InReplyTo string
+	Date       string
+	From       string
+	To         string
+	Cc         string
+	Subject    string
+	MessageID  string
+	InReplyTo  string
 	References []string
 }
 

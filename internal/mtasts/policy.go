@@ -19,10 +19,10 @@ const (
 
 // Policy is a parsed MTA-STS policy for one recipient domain.
 type Policy struct {
-	Domain  string
-	Mode    Mode
-	MX      []string
-	MaxAge  time.Duration
+	Domain   string
+	Mode     Mode
+	MX       []string
+	MaxAge   time.Duration
 	PolicyID string
 }
 
