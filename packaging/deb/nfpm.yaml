@@ -5,7 +5,7 @@ platform: linux
 version: ${DEB_VERSION}
 section: mail
 priority: optional
-maintainer: ""  # to be decided
+maintainer: BeaverMail Packages <packages@beavermail.dev>
 description: |-
   Mail server for hosting panels: SMTP, submission, IMAP and an HTTP API.
 homepage: https://github.com/BeaverMail/beavermaild

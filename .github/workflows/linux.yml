@@ -60,3 +60,38 @@ jobs:
           bash .github/release-notes.sh "${GITHUB_REF_NAME#v}" > "$RUNNER_TEMP/notes.md"
           gh release create "$GITHUB_REF_NAME" --verify-tag --title "BeaverMail ${GITHUB_REF_NAME#v}" --notes-file "$RUNNER_TEMP/notes.md" || true
           gh release upload "$GITHUB_REF_NAME" dist/*.tar.gz dist/*.tar.gz.sha256 dist/*.deb --clobber
+
+  # A version tag also adds the .deb to the APT repository (BeaverMail/apt, served by GitHub Pages),
+  # signed with the key in the APT_GPG_* secrets and pushed with the APT_DEPLOY_KEY deploy key.
+  apt:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    # One publish at a time: two tags pushed together would race on the same branch.
+    concurrency: apt
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: BeaverMail/apt
+          ssh-key: ${{ secrets.APT_DEPLOY_KEY }}
+          path: apt
+      - uses: actions/download-artifact@v7
+        with:
+          name: beavermail-linux-amd64-deb
+          path: debs
+      - name: Signing key
+        env:
+          APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
+        run: printf '%s\n' "$APT_GPG_PRIVATE_KEY" | gpg --batch --import
+      - name: Publish
+        env:
+          APT_GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
+        run: |
+          bash .github/apt-publish.sh apt debs/*.deb
+          cd apt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          # A re-run of the same tag finds the same .deb already there: nothing to push.
+          git diff --cached --quiet || { git commit -m "beavermail ${GITHUB_REF_NAME#v}" && git push; }
