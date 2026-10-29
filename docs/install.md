@@ -14,10 +14,19 @@ BeaverMail is work in progress: configuration and API may still change between v
 
 ### Debian package (recommended)
 
+From the APT repository, so `apt upgrade` brings new versions:
+
 ```sh
-apt install ./beavermail_<version>_amd64.deb
+install -d -m 755 /etc/apt/keyrings
+curl -fsSL https://apt.beavermail.dev/beavermail.gpg -o /etc/apt/keyrings/beavermail.gpg
+gpg --show-keys /etc/apt/keyrings/beavermail.gpg     # must show BE4CCAD2BB56396BF1919FBFFC5710EC1A49A820
+echo "deb [signed-by=/etc/apt/keyrings/beavermail.gpg] https://apt.beavermail.dev stable main" \
+  > /etc/apt/sources.list.d/beavermail.list
+apt update && apt install beavermail
 beaver version                                       # must print the release version, not 0.0.0-dev
 ```
+
+Or download the `.deb` from the GitHub release and `apt install ./beavermail_<version>_amd64.deb`.
 
 The package creates the `beavermail` system user, `/var/lib/beavermail` (`700`) and `/etc/beavermail`
 (`root:beavermail 2750`), and installs `/usr/bin/beaver`, the antispam plugin in `/var/lib/beavermail/plugins` and the
@@ -200,7 +209,8 @@ Deleting a tenant, domain or mailbox through the API deletes its mail immediatel
 
 ## Upgrading
 
-Package: `apt install ./beavermail_<new-version>_amd64.deb` (the service restarts by itself). Tarball:
+Package: `apt update && apt upgrade` from the APT repository, or `apt install ./beavermail_<new-version>_amd64.deb`
+(the service restarts by itself). Tarball:
 
 ```sh
 systemctl stop beavermail
