@@ -8,8 +8,8 @@ import (
 	"io"
 	"os"
 
-	"github.com/BeaverMail/beaver/internal/pluginhost"
-	"github.com/BeaverMail/beaver/plugin"
+	"github.com/BeaverMail/beavermaild/internal/pluginhost"
+	"github.com/BeaverMail/beavermaild/plugin"
 )
 
 // IngesterOptions configures optional ingest logging behavior.

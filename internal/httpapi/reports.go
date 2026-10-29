@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/BeaverMail/beaver/internal/directory"
+	"github.com/BeaverMail/beavermaild/internal/directory"
 )
 
 // reportItem is one stored report with its parse outcome. Unparsed reports stay in

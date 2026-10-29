@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/BeaverMail/beaver/internal/log"
+	"github.com/BeaverMail/beavermaild/internal/log"
 )
 
 func TestRotatingFileAndHistory(t *testing.T) {

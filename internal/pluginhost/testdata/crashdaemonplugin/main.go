@@ -7,7 +7,7 @@ import (
 	"net"
 	"os"
 
-	"github.com/BeaverMail/beaver/plugin"
+	"github.com/BeaverMail/beavermaild/plugin"
 )
 
 func main() {

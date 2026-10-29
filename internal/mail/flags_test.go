@@ -3,7 +3,7 @@ package mail_test
 import (
 	"testing"
 
-	"github.com/BeaverMail/beaver/internal/mail"
+	"github.com/BeaverMail/beavermaild/internal/mail"
 )
 
 func TestFormatIMAPFlags(t *testing.T) {

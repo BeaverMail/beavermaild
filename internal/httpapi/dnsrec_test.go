@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/BeaverMail/beaver/internal/directory"
+	"github.com/BeaverMail/beavermaild/internal/directory"
 )
 
 type dnsRec struct {

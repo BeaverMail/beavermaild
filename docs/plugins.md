@@ -2,7 +2,7 @@
 
 CLI extensions are separate executables (`beaver-plugin-*`) spawned by `beaver` with plain `exec` (no go-plugin). The **host** opens the mail store and blob backend (`internal/storage`); plugins never touch them. Communication is one JSON line on **stdin** and JSONL on **stdout**.
 
-Go package: `github.com/BeaverMail/beaver/plugin`
+Go package: `github.com/BeaverMail/beavermaild/plugin`
 
 ## Quick start
 
@@ -216,7 +216,7 @@ func runJob(req plugin.CliRequest, emit *plugin.BatchEmitter) error {
 }
 ```
 
-Rules: import only `github.com/BeaverMail/beaver/plugin` and stdlib; never `internal/*`; never open the host database, blob dir, or write under `data/` directly.
+Rules: import only `github.com/BeaverMail/beavermaild/plugin` and stdlib; never `internal/*`; never open the host database, blob dir, or write under `data/` directly.
 
 ## Daemon plugins
 

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/BeaverMail/beaver/internal/directory"
-	"github.com/BeaverMail/beaver/internal/storage"
+	"github.com/BeaverMail/beavermaild/internal/directory"
+	"github.com/BeaverMail/beavermaild/internal/storage"
 )
 
 // RemoteDeliverer submits mail to remote recipients (relay or MX).

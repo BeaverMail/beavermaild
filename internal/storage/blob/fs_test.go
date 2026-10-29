@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/BeaverMail/beaver/internal/storage/blob"
+	"github.com/BeaverMail/beavermaild/internal/storage/blob"
 )
 
 func TestFSPutGetRoundtrip(t *testing.T) {

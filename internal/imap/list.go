@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/BeaverMail/beaver/internal/mail"
+	"github.com/BeaverMail/beavermaild/internal/mail"
 )
 
 // listOptions captures LIST / LSUB reference, patterns, and LIST-EXTENDED options (RFC 5258, RFC 6154).

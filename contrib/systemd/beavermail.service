@@ -11,7 +11,7 @@
 
 [Unit]
 Description=BeaverMail mail server (SMTP, IMAP, admin UI)
-Documentation=https://github.com/BeaverMail/beaver
+Documentation=https://github.com/BeaverMail/beavermaild
 After=network-online.target
 Wants=network-online.target
 

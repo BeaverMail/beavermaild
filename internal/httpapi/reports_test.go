@@ -14,8 +14,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/BeaverMail/beaver/internal/directory"
-	"github.com/BeaverMail/beaver/internal/httpapi"
+	"github.com/BeaverMail/beavermaild/internal/directory"
+	"github.com/BeaverMail/beavermaild/internal/httpapi"
 )
 
 // dmarcFixture is a realistic DMARC aggregate body (RFC 7489 Appendix C) for the

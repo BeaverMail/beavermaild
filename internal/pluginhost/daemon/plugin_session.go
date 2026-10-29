@@ -16,8 +16,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/BeaverMail/beaver/internal/smtp"
-	"github.com/BeaverMail/beaver/plugin"
+	"github.com/BeaverMail/beavermaild/internal/smtp"
+	"github.com/BeaverMail/beavermaild/plugin"
 )
 
 var errFilterTimeout = errors.New("daemon: filter timeout")

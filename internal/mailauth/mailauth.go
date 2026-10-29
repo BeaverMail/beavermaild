@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/BeaverMail/beaver/internal/mailauth/arc"
+	"github.com/BeaverMail/beavermaild/internal/mailauth/arc"
 	"github.com/emersion/go-msgauth/dkim"
 	"github.com/emersion/go-msgauth/dmarc"
 	spflib "github.com/wttw/spf"

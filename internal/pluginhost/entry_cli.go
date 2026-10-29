@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/BeaverMail/beaver/plugin"
+	"github.com/BeaverMail/beavermaild/plugin"
 )
 
 // HasSubcommands reports whether the plugin declares admin subcommands.

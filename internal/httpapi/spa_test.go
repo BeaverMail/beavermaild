@@ -8,10 +8,10 @@ import (
 	"testing"
 	"testing/fstest"
 
-	"github.com/BeaverMail/beaver/internal/directory"
-	"github.com/BeaverMail/beaver/internal/httpapi"
-	"github.com/BeaverMail/beaver/internal/security"
-	"github.com/BeaverMail/beaver/internal/storage/sqlite"
+	"github.com/BeaverMail/beavermaild/internal/directory"
+	"github.com/BeaverMail/beavermaild/internal/httpapi"
+	"github.com/BeaverMail/beavermaild/internal/security"
+	"github.com/BeaverMail/beavermaild/internal/storage/sqlite"
 )
 
 func TestSPAServesIndexAndAPI(t *testing.T) {

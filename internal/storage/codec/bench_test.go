@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/BeaverMail/beaver/internal/storage"
+	"github.com/BeaverMail/beavermaild/internal/storage"
 	"github.com/vmihailenco/msgpack/v5"
 )
 

@@ -9,13 +9,13 @@ import (
 	"runtime/debug"
 	"time"
 
-	"github.com/BeaverMail/beaver/internal/connset"
-	"github.com/BeaverMail/beaver/internal/directory"
-	"github.com/BeaverMail/beaver/internal/mail"
-	"github.com/BeaverMail/beaver/internal/mailauth"
-	"github.com/BeaverMail/beaver/internal/security"
-	"github.com/BeaverMail/beaver/internal/servicestatus"
-	"github.com/BeaverMail/beaver/internal/tlsload"
+	"github.com/BeaverMail/beavermaild/internal/connset"
+	"github.com/BeaverMail/beavermaild/internal/directory"
+	"github.com/BeaverMail/beavermaild/internal/mail"
+	"github.com/BeaverMail/beavermaild/internal/mailauth"
+	"github.com/BeaverMail/beavermaild/internal/security"
+	"github.com/BeaverMail/beavermaild/internal/servicestatus"
+	"github.com/BeaverMail/beavermaild/internal/tlsload"
 )
 
 // Options configures optional TLS and protocol knobs for SMTP listeners.

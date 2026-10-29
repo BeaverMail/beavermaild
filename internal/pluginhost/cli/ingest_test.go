@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/BeaverMail/beaver/plugin"
+	"github.com/BeaverMail/beavermaild/plugin"
 )
 
 func TestLoadMessageRawPath(t *testing.T) {

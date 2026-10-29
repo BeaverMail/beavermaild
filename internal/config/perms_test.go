@@ -8,7 +8,7 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/BeaverMail/beaver/internal/config"
+	"github.com/BeaverMail/beavermaild/internal/config"
 )
 
 func perm(t *testing.T, path string) os.FileMode {

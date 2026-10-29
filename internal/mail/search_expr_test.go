@@ -3,8 +3,8 @@ package mail_test
 import (
 	"testing"
 
-	"github.com/BeaverMail/beaver/internal/mail"
-	"github.com/BeaverMail/beaver/internal/storage"
+	"github.com/BeaverMail/beavermaild/internal/mail"
+	"github.com/BeaverMail/beavermaild/internal/storage"
 )
 
 func TestMatchSearchExprOrNot(t *testing.T) {

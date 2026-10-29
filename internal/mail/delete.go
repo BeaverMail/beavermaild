@@ -4,8 +4,8 @@ package mail
 import (
 	"context"
 
-	"github.com/BeaverMail/beaver/internal/storage"
-	"github.com/BeaverMail/beaver/internal/storage/blob"
+	"github.com/BeaverMail/beavermaild/internal/storage"
+	"github.com/BeaverMail/beavermaild/internal/storage/blob"
 )
 
 // DeleteMessage removes email metadata and drops the blob when it is unreferenced.

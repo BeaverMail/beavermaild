@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/BeaverMail/beaver/internal/mail"
-	"github.com/BeaverMail/beaver/internal/storage"
+	"github.com/BeaverMail/beavermaild/internal/mail"
+	"github.com/BeaverMail/beavermaild/internal/storage"
 )
 
 // pushIdleMailboxChanges compares storage to the session cache and emits untagged updates.

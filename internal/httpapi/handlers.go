@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/BeaverMail/beaver/internal/directory"
-	"github.com/BeaverMail/beaver/internal/storage"
+	"github.com/BeaverMail/beavermaild/internal/directory"
+	"github.com/BeaverMail/beavermaild/internal/storage"
 )
 
 // routes registers /api/v1 endpoints on the server mux.

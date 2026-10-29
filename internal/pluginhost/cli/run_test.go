@@ -7,12 +7,12 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/BeaverMail/beaver/internal/config"
-	"github.com/BeaverMail/beaver/internal/directory"
-	"github.com/BeaverMail/beaver/internal/pluginhost"
-	"github.com/BeaverMail/beaver/internal/pluginhost/cli"
-	"github.com/BeaverMail/beaver/internal/runtime"
-	"github.com/BeaverMail/beaver/plugin"
+	"github.com/BeaverMail/beavermaild/internal/config"
+	"github.com/BeaverMail/beavermaild/internal/directory"
+	"github.com/BeaverMail/beavermaild/internal/pluginhost"
+	"github.com/BeaverMail/beavermaild/internal/pluginhost/cli"
+	"github.com/BeaverMail/beavermaild/internal/runtime"
+	"github.com/BeaverMail/beavermaild/plugin"
 )
 
 func TestCLIIngestPlugin(t *testing.T) {

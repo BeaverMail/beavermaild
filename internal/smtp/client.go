@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/BeaverMail/beaver/internal/mail"
+	"github.com/BeaverMail/beavermaild/internal/mail"
 )
 
 const clientTimeout = 30 * time.Second

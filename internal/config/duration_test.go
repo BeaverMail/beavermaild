@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BeaverMail/beaver/internal/config"
+	"github.com/BeaverMail/beavermaild/internal/config"
 )
 
 func TestParseDurationDays(t *testing.T) {

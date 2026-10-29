@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/BeaverMail/beaver/internal/storage"
+	"github.com/BeaverMail/beavermaild/internal/storage"
 )
 
 // cmdSubscribe marks a mailbox as subscribed for LSUB.

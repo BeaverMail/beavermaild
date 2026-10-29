@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/BeaverMail/beaver/internal/directory"
+	"github.com/BeaverMail/beavermaild/internal/directory"
 )
 
 func TestAliasAPI(t *testing.T) {

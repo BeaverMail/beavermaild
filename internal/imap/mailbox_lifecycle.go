@@ -4,7 +4,7 @@ package imap
 import (
 	"context"
 
-	"github.com/BeaverMail/beaver/internal/mail"
+	"github.com/BeaverMail/beavermaild/internal/mail"
 )
 
 // cmdClose expunges deleted messages and returns to the authenticated state.

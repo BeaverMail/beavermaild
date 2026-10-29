@@ -9,12 +9,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/BeaverMail/beaver/internal/directory"
-	beaverlog "github.com/BeaverMail/beaver/internal/log"
-	"github.com/BeaverMail/beaver/internal/mail"
-	"github.com/BeaverMail/beaver/internal/servicestatus"
-	"github.com/BeaverMail/beaver/internal/smtp"
-	"github.com/BeaverMail/beaver/internal/storage"
+	"github.com/BeaverMail/beavermaild/internal/directory"
+	beaverlog "github.com/BeaverMail/beavermaild/internal/log"
+	"github.com/BeaverMail/beavermaild/internal/mail"
+	"github.com/BeaverMail/beavermaild/internal/servicestatus"
+	"github.com/BeaverMail/beavermaild/internal/smtp"
+	"github.com/BeaverMail/beavermaild/internal/storage"
 )
 
 // handleSetupStatus reports whether the greenfield wizard is still available.

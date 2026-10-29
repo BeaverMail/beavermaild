@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/BeaverMail/beaver/internal/storage"
+	"github.com/BeaverMail/beavermaild/internal/storage"
 )
 
 const (

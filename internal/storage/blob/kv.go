@@ -4,7 +4,7 @@ package blob
 import (
 	"context"
 
-	"github.com/BeaverMail/beaver/internal/storage"
+	"github.com/BeaverMail/beavermaild/internal/storage"
 )
 
 // Ref is either inline bytes (< InlineThreshold) or a Blake3 hash on fs.

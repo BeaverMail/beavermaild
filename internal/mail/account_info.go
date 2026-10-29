@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/BeaverMail/beaver/internal/storage"
+	"github.com/BeaverMail/beavermaild/internal/storage"
 )
 
 // MailboxSummary is one IMAP mailbox with its message total.

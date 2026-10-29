@@ -6,13 +6,13 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/BeaverMail/beaver/internal/config"
-	"github.com/BeaverMail/beaver/internal/directory"
-	"github.com/BeaverMail/beaver/internal/mail"
-	"github.com/BeaverMail/beaver/internal/pluginhost"
-	"github.com/BeaverMail/beaver/internal/runtime"
-	"github.com/BeaverMail/beaver/internal/storage/blob"
-	"github.com/BeaverMail/beaver/internal/storage/sqlite"
+	"github.com/BeaverMail/beavermaild/internal/config"
+	"github.com/BeaverMail/beavermaild/internal/directory"
+	"github.com/BeaverMail/beavermaild/internal/mail"
+	"github.com/BeaverMail/beavermaild/internal/pluginhost"
+	"github.com/BeaverMail/beavermaild/internal/runtime"
+	"github.com/BeaverMail/beavermaild/internal/storage/blob"
+	"github.com/BeaverMail/beavermaild/internal/storage/sqlite"
 )
 
 func TestListAccountScanTargets(t *testing.T) {

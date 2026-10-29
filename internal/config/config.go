@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/BeaverMail/beaver/internal/dkimout"
-	"github.com/BeaverMail/beaver/internal/mtasts"
-	"github.com/BeaverMail/beaver/internal/security"
+	"github.com/BeaverMail/beavermaild/internal/dkimout"
+	"github.com/BeaverMail/beavermaild/internal/mtasts"
+	"github.com/BeaverMail/beavermaild/internal/security"
 )
 
 // DefaultDataDir is the data root on installed systems (FHS) when not overridden.

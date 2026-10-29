@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BeaverMail/beaver/internal/storage"
-	"github.com/BeaverMail/beaver/internal/storage/mysql"
+	"github.com/BeaverMail/beavermaild/internal/storage"
+	"github.com/BeaverMail/beavermaild/internal/storage/mysql"
 )
 
 // openStore opens a MariaDB/MySQL store or skips when BEAVER_TEST_MYSQL_DSN is unset.

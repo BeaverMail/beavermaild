@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/BeaverMail/beaver/internal/directory"
-	"github.com/BeaverMail/beaver/internal/storage/sqlite"
+	"github.com/BeaverMail/beavermaild/internal/directory"
+	"github.com/BeaverMail/beavermaild/internal/storage/sqlite"
 )
 
 func TestCreateAccountRoleAndTenant(t *testing.T) {

@@ -8,7 +8,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/BeaverMail/beaver/internal/storage"
+	"github.com/BeaverMail/beavermaild/internal/storage"
 )
 
 // ListAccounts returns accounts on domain name sorted by local part.

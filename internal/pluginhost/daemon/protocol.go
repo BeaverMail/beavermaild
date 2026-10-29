@@ -1,7 +1,7 @@
 // JSON protocol types for SMTP daemon plugins.
 package daemon
 
-import "github.com/BeaverMail/beaver/internal/smtp"
+import "github.com/BeaverMail/beavermaild/internal/smtp"
 
 // ReadyLine is the first JSON line a daemon plugin sends after connecting.
 type ReadyLine struct {

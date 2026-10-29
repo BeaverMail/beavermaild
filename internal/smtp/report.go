@@ -5,7 +5,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/BeaverMail/beaver/internal/directory"
+	"github.com/BeaverMail/beavermaild/internal/directory"
 )
 
 // reportKindForAddress maps the report addresses dmarc-reports@ / tls-reports@ to a

@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/BeaverMail/beaver/internal/config"
+	"github.com/BeaverMail/beavermaild/internal/config"
 )
 
 // PluginsDirFromConfigPath resolves data/plugins from a config file path.

@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/hex"
 
-	"github.com/BeaverMail/beaver/internal/runtime"
+	"github.com/BeaverMail/beavermaild/internal/runtime"
 )
 
 // HostMail wraps runtime.Stack for CLI batch ingest in the host process.

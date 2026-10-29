@@ -4,7 +4,7 @@ package mail
 import (
 	"strings"
 
-	"github.com/BeaverMail/beaver/internal/storage"
+	"github.com/BeaverMail/beavermaild/internal/storage"
 )
 
 // NotifyFlags is the NOTIFY= bitmask requested on RCPT TO.

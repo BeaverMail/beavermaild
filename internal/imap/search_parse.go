@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/BeaverMail/beaver/internal/mail"
+	"github.com/BeaverMail/beavermaild/internal/mail"
 )
 
 // parseSearchExpr parses a full IMAP SEARCH criteria program.

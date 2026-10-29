@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/BeaverMail/beaver/internal/pluginhost"
+	"github.com/BeaverMail/beavermaild/internal/pluginhost"
 )
 
 func TestLoadRegistryScanOnlyDefaultCommand(t *testing.T) {

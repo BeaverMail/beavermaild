@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BeaverMail/beaver/internal/mtasts"
+	"github.com/BeaverMail/beavermaild/internal/mtasts"
 )
 
 func TestDeliverMXPermanentStops(t *testing.T) {

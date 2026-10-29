@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/BeaverMail/beaver/internal/mtasts"
+	"github.com/BeaverMail/beavermaild/internal/mtasts"
 )
 
 // RemoteConfig holds relay address and optional TLS/AUTH for outbound submission.

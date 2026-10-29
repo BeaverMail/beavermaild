@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/BeaverMail/beaver/internal/storage"
+	"github.com/BeaverMail/beavermaild/internal/storage"
 
 	"github.com/go-sql-driver/mysql"
 )

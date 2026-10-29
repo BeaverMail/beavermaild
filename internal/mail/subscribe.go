@@ -5,7 +5,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/BeaverMail/beaver/internal/storage"
+	"github.com/BeaverMail/beavermaild/internal/storage"
 )
 
 // mailboxSubscribed reports whether folder m appears in LSUB / LIST (SUBSCRIBED).

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/BeaverMail/beaver/internal/mail"
+	"github.com/BeaverMail/beavermaild/internal/mail"
 )
 
 func TestValidateMailboxName(t *testing.T) {

@@ -3,7 +3,7 @@ package servicestatus_test
 import (
 	"testing"
 
-	"github.com/BeaverMail/beaver/internal/servicestatus"
+	"github.com/BeaverMail/beavermaild/internal/servicestatus"
 )
 
 func TestRegistrySetList(t *testing.T) {

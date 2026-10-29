@@ -10,7 +10,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/BeaverMail/beaver/plugin"
+	"github.com/BeaverMail/beavermaild/plugin"
 )
 
 // Entry describes one installed plugin discovered from a binary metadata probe.

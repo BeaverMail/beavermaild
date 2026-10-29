@@ -10,12 +10,12 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/BeaverMail/beaver/internal/directory"
-	"github.com/BeaverMail/beaver/internal/httpapi"
-	"github.com/BeaverMail/beaver/internal/mail"
-	"github.com/BeaverMail/beaver/internal/security"
-	"github.com/BeaverMail/beaver/internal/storage/blob"
-	"github.com/BeaverMail/beaver/internal/storage/sqlite"
+	"github.com/BeaverMail/beavermaild/internal/directory"
+	"github.com/BeaverMail/beavermaild/internal/httpapi"
+	"github.com/BeaverMail/beavermaild/internal/mail"
+	"github.com/BeaverMail/beavermaild/internal/security"
+	"github.com/BeaverMail/beavermaild/internal/storage/blob"
+	"github.com/BeaverMail/beavermaild/internal/storage/sqlite"
 )
 
 func TestHealthAndLoginFlow(t *testing.T) {

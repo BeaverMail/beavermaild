@@ -1,4 +1,4 @@
-module github.com/BeaverMail/beaver
+module github.com/BeaverMail/beavermaild
 
 go 1.26
 

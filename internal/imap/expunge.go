@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/BeaverMail/beaver/internal/mail"
+	"github.com/BeaverMail/beavermaild/internal/mail"
 )
 
 // cmdExpunge permanently removes all messages marked \Deleted in the selected mailbox.

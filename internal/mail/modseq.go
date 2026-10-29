@@ -5,7 +5,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/BeaverMail/beaver/internal/storage"
+	"github.com/BeaverMail/beavermaild/internal/storage"
 )
 
 // HighestModSeq returns the stored highest MODSEQ for mailboxID (0 when unused).

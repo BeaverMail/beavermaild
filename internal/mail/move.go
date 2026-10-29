@@ -6,7 +6,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/BeaverMail/beaver/internal/storage"
+	"github.com/BeaverMail/beavermaild/internal/storage"
 )
 
 // ErrMailboxExists is returned when CREATE targets an existing folder name.

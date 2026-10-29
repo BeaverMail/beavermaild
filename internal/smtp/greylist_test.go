@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BeaverMail/beaver/internal/smtp"
-	"github.com/BeaverMail/beaver/internal/storage/sqlite"
+	"github.com/BeaverMail/beavermaild/internal/smtp"
+	"github.com/BeaverMail/beavermaild/internal/storage/sqlite"
 )
 
 func TestGreylistPersistsRetryWindow(t *testing.T) {

@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/BeaverMail/beaver/internal/config"
-	"github.com/BeaverMail/beaver/internal/storage"
-	"github.com/BeaverMail/beaver/internal/storage/mysql"
-	"github.com/BeaverMail/beaver/internal/storage/sqlite"
+	"github.com/BeaverMail/beavermaild/internal/config"
+	"github.com/BeaverMail/beavermaild/internal/storage"
+	"github.com/BeaverMail/beavermaild/internal/storage/mysql"
+	"github.com/BeaverMail/beavermaild/internal/storage/sqlite"
 )
 
 // Open connects to the KV backend named by driver (sqlite or mysql).

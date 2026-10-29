@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/BeaverMail/beaver/plugin"
+	"github.com/BeaverMail/beavermaild/plugin"
 )
 
 const probeTimeout = 5 * time.Second

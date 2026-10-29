@@ -10,9 +10,9 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"github.com/BeaverMail/beaver/internal/config"
-	"github.com/BeaverMail/beaver/internal/pluginhost"
-	"github.com/BeaverMail/beaver/plugin"
+	"github.com/BeaverMail/beavermaild/internal/config"
+	"github.com/BeaverMail/beavermaild/internal/pluginhost"
+	"github.com/BeaverMail/beavermaild/plugin"
 )
 
 // RunAdmin executes an admin-kind plugin subprocess (no account or ingest).

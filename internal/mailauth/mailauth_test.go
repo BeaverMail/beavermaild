@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/BeaverMail/beaver/internal/mailauth"
+	"github.com/BeaverMail/beavermaild/internal/mailauth"
 )
 
 func TestNewDisabledReturnsNil(t *testing.T) {

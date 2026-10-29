@@ -1,6 +1,6 @@
 package imap
 
-import "github.com/BeaverMail/beaver/internal/mail"
+import "github.com/BeaverMail/beavermaild/internal/mail"
 
 func flatSearchCrits(expr mail.SearchExpr) []mail.SearchCriteria {
 	return flatSearchCritsPtr(&expr)

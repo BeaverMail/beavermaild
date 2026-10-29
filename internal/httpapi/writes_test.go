@@ -18,15 +18,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BeaverMail/beaver/internal/directory"
-	"github.com/BeaverMail/beaver/internal/httpapi"
-	beaverlog "github.com/BeaverMail/beaver/internal/log"
-	"github.com/BeaverMail/beaver/internal/mail"
-	"github.com/BeaverMail/beaver/internal/security"
-	"github.com/BeaverMail/beaver/internal/servicestatus"
-	"github.com/BeaverMail/beaver/internal/smtp"
-	"github.com/BeaverMail/beaver/internal/storage/blob"
-	"github.com/BeaverMail/beaver/internal/storage/sqlite"
+	"github.com/BeaverMail/beavermaild/internal/directory"
+	"github.com/BeaverMail/beavermaild/internal/httpapi"
+	beaverlog "github.com/BeaverMail/beavermaild/internal/log"
+	"github.com/BeaverMail/beavermaild/internal/mail"
+	"github.com/BeaverMail/beavermaild/internal/security"
+	"github.com/BeaverMail/beavermaild/internal/servicestatus"
+	"github.com/BeaverMail/beavermaild/internal/smtp"
+	"github.com/BeaverMail/beavermaild/internal/storage/blob"
+	"github.com/BeaverMail/beavermaild/internal/storage/sqlite"
 )
 
 func TestSetupBootstrap(t *testing.T) {

@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/BeaverMail/beaver/internal/storage"
-	"github.com/BeaverMail/beaver/internal/storage/blob"
+	"github.com/BeaverMail/beavermaild/internal/storage"
+	"github.com/BeaverMail/beavermaild/internal/storage/blob"
 )
 
 // Inbox stores received messages for an account.

@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/BeaverMail/beaver/internal/directory"
+	"github.com/BeaverMail/beavermaild/internal/directory"
 )
 
 type ctxKey int

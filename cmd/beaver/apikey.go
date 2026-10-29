@@ -10,9 +10,9 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/BeaverMail/beaver/internal/cli"
-	"github.com/BeaverMail/beaver/internal/config"
-	"github.com/BeaverMail/beaver/internal/directory"
+	"github.com/BeaverMail/beavermaild/internal/cli"
+	"github.com/BeaverMail/beavermaild/internal/config"
+	"github.com/BeaverMail/beavermaild/internal/directory"
 )
 
 func runAPIKey(args []string) int {

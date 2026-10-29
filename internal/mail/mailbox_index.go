@@ -6,7 +6,7 @@ import (
 	"errors"
 	"sort"
 
-	"github.com/BeaverMail/beaver/internal/storage"
+	"github.com/BeaverMail/beavermaild/internal/storage"
 )
 
 func (ib *Inbox) queueMailboxIndexAdd(batch *storage.Batch, mailboxID, emailID uint32) error {

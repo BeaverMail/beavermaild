@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/BeaverMail/beaver/internal/mail"
-	"github.com/BeaverMail/beaver/internal/storage"
+	"github.com/BeaverMail/beavermaild/internal/mail"
+	"github.com/BeaverMail/beavermaild/internal/storage"
 )
 
 func (s *session) cmdAppend(ctx context.Context, tag, arg string) error {

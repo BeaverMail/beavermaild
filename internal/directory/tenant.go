@@ -8,8 +8,8 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/BeaverMail/beaver/internal/storage"
-	"github.com/BeaverMail/beaver/internal/storage/blob"
+	"github.com/BeaverMail/beavermaild/internal/storage"
+	"github.com/BeaverMail/beavermaild/internal/storage/blob"
 )
 
 // DeleteTenantResult reports cascade removals for a tenant wipe.

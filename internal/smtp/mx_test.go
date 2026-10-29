@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/BeaverMail/beaver/internal/smtp"
+	"github.com/BeaverMail/beavermaild/internal/smtp"
 )
 
 func TestDomainFromAddress(t *testing.T) {

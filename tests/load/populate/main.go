@@ -15,7 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/BeaverMail/beaver/internal/runtime"
+	"github.com/BeaverMail/beavermaild/internal/runtime"
 )
 
 var words = strings.Fields(`lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor

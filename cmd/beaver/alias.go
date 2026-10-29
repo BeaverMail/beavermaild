@@ -10,8 +10,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/BeaverMail/beaver/internal/cli"
-	"github.com/BeaverMail/beaver/internal/directory"
+	"github.com/BeaverMail/beavermaild/internal/cli"
+	"github.com/BeaverMail/beavermaild/internal/directory"
 )
 
 func runAlias(args []string) int {

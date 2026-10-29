@@ -4,7 +4,7 @@ package directory
 import (
 	"fmt"
 
-	"github.com/BeaverMail/beaver/internal/storage"
+	"github.com/BeaverMail/beavermaild/internal/storage"
 )
 
 func tenantKey(id uint32) []byte {

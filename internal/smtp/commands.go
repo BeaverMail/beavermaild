@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/BeaverMail/beaver/internal/directory"
+	"github.com/BeaverMail/beavermaild/internal/directory"
 )
 
 // cmdHelp returns a short list of supported SMTP commands.

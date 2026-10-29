@@ -4,7 +4,7 @@ import (
 	"io/fs"
 	"testing"
 
-	"github.com/BeaverMail/beaver/internal/webui"
+	"github.com/BeaverMail/beavermaild/internal/webui"
 )
 
 // TestEmbedIncludesIndex checks the UI is enabled only when the SPA build (index.html) is embedded.

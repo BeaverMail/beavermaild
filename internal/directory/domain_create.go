@@ -6,8 +6,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/BeaverMail/beaver/internal/dkimout"
-	"github.com/BeaverMail/beaver/internal/storage"
+	"github.com/BeaverMail/beavermaild/internal/dkimout"
+	"github.com/BeaverMail/beavermaild/internal/storage"
 )
 
 // DomainCreateOpts holds optional hosting settings when registering a domain.

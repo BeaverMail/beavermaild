@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/BeaverMail/beaver/internal/mail"
+	"github.com/BeaverMail/beavermaild/internal/mail"
 )
 
 // cmdSort returns sequence numbers or UIDs sorted by RFC 5256 criteria.

@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/BeaverMail/beaver/internal/mail"
-	"github.com/BeaverMail/beaver/internal/storage/blob"
-	"github.com/BeaverMail/beaver/internal/storage/sqlite"
+	"github.com/BeaverMail/beavermaild/internal/mail"
+	"github.com/BeaverMail/beavermaild/internal/storage/blob"
+	"github.com/BeaverMail/beavermaild/internal/storage/sqlite"
 )
 
 func TestQueueListAllAndRecipientStatus(t *testing.T) {

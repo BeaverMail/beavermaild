@@ -4,8 +4,8 @@ package directory
 import (
 	"context"
 
-	"github.com/BeaverMail/beaver/internal/storage"
-	"github.com/BeaverMail/beaver/internal/storage/blob"
+	"github.com/BeaverMail/beavermaild/internal/storage"
+	"github.com/BeaverMail/beavermaild/internal/storage/blob"
 )
 
 // purgeAccountResult reports KV and blob cleanup for one account.

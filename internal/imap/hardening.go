@@ -4,7 +4,7 @@ package imap
 import (
 	"fmt"
 
-	"github.com/BeaverMail/beaver/internal/mail"
+	"github.com/BeaverMail/beavermaild/internal/mail"
 )
 
 // validIMAPTag reports whether tag is free of CTL and safe to echo in tagged responses.

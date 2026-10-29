@@ -5,7 +5,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/BeaverMail/beaver/internal/storage"
+	"github.com/BeaverMail/beavermaild/internal/storage"
 )
 
 // Message is one email in a mailbox. UID is the IMAP UID; EmailID is the storage document id.

@@ -4,7 +4,7 @@ package mail
 import (
 	"context"
 
-	"github.com/BeaverMail/beaver/internal/storage"
+	"github.com/BeaverMail/beavermaild/internal/storage"
 )
 
 // IMAPUID returns the IMAP UID for a message (legacy rows use emailID until backfill).

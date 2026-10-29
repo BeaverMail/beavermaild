@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BeaverMail/beaver/internal/config"
-	"github.com/BeaverMail/beaver/internal/dkimout"
-	"github.com/BeaverMail/beaver/internal/security"
+	"github.com/BeaverMail/beavermaild/internal/config"
+	"github.com/BeaverMail/beavermaild/internal/dkimout"
+	"github.com/BeaverMail/beavermaild/internal/security"
 )
 
 func TestStoreDriverMySQLRequiresDSN(t *testing.T) {

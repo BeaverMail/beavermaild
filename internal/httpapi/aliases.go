@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/BeaverMail/beaver/internal/directory"
+	"github.com/BeaverMail/beavermaild/internal/directory"
 )
 
 type aliasDTO struct {

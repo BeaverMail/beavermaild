@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/BeaverMail/beaver/internal/storage"
+	"github.com/BeaverMail/beavermaild/internal/storage"
 )
 
 // APIKeyPrefix marks Bearer values that are API keys rather than session tokens.

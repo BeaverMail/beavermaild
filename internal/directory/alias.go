@@ -8,7 +8,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/BeaverMail/beaver/internal/storage"
+	"github.com/BeaverMail/beavermaild/internal/storage"
 )
 
 // MaxAliasTargets bounds the copies one alias can fan out to.

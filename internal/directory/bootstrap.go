@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/BeaverMail/beaver/internal/storage"
+	"github.com/BeaverMail/beavermaild/internal/storage"
 )
 
 // NeedsSetup reports whether the directory has no accounts and no API keys yet (greenfield).

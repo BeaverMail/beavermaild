@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/BeaverMail/beaver/plugin"
+	"github.com/BeaverMail/beavermaild/plugin"
 )
 
 func main() {

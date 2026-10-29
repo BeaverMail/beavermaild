@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BeaverMail/beaver/internal/storage"
-	"github.com/BeaverMail/beaver/internal/storage/sqlite"
+	"github.com/BeaverMail/beavermaild/internal/storage"
+	"github.com/BeaverMail/beavermaild/internal/storage/sqlite"
 )
 
 func TestStorePutGet(t *testing.T) {

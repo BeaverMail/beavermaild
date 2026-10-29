@@ -2,7 +2,7 @@
 package main
 
 import (
-	"github.com/BeaverMail/beaver/plugin"
+	"github.com/BeaverMail/beavermaild/plugin"
 )
 
 func main() {

@@ -8,9 +8,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/BeaverMail/beaver/internal/pluginhost"
-	"github.com/BeaverMail/beaver/internal/runtime"
-	"github.com/BeaverMail/beaver/plugin"
+	"github.com/BeaverMail/beavermaild/internal/pluginhost"
+	"github.com/BeaverMail/beavermaild/internal/runtime"
+	"github.com/BeaverMail/beavermaild/plugin"
 )
 
 // RunAccountScan builds a standard manifest and runs a account_scan profile plugin job.

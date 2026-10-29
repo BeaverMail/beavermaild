@@ -9,8 +9,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/BeaverMail/beaver/internal/mailauth"
-	"github.com/BeaverMail/beaver/plugin"
+	"github.com/BeaverMail/beavermaild/internal/mailauth"
+	"github.com/BeaverMail/beavermaild/plugin"
 )
 
 type scanParams struct {

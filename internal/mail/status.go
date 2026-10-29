@@ -5,7 +5,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/BeaverMail/beaver/internal/storage"
+	"github.com/BeaverMail/beavermaild/internal/storage"
 )
 
 // MailboxStatus holds IMAP STATUS counters for one folder.

@@ -4,7 +4,7 @@ package main
 import (
 	"os"
 
-	"github.com/BeaverMail/beaver/plugin"
+	"github.com/BeaverMail/beavermaild/plugin"
 )
 
 func main() {

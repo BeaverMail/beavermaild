@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/BeaverMail/beaver/internal/directory"
+	"github.com/BeaverMail/beavermaild/internal/directory"
 )
 
 func TestNeedsSetupAndBootstrapAdmin(t *testing.T) {

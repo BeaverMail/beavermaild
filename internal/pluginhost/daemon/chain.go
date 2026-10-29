@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/BeaverMail/beaver/internal/smtp"
+	"github.com/BeaverMail/beavermaild/internal/smtp"
 )
 
 type filterPeer interface {

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BeaverMail/beaver/internal/directory"
+	"github.com/BeaverMail/beavermaild/internal/directory"
 )
 
 func TestReceivedField(t *testing.T) {

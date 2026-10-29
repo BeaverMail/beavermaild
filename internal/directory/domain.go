@@ -9,7 +9,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/BeaverMail/beaver/internal/storage"
+	"github.com/BeaverMail/beavermaild/internal/storage"
 )
 
 // DefaultTenantID is the bootstrap tenant for single-tenant installs.

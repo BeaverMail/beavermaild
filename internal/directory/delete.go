@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/BeaverMail/beaver/internal/storage"
-	"github.com/BeaverMail/beaver/internal/storage/blob"
+	"github.com/BeaverMail/beavermaild/internal/storage"
+	"github.com/BeaverMail/beavermaild/internal/storage/blob"
 )
 
 // DeleteDomainResult reports what was removed.

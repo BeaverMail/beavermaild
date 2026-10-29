@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BeaverMail/beaver/internal/smtp"
-	"github.com/BeaverMail/beaver/internal/tlsload"
-	"github.com/BeaverMail/beaver/internal/tlsload/tlstest"
+	"github.com/BeaverMail/beavermaild/internal/smtp"
+	"github.com/BeaverMail/beavermaild/internal/tlsload"
+	"github.com/BeaverMail/beavermaild/internal/tlsload/tlstest"
 )
 
 func TestClientSend(t *testing.T) {

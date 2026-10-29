@@ -4,7 +4,7 @@ package mail
 import (
 	"strings"
 
-	"github.com/BeaverMail/beaver/internal/storage"
+	"github.com/BeaverMail/beavermaild/internal/storage"
 )
 
 // NormalizeKeyword canonicalizes an IMAP keyword for storage and comparison.

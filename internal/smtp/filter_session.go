@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/BeaverMail/beaver/internal/mailauth"
+	"github.com/BeaverMail/beavermaild/internal/mailauth"
 )
 
 func (s *session) nextFilterID() string {

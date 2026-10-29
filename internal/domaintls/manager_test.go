@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BeaverMail/beaver/internal/tlsload/tlstest"
+	"github.com/BeaverMail/beavermaild/internal/tlsload/tlstest"
 )
 
 func newTestManager(t *testing.T, opts Options) *Manager {

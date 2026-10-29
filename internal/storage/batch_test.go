@@ -3,7 +3,7 @@ package storage_test
 import (
 	"testing"
 
-	"github.com/BeaverMail/beaver/internal/storage"
+	"github.com/BeaverMail/beavermaild/internal/storage"
 )
 
 func TestBatchSuffixBuildsKey(t *testing.T) {

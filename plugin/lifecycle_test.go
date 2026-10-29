@@ -3,7 +3,7 @@ package plugin_test
 import (
 	"testing"
 
-	"github.com/BeaverMail/beaver/plugin"
+	"github.com/BeaverMail/beavermaild/plugin"
 )
 
 func TestIsDaemonProcess(t *testing.T) {

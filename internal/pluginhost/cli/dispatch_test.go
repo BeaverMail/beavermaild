@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/BeaverMail/beaver/internal/cli"
-	"github.com/BeaverMail/beaver/internal/pluginhost"
-	"github.com/BeaverMail/beaver/plugin"
+	"github.com/BeaverMail/beavermaild/internal/cli"
+	"github.com/BeaverMail/beavermaild/internal/pluginhost"
+	"github.com/BeaverMail/beavermaild/plugin"
 )
 
 func TestSplitCommandAndFlags(t *testing.T) {

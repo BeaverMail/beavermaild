@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/BeaverMail/beaver/internal/storage"
+	"github.com/BeaverMail/beavermaild/internal/storage"
 )
 
 func TestDecodeKeyRoundtrip(t *testing.T) {

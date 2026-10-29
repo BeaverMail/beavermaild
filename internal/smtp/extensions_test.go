@@ -3,7 +3,7 @@ package smtp
 import (
 	"testing"
 
-	"github.com/BeaverMail/beaver/internal/mail"
+	"github.com/BeaverMail/beavermaild/internal/mail"
 )
 
 func TestParseMailArg(t *testing.T) {

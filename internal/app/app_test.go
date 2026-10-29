@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BeaverMail/beaver/internal/app"
-	"github.com/BeaverMail/beaver/internal/config"
-	"github.com/BeaverMail/beaver/internal/log"
+	"github.com/BeaverMail/beavermaild/internal/app"
+	"github.com/BeaverMail/beavermaild/internal/config"
+	"github.com/BeaverMail/beavermaild/internal/log"
 )
 
 func TestAppOpenAndShutdown(t *testing.T) {

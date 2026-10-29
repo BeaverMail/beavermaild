@@ -4,9 +4,9 @@ import (
 	"context"
 	"strings"
 
-	"github.com/BeaverMail/beaver/internal/config"
-	"github.com/BeaverMail/beaver/internal/directory"
-	"github.com/BeaverMail/beaver/internal/smtp"
+	"github.com/BeaverMail/beavermaild/internal/config"
+	"github.com/BeaverMail/beavermaild/internal/directory"
+	"github.com/BeaverMail/beavermaild/internal/smtp"
 )
 
 // remoteDeliverer adapts smtp.DeliverRemote for the mail queue worker.

@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/BeaverMail/beaver/internal/pluginhost"
+	"github.com/BeaverMail/beavermaild/internal/pluginhost"
 )
 
 func TestProbePluginDescriptor(t *testing.T) {

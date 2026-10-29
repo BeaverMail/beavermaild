@@ -3,7 +3,7 @@ package pluginhost
 import (
 	"testing"
 
-	"github.com/BeaverMail/beaver/plugin"
+	"github.com/BeaverMail/beavermaild/plugin"
 )
 
 func TestProfileForCommand(t *testing.T) {

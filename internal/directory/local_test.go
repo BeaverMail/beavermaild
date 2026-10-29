@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/BeaverMail/beaver/internal/directory"
-	"github.com/BeaverMail/beaver/internal/storage/sqlite"
+	"github.com/BeaverMail/beavermaild/internal/directory"
+	"github.com/BeaverMail/beavermaild/internal/storage/sqlite"
 )
 
 func TestLocalCreateAndAuthenticate(t *testing.T) {

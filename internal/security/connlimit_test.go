@@ -4,7 +4,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/BeaverMail/beaver/internal/security"
+	"github.com/BeaverMail/beavermaild/internal/security"
 )
 
 func TestConnLimiterBlocksWhenFull(t *testing.T) {
