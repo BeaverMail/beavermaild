@@ -1,0 +1,9 @@
+#!/bin/sh
+# Debian prerm: stop and disable the service on removal (upgrades restart it in postinst).
+set -e
+
+if [ "$1" = remove ] && [ -d /run/systemd/system ]; then
+	systemctl stop beavermail.service || true
+	systemctl disable beavermail.service >/dev/null || true
+fi
+exit 0

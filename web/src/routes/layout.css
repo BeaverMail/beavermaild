@@ -1,0 +1,34 @@
+@import "tailwindcss";
+@import "../../node_modules/preline/variants.css";
+@import "../../node_modules/preline/css/themes/theme.css";
+
+@plugin "@tailwindcss/forms";
+
+/* Preline UI (Tailwind v4) — path imports (package exports omit CSS) */
+@source "../../node_modules/preline/dist/*.js";
+
+/*
+ * Brand palette sampled from docs/brand/beavermail.svg:
+ * #c08465 light, #ab7356 / #9f684f mid, #996248 dark, teeth #fefefd.
+ */
+@theme {
+  --color-brand-50: #faf6f3;
+  --color-brand-100: #f3ebe5;
+  --color-brand-200: #e5d3c6;
+  --color-brand-300: #d4b49e;
+  --color-brand-400: #c08465;
+  --color-brand-500: #ab7356;
+  --color-brand-600: #9f684f;
+  --color-brand-700: #996248;
+  --color-brand-800: #7a4e39;
+  --color-brand-900: #5c3a2b;
+}
+
+html,
+body {
+  min-height: 100%;
+}
+
+body {
+  @apply bg-brand-50 text-gray-800 antialiased;
+}

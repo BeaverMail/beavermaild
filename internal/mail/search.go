@@ -1,0 +1,281 @@
+// SEARCH criteria matching for IMAP.
+package mail
+
+import (
+	"bytes"
+	"net/mail"
+	"strings"
+	"time"
+)
+
+// HeaderCriterion is one IMAP SEARCH HEADER field/value pair (ANDed).
+type HeaderCriterion struct {
+	Field string
+	Value string
+}
+
+// SearchCriteria is an IMAP SEARCH filter (AND of set fields).
+type SearchCriteria struct {
+	All      bool
+	Seen     *bool
+	Flagged  *bool
+	Answered *bool
+	Deleted  *bool
+	Draft    *bool
+	Recent   *bool
+	UIDMin   uint32
+	UIDMax   uint32
+	UIDSet   bool
+
+	From       string
+	To         string
+	CC         string
+	BCC        string
+	Subject    string
+	Text       string
+	Body       string
+	Headers    []HeaderCriterion
+	Larger     *uint32    // RFC822 size strictly greater than this
+	Smaller    *uint32    // RFC822 size strictly less than this
+	Since      *time.Time // inclusive, start of day UTC (ReceivedAt)
+	Before     *time.Time // exclusive, start of day UTC (ReceivedAt)
+	On         *time.Time // calendar day UTC (ReceivedAt)
+	SentSince  *time.Time // Date header, inclusive day UTC
+	SentBefore *time.Time // Date header, exclusive day UTC
+	SentOn     *time.Time // Date header, calendar day UTC
+	Keyword    string     // KEYWORD criterion
+	Unkeyword  string     // UNKEYWORD criterion
+}
+
+// RawLoader loads RFC 822 bytes for header SEARCH criteria.
+type RawLoader func(Message) ([]byte, error)
+
+// MatchSearch returns 1-based sequence numbers matching criteria in msgs order.
+func MatchSearch(msgs []Message, c SearchCriteria) []uint32 {
+	return MatchSearchWithLoader(msgs, c, nil)
+}
+
+// MatchSearchWithLoader matches criteria, loading raw message bytes when header fields are set.
+func MatchSearchWithLoader(msgs []Message, c SearchCriteria, load RawLoader) []uint32 {
+	var out []uint32
+	for i, m := range msgs {
+		if !matchSearchOne(m, c, load) {
+			continue
+		}
+		out = append(out, uint32(i+1))
+	}
+	return out
+}
+
+func matchSearchOne(m Message, c SearchCriteria, load RawLoader) bool {
+	if c.UIDSet && (m.UID < c.UIDMin || m.UID > c.UIDMax) {
+		return false
+	}
+	if c.Seen != nil {
+		seen := m.Meta.Flags&FlagSeen != 0
+		if seen != *c.Seen {
+			return false
+		}
+	}
+	if c.Flagged != nil {
+		flagged := m.Meta.Flags&FlagFlagged != 0
+		if flagged != *c.Flagged {
+			return false
+		}
+	}
+	if c.Answered != nil {
+		answered := m.Meta.Flags&FlagAnswered != 0
+		if answered != *c.Answered {
+			return false
+		}
+	}
+	if c.Deleted != nil {
+		deleted := m.Meta.Flags&FlagDeleted != 0
+		if deleted != *c.Deleted {
+			return false
+		}
+	}
+	if c.Draft != nil {
+		draft := m.Meta.Flags&FlagDraft != 0
+		if draft != *c.Draft {
+			return false
+		}
+	}
+	if c.Recent != nil {
+		recent := m.Meta.Flags&FlagRecent != 0
+		if recent != *c.Recent {
+			return false
+		}
+	}
+	if c.Larger != nil && m.Meta.Size <= *c.Larger {
+		return false
+	}
+	if c.Smaller != nil && m.Meta.Size >= *c.Smaller {
+		return false
+	}
+	if c.Since != nil || c.Before != nil || c.On != nil {
+		if !matchSearchDay(time.Unix(m.Meta.ReceivedAt, 0).UTC(), c.Since, c.Before, c.On) {
+			return false
+		}
+	}
+	if c.Keyword != "" && !HasKeyword(m.Meta, c.Keyword) {
+		return false
+	}
+	if c.Unkeyword != "" && HasKeyword(m.Meta, c.Unkeyword) {
+		return false
+	}
+	if needsRawSearch(c) {
+		if load == nil {
+			return false
+		}
+		raw, err := load(m)
+		if err != nil {
+			return false
+		}
+		if c.Text != "" && !rawContains(raw, c.Text) {
+			return false
+		}
+		if c.Body != "" && !bodyContains(raw, c.Body) {
+			return false
+		}
+		if needsHeaderSearch(c) && !matchSearchHeaders(raw, c) {
+			return false
+		}
+		if c.SentSince != nil || c.SentBefore != nil || c.SentOn != nil {
+			sent, ok := parseMessageDate(raw)
+			if !ok || !matchSearchDay(sent, c.SentSince, c.SentBefore, c.SentOn) {
+				return false
+			}
+		}
+	}
+	if c.All {
+		return true
+	}
+	return searchHasCriterion(c)
+}
+
+func searchHasCriterion(c SearchCriteria) bool {
+	return c.UIDSet || c.Seen != nil || c.Flagged != nil || c.Answered != nil ||
+		c.Deleted != nil || c.Draft != nil || c.Recent != nil ||
+		c.Keyword != "" || c.Unkeyword != "" ||
+		needsRawSearch(c) || c.Larger != nil || c.Smaller != nil ||
+		c.Since != nil || c.Before != nil || c.On != nil ||
+		c.SentSince != nil || c.SentBefore != nil || c.SentOn != nil
+}
+
+func needsRawSearch(c SearchCriteria) bool {
+	return c.Text != "" || c.Body != "" || needsHeaderSearch(c) ||
+		c.SentSince != nil || c.SentBefore != nil || c.SentOn != nil
+}
+
+func needsHeaderSearch(c SearchCriteria) bool {
+	return c.From != "" || c.To != "" || c.CC != "" || c.BCC != "" ||
+		c.Subject != "" || len(c.Headers) > 0
+}
+
+func matchSearchDay(t time.Time, since, before, on *time.Time) bool {
+	day := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+	if on != nil {
+		onDay := time.Date(on.Year(), on.Month(), on.Day(), 0, 0, 0, 0, time.UTC)
+		if !day.Equal(onDay) {
+			return false
+		}
+	}
+	if since != nil {
+		sinceDay := time.Date(since.Year(), since.Month(), since.Day(), 0, 0, 0, 0, time.UTC)
+		if day.Before(sinceDay) {
+			return false
+		}
+	}
+	if before != nil {
+		beforeDay := time.Date(before.Year(), before.Month(), before.Day(), 0, 0, 0, 0, time.UTC)
+		if !day.Before(beforeDay) {
+			return false
+		}
+	}
+	return true
+}
+
+func parseMessageDate(raw []byte) (time.Time, bool) {
+	msg, err := mail.ReadMessage(bytes.NewReader(raw))
+	if err != nil {
+		return time.Time{}, false
+	}
+	date := strings.TrimSpace(msg.Header.Get("Date"))
+	if date == "" {
+		return time.Time{}, false
+	}
+	t, err := mail.ParseDate(date)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return t.UTC(), true
+}
+
+func matchSearchHeaders(raw []byte, c SearchCriteria) bool {
+	msg, err := mail.ReadMessage(bytes.NewReader(raw))
+	if err != nil {
+		return false
+	}
+	if c.From != "" && !headerContains(msg.Header.Get("From"), c.From) {
+		return false
+	}
+	if c.To != "" && !headerContains(msg.Header.Get("To"), c.To) {
+		return false
+	}
+	if c.CC != "" && !headerContains(msg.Header.Get("Cc"), c.CC) {
+		return false
+	}
+	if c.BCC != "" && !headerContains(msg.Header.Get("Bcc"), c.BCC) {
+		return false
+	}
+	if c.Subject != "" && !headerContains(msg.Header.Get("Subject"), c.Subject) {
+		return false
+	}
+	for _, h := range c.Headers {
+		if !headerContains(msg.Header.Get(h.Field), h.Value) {
+			return false
+		}
+	}
+	return true
+}
+
+func headerContains(haystack, needle string) bool {
+	return rawContains([]byte(haystack), needle)
+}
+
+// rawContains is case-insensitive substring search on RFC822 bytes or header text.
+func rawContains(raw []byte, needle string) bool {
+	return bytes.Contains(bytes.ToLower(raw), bytes.ToLower([]byte(needle)))
+}
+
+// bodyContains searches only the message body after the header/body separator.
+func bodyContains(raw []byte, needle string) bool {
+	_, body := splitHeaderBody(raw)
+	return rawContains(body, needle)
+}
+
+func splitHeaderBody(raw []byte) ([]byte, []byte) {
+	if i := bytes.Index(raw, []byte("\r\n\r\n")); i >= 0 {
+		return raw[:i], raw[i+4:]
+	}
+	if i := bytes.Index(raw, []byte("\n\n")); i >= 0 {
+		return raw[:i], raw[i+2:]
+	}
+	return raw, nil
+}
+
+// MatchSearchUID returns UIDs matching criteria (for UID SEARCH responses).
+func MatchSearchUID(msgs []Message, c SearchCriteria) []uint32 {
+	return MatchSearchUIDWithLoader(msgs, c, nil)
+}
+
+// MatchSearchUIDWithLoader returns UIDs with optional raw loader for header criteria.
+func MatchSearchUIDWithLoader(msgs []Message, c SearchCriteria, load RawLoader) []uint32 {
+	seqs := MatchSearchWithLoader(msgs, c, load)
+	out := make([]uint32, len(seqs))
+	for i, seq := range seqs {
+		out[i] = msgs[seq-1].UID
+	}
+	return out
+}

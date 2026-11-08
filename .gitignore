@@ -1,0 +1,37 @@
+# Go build output
+/beaver
+/bin/
+/dist/
+*.exe
+*.test
+vendor/
+
+
+# Local scratch
+/target
+.data
+*.failed
+*_failed
+run.sh
+*.tgz
+
+# Admin UI (SvelteKit)
+web/node_modules/
+web/build/
+web/.svelte-kit/
+internal/webui/dist/*
+
+# Editor / tooling
+.*
+!.gitignore
+!.gitattributes
+!.github
+!web/.gitignore
+!web/.npmrc
+!internal/webui/dist/.gitkeep
+.specs
+.agents
+TODO.md
+
+# Local dev data dir (beaver init -data-dir data)
+/data/

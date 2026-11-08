@@ -1,0 +1,4 @@
+# Spam trap recipients, one per line: a full address or @domain for a whole domain.
+# A message to exactly one listed recipient scores SPAMTRAP; set spamtrap.action to reject or discard it.
+# trap@example.org
+# @traps.example.net

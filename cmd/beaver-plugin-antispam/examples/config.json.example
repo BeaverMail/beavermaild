@@ -1,0 +1,35 @@
+{
+  "actions": {
+    "reject": 15,
+    "rewrite_subject": null,
+    "add_header": 6,
+    "greylist": 4
+  },
+  "scores": {},
+  "gtube": "reject",
+  "greylist": {
+    "delay_seconds": 300,
+    "expire_seconds": 86400
+  },
+  "hfilter": {
+    "dns_checks": false
+  },
+  "rbl": {
+    "enabled": false,
+    "dqs_key": "",
+    "resolver": "",
+    "timeout_ms": 2000,
+    "max_lookups": 24,
+    "cache_seconds": 3600,
+    "received": true
+  },
+  "url_redirector": {
+    "enabled": false,
+    "max_urls": 5,
+    "nested_limit": 2,
+    "timeout_ms": 4000
+  },
+  "spamtrap": {
+    "action": ""
+  }
+}

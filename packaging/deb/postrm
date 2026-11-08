@@ -1,0 +1,16 @@
+#!/bin/sh
+# Debian postrm: purge drops the config and its secrets; mail in /var/lib/beavermail is kept
+# on purpose (remove it by hand once backed up).
+set -e
+
+case "$1" in
+remove)
+	if [ -d /run/systemd/system ]; then
+		systemctl daemon-reload || true
+	fi
+	;;
+purge)
+	rm -rf /etc/beavermail
+	;;
+esac
+exit 0

@@ -1,0 +1,471 @@
+# HTTP API (`/api/v1`)
+
+The admin REST API served by `beaver serve` when `http.enabled` is true. The web UI uses the same API, so anything
+the UI does a script or an LLM agent can do too.
+
+Source of truth: [`internal/httpapi/handlers.go`](../internal/httpapi/handlers.go) (route table). If this page and
+the code disagree, the code wins; please fix the page.
+
+## Basics
+
+| Item | Value |
+|------|-------|
+| Base URL | `https://<http.listen>/api/v1` (plain `http://` only on a loopback listen) |
+| Format | JSON in, JSON out (`Content-Type: application/json`) |
+| Request body limit | 1 MiB |
+| Unknown JSON fields | **rejected** with `400 invalid json` |
+| Errors | `{"error": "<message>"}` with a 4xx/5xx status |
+
+Config (`beaver.json`):
+
+```json
+"http": { "enabled": true, "listen": "127.0.0.1:8080" }
+```
+
+A non-loopback `listen` requires TLS (`tls.cert_file`/`key_file` or `tls.acme_hosts`); see [tls-ops.md](tls-ops.md).
+
+| Question | Answer today |
+|----------|--------------|
+| Where does it listen? | TCP only: loopback (plain HTTP allowed) or network (HTTPS required). No Unix socket. |
+| How do clients authenticate? | API key (integrations) or session token from `POST /auth/login` (browser, scripts). No mTLS. |
+| Can credentials be restricted? | By role and tenant (see [Roles](#roles)). API keys use the `provisioner` role. No per-operation scopes or read-only tokens. |
+
+## Authentication
+
+### API keys (integrations)
+
+Create a key on the mail server with the CLI; the token is printed once on stdout:
+
+```sh
+beaver apikey create -name panel          # prints bk_<id>_<secret>
+beaver apikey list [-json]                # id, name, role, created (never the secret)
+beaver apikey revoke <id>                 # takes effect on the next request
+```
+
+Send it as `Authorization: Bearer bk_<id>_<secret>`. API keys:
+
+- do not expire; revoke them with the CLI;
+- use the `provisioner` role (see [Roles](#roles));
+- **skip the login rate limit**, so failed logins from other local clients cannot lock the integration out;
+- can only be created, listed and revoked from the CLI, not through the API;
+- are stored as SHA-256 of the secret; a lost token cannot be recovered, create a new one.
+
+A wrong or revoked key returns `401`.
+
+### Session login
+
+1. `POST /auth/login` with directory credentials; the response carries a `token`.
+2. Send `Authorization: Bearer <token>` on every other call.
+
+```sh
+TOKEN=$(curl -s https://mail.example.com/api/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"admin@example.com","password":"secret"}' | jq -r .token)
+
+curl -s https://mail.example.com/api/v1/me -H "Authorization: Bearer $TOKEN"
+```
+
+- Session tokens are HMAC-signed and valid for **12 hours**; clients log in again when they get `401`.
+- Logout is client-side for Bearer clients (drop the token); `POST /auth/logout` only clears the browser cookie.
+- The browser UI uses the `beaver_session` cookie instead. Cookie-authenticated writes must pass a same-origin check;
+  Bearer requests skip it.
+- Login and setup are rate limited per client IP: after 10 failures in 15 minutes (defaults, `auth.rate_limit`)
+  further attempts get `429 too many auth attempts`. Authenticated calls have no rate limit.
+- The failure counter is **shared with IMAP and SMTP AUTH** and keyed by IP only. Every local client (webmail,
+  scripts, other users on the host) counts as `127.0.0.1`, so 10 failed IMAP logins from a local webmail also block
+  session logins from the same host for up to 15 minutes. Integrations should use an API key, which is not affected.
+
+### Roles
+
+| Role | Scope |
+|------|-------|
+| `admin` | Whole instance |
+| `provisioner` | API keys only. All tenants, domains and accounts (create, change, delete). Cannot create or promote `admin` accounts, and has no access to queue, logs, status or delivery |
+| `tenant_admin` | Its own tenant: domains and accounts |
+| `user` | Read-only view of its own domain and its own account |
+
+Calls outside the caller's scope return `403 forbidden`.
+
+## Endpoints
+
+Paths are relative to `/api/v1`. "Who" is the minimum role.
+
+### Setup and session
+
+| Method | Path | Who | Body | Response |
+|--------|------|-----|------|----------|
+| GET | `/health` | public | | `{"status":"ok"}` |
+| GET | `/setup` | public | | `{"needed": bool}`: true until an account or an API key exists |
+| POST | `/setup` | public, only while `needed` | `{email, password}` | same as login; `409` once setup is done |
+| POST | `/auth/login` | public | `{email, password}` | `{token, account:{email, role, tenant_id}}` |
+| POST | `/auth/logout` | public | | `{"status":"ok"}` |
+| GET | `/me` | any | | `{email, role, tenant_id}` (API key: `apikey-<id>@api-key.invalid`, `tenant_id` 0) |
+
+### Tenants
+
+| Method | Path | Who | Body | Response |
+|--------|------|-----|------|----------|
+| GET | `/tenants` | tenant_admin (own) / provisioner, admin (all) | | `{"tenants":[Tenant]}` |
+| POST | `/tenants` | provisioner / admin | `{name, external_id?, storage_limit?}` | `201` Tenant |
+| PATCH | `/tenants/{id}` | `name`: tenant_admin (own) / provisioner, admin. `storage_limit`, `login_disabled`: provisioner, admin | any of `{name, storage_limit, login_disabled}` | Tenant |
+| DELETE | `/tenants/{id}` | provisioner / admin | `{"confirm": "<tenant name>"}` | `{id, name, domains_deleted, accounts_deleted}` |
+
+**Tenant**: `id`, `name`, `external_id?`, `storage_limit` (bytes, `0` = unlimited), `storage_used` (sum of all its
+mailboxes), `login_disabled`.
+
+Deleting a tenant deletes all its domains, accounts and mail. The default tenant (`id=1`) cannot be deleted.
+
+`external_id` is an optional key chosen by the caller (e.g. the panel's customer id): up to 128 bytes, no spaces or
+control characters, unique across tenants, immutable after create. Creating a tenant with an `external_id` that
+already exists returns `409` with the existing tenant, so a retrying client gets its `id` without a second call:
+
+```json
+409 Conflict
+{"error":"tenant already exists","tenant":{"id":5,"name":"Customer","external_id":"cust-42","storage_limit":0,"storage_used":0}}
+```
+
+Tenant names are not unique; without `external_id`, a repeated create makes another tenant. After a tenant is
+deleted its `external_id` can be used again.
+
+### Domains
+
+| Method | Path | Who | Body | Response |
+|--------|------|-----|------|----------|
+| GET | `/domains` | any (scoped) | | `{"domains":[Domain]}` |
+| POST | `/domains` | tenant_admin / provisioner / admin | DomainInput | `201` Domain |
+| GET | `/domains/{domain}` | any (scoped) | | Domain |
+| PATCH | `/domains/{domain}` | tenant_admin / provisioner / admin | any DomainInput fields (not `name`, `tenant_id`) | Domain |
+| DELETE | `/domains/{domain}` | tenant_admin / provisioner / admin | `{"confirm": "<domain name>"}` | `{name, accounts_deleted}` |
+| GET | `/domains/{domain}/dns-recommended` | any (scoped) | | `{domain, records:[{type, host, value, placeholder?, note?}]}` |
+| GET | `/domains/{domain}/reports` | any (scoped) | | `{domain, reports:[...], dmarc?, tls?}` |
+
+**DomainInput**
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `name` | string | POST only, required |
+| `tenant_id` | number | POST only; admin and provisioner may choose (default `1`), tenant_admin is forced to its own |
+| `mail_hostname` | string | **required** on POST (e.g. `mail.example.com`); on PATCH it cannot be set to empty |
+| `ssl_mode` | string | `none` (default), `acme`, `custom`. `acme` issues for `mail_hostname` via HTTP-01 or TLS-ALPN-01, so it needs ports 80/443 or a proxy that forwards the challenge (see [tls-ops.md](tls-ops.md#acme)); `custom` takes PEMs you renew yourself |
+| `cert_pem`, `key_pem` | string | required with `custom` on create; on PATCH omit them to keep the stored cert |
+| `catch_all` | string | local part that receives mail for unknown addresses |
+| `dkim_enabled` | bool | generates a key (selector `beaver`) on first enable |
+| `antispam` | bool | |
+| `send_max_messages`, `send_window` | number, duration | per-domain submission rate, e.g. `100` per `"1h"`; `0`/empty = global |
+| `storage_bytes`, `messages_quota` | number | default per-account quotas; `0` = global default |
+| `relay_host`, `relay_user`, `relay_password`, `relay_starttls` | | per-domain outbound relay; on PATCH an empty `relay_password` keeps the stored one |
+| `login_disabled` | bool | PATCH only, admin and provisioner only; see [Suspending a customer](#suspending-a-customer) |
+
+**PATCH is a partial update**: only the fields in the body change, omitted fields keep their stored value. To clear
+a value send it explicitly (`"catch_all": ""`, `"storage_bytes": 0`). `cert_pem`/`key_pem` and `relay_password` keep
+the stored secret when empty. There is no version check (ETag): two clients that change the same field at the same
+time still race, last write wins.
+
+**Domain** (response) has the input fields (except secrets and PEMs) plus `id`, `dkim_selector`, `dkim_dns_name`,
+`dkim_dns_value`, `account_count`, `storage_used`, `ssl_active`, `dkim_active`, `antispam_active`, `login_disabled`.
+Empty or false optional fields are omitted.
+
+**Reports**: each item has `kind` (`dmarc`|`tls`), `from`, `to`, `received_at`, `content_type`, `format`, `file`,
+`parsed`, `problems?`. The `dmarc` aggregate (`reports`, `messages`, `dkim_pass`, `spf_pass`, `dmarc_pass`,
+`dmarc_fail`, `spoofing:{messages, source_ips}`) and the `tls` aggregate (`reports`, `successful_sessions`,
+`failed_sessions`, `mx_failures:[{mx, failed_sessions, result_types}]`) are present only when at least one report of
+that kind parsed.
+
+### Accounts
+
+| Method | Path | Who | Body | Response |
+|--------|------|-----|------|----------|
+| GET | `/domains/{domain}/accounts` | any (user: only itself) | | `{"accounts":[Account]}` |
+| POST | `/domains/{domain}/accounts` | tenant_admin / provisioner / admin | `{local_part, password, role?}` | `201` Account |
+| PATCH | `/accounts/{email}` | tenant_admin / provisioner / admin (`login_disabled`: provisioner / admin) | any of `{role, password, active, login_disabled, storage_limit, messages_limit}` | Account |
+| DELETE | `/accounts/{email}` | tenant_admin / provisioner / admin | | `{email, messages_removed, blobs_removed}` |
+
+**Account**: `id`, `local_part`, `email`, `role`, `tenant_id`, `active`, `login_disabled`, `storage_used`, `storage_limit`,
+`messages_used`, `messages_limit` (limit `0` = unlimited; usage is filled on list and PATCH, not on create).
+
+- `role` defaults to `user`. A tenant_admin or provisioner can assign only `user` or `tenant_admin`.
+- `dmarc-reports` and `tls-reports` are reserved on every domain (they receive DMARC/TLS reports, see
+  [Recommended DNS records](#recommended-dns-records)): creating them returns `400` with
+  `local part "dmarc-reports" is reserved for dmarc reports`.
+- Account PATCH is a real partial update: send only the fields to change.
+- `active: false` blocks IMAP/SMTP/API login **and rejects incoming mail** with `550 5.1.1 User inactive`, so senders
+  get a bounce. Stored mail is kept.
+- You cannot delete yourself, deactivate yourself, or reset your own password through this API.
+- DELETE removes the account **and all its mail**; it has no `confirm` body.
+
+**Passwords** are sent in clear text inside the JSON body (protected by TLS) and stored as bcrypt hashes. Importing an
+existing hash is not supported. Empty passwords are rejected; bcrypt rejects passwords longer than 72 bytes.
+
+### Quotas and usage
+
+| Need | How |
+|------|-----|
+| Read usage of one mailbox | `GET /domains/{domain}/accounts`: `storage_used` / `messages_used` per account |
+| Read usage of a domain | `GET /domains/{domain}`: `storage_used` (sum of its accounts) |
+| Read usage of a tenant | `GET /tenants`: `storage_used` (sum of all mailboxes on all its domains) |
+| Cap the total size of a tenant | `storage_limit` on the tenant (POST or PATCH); admin and provisioner only |
+| Set a default mailbox quota for a domain | `storage_bytes` / `messages_quota` on the domain (POST or full PATCH) |
+| Set the quota of one mailbox | `PATCH /accounts/{email}` with `storage_limit` (bytes) and/or `messages_limit`; `0` = unlimited, an omitted field keeps its value |
+| Cap the total size of a domain | **not available**: cap the tenant or each mailbox |
+
+The domain default is copied into a mailbox's quota record the first time that mailbox is used (delivery, IMAP,
+usage read). Changing the domain default later does **not** update mailboxes that already have a record: set each
+mailbox explicitly with PATCH. A new limit below current usage blocks further delivery but deletes nothing. Usage is
+in bytes and counts stored messages only.
+
+Who can set mailbox limits: `admin`, `provisioner`, and `tenant_admin` for accounts in its own tenant (same rule as the
+domain defaults). The tenant cap can be set only by `admin` and `provisioner`, so a customer with a `tenant_admin`
+login can move space between its mailboxes but never exceed its plan.
+
+**Tenant cap.** Every message stored (delivery, IMAP APPEND, copy) must fit both its mailbox limit and the tenant
+`storage_limit`. Over the cap, SMTP answers `552 5.2.2 Mailbox full` (the sender gets a bounce) and IMAP APPEND
+fails; nothing already stored is deleted. Lowering the cap below current usage only blocks new mail. Concurrent
+deliveries can overshoot the cap by at most the messages in flight. Typical use for a hosting plan: set
+`storage_limit = plan - web space used`, and update it when web usage changes.
+
+### Suspending a customer
+
+| Goal | Call | Login (IMAP, SMTP, API) | Sending | Incoming mail |
+|------|------|------------------------|---------|---------------|
+| Suspend (e.g. unpaid, after notices) | `PATCH /tenants/{id}` or `/domains/{domain}` with `{"login_disabled": true}` | blocked | blocked (needs SMTP AUTH) | **accepted**, up to the quota |
+| Suspend one mailbox | `PATCH /accounts/{email}` with `{"login_disabled": true}` | blocked | blocked | **accepted**, up to the quota |
+| Disable one mailbox completely | `PATCH /accounts/{email}` with `{"active": false}` | blocked | blocked | **rejected** (`550 5.1.1 User inactive`, sender gets a bounce) |
+| Remove | `DELETE` on tenant, domain or account | | | mail deleted permanently |
+
+`login_disabled` is restored with `false`. Only `admin` and `provisioner` can change it, so a customer's
+`tenant_admin` cannot lift its own suspension. The default tenant and the caller's own tenant, domain or account cannot be
+disabled. A login is blocked when any of account, domain or tenant has `login_disabled`. A blocked login gets the same answer as a wrong password (`401`, IMAP `NO`, SMTP `535`), and it is checked
+only after the password, so it does not reveal the suspension to someone without it. Retries with the right password
+do not count toward the IP rate limit, so a suspended client polling through a shared webmail cannot lock out other
+users.
+
+Already open IMAP connections and API session tokens (up to 12 h) are not cut: suspension applies from the next
+login.
+
+### Aliases
+
+| Method | Path | Who | Body | Response |
+|--------|------|-----|------|----------|
+| GET | `/domains/{domain}/aliases` | tenant_admin / provisioner / admin | | `{"aliases":[Alias]}` |
+| POST | `/domains/{domain}/aliases` | tenant_admin / provisioner / admin | `{local_part, targets:[email]}` | `201` Alias |
+| PATCH | `/aliases/{email}` | tenant_admin / provisioner / admin | `{targets:[email]}` (replaces all targets) | Alias |
+| DELETE | `/aliases/{email}` | tenant_admin / provisioner / admin | | `{email}` |
+
+**Alias**: `email`, `local_part`, `targets` (addresses).
+
+An alias delivers one copy of each message to every target mailbox (e.g. `info@` → `mario@`, `anna@`).
+
+- Targets must be existing mailboxes on this server **in the same tenant** (any of its domains), 1 to 50 of them.
+  Forwarding to external addresses is not supported.
+- An address is either a mailbox or an alias: creating one over the other returns `409`. `dmarc-reports` and
+  `tls-reports` are reserved.
+- Routing order for incoming mail: mailbox, then alias, then the domain `catch_all`.
+- A mailbox addressed both directly and through an alias in the same message gets one copy.
+- Each copy counts against the quota of the mailbox that receives it. Targets that are `active: false` are skipped;
+  if no target is left, the sender gets `550`. Deleting a target mailbox leaves the alias with the remaining targets.
+- Deleting a domain deletes its aliases.
+- Also available from the CLI (`beaver alias add|list|set|delete`) and in the admin UI on the domain page.
+
+### DKIM
+
+Set `dkim_enabled: true` on the domain (POST or PATCH). The server generates the key pair on first enable (selector
+`beaver`) and keeps the private key. The public record to publish is returned:
+
+- in every Domain object as `dkim_dns_name` / `dkim_dns_value`;
+- in `GET /domains/{domain}/dns-recommended` as the `TXT` row, together with MX, SPF and autoconfig records.
+
+Key rotation and importing your own key are not available through the API.
+
+### Recommended DNS records
+
+`GET /domains/{domain}/dns-recommended` returns MX, SPF, DKIM (when enabled), DMARC, TLS-RPT and the
+autoconfig/autodiscover CNAMEs. Rows flagged `placeholder: true` contain an invented value (e.g. no `mail_hostname`
+yet) and must not be published as is.
+
+| Record | Value | Why |
+|--------|-------|-----|
+| `_dmarc.<domain>` TXT | `v=DMARC1; p=none; rua=mailto:dmarc-reports@<domain>` | Aggregate reports, no change to delivery. Tighten `p` after the reports show all legitimate mail passing (RFC 9989, Appendix B.2). |
+| `_smtp._tls.<domain>` TXT | `v=TLSRPTv1; rua=mailto:tls-reports@<domain>` | Daily reports of TLS failures when other servers deliver to this domain (RFC 8460). |
+
+The server accepts mail for `dmarc-reports@` and `tls-reports@` on every hosted domain and stores it as reports
+(read them with `GET /domains/{domain}/reports`); no mailbox is needed and a catch-all does not capture them. Because
+the report address is in the same domain as the policy, no `_report._dmarc` authorization record is required
+(RFC 9990, Section 4). If the domain already has a DMARC record, add the `rua` to it instead of publishing a second
+one.
+
+**MTA-STS is not returned**: publishing `_mta-sts.<domain>` requires serving the policy at
+`https://mta-sts.<domain>/.well-known/mta-sts.txt` with a valid certificate (RFC 8461, Section 3), and this server
+does not serve inbound policies yet. Another web server can serve it instead; its `mx:` lines must match the domain's
+`mail_hostname`, and the mail server's certificate must be valid for that name, or `mode: enforce` senders will refuse
+to deliver. Start with `mode: testing`.
+
+### Outbound queue (admin)
+
+| Method | Path | Query | Response |
+|--------|------|-------|----------|
+| GET | `/queue` | `all=1` to include finished entries | `{"entries":[QueueEntry]}` |
+| POST | `/queue/{id}/retry` | `address=` to retry one recipient (default: all) | `{"status":"ok"}` |
+| POST | `/queue/{id}/hold` | | `{"status":"ok"}` |
+| POST | `/queue/{id}/unhold` | | `{"status":"ok"}` |
+| DELETE | `/queue/{id}` | | `{"status":"ok"}` (cancels delivery) |
+
+**QueueEntry**: `id`, `return_path`, `size`, `created` (Unix seconds), `pending`, `held`, `completed_ms?`,
+`recipients:[{address, retry, status, next_due_ms, last_attempt_ms, last_diag?}]`. `*_ms` fields are Unix
+milliseconds.
+
+### Operations (admin)
+
+| Method | Path | Body / query | Response |
+|--------|------|--------------|----------|
+| GET | `/status` | | `{"services":[{id, name, listen?, state, error?}]}` |
+| GET | `/logs` | `limit` (default 200), `level` (`debug`/`info`/`warn`/`error`, minimum), `q` (text), `before` (RFC 3339, for paging) | `{"entries":[{time, level, msg, attrs?}]}` |
+| GET | `/delivery` | | `{relay_configured, relay}` |
+| POST | `/delivery/test` | `{to, mode?}`; `to` is an address or domain, `mode` is `mx`, `relay` or empty (auto) | `{ok, mode, domain?, host?, steps:[{name, ok, detail?, error?}]}` |
+
+`/delivery/test` checks connectivity (dial, EHLO, STARTTLS, AUTH) and never sends a message. It can take up to 20 s.
+`/logs` needs `log.file` configured, otherwise it returns `503`.
+
+## Status codes
+
+| Code | Meaning |
+|------|---------|
+| 400 | Invalid JSON, unknown field, or validation error (message in `error`) |
+| 401 | Missing, invalid, expired or revoked token / API key |
+| 403 | Outside the caller's role or tenant, or a forbidden self-action |
+| 404 | Domain, account, alias, tenant or queue entry not found |
+| 409 | Already exists (tenant `409` includes the existing tenant), or setup already complete |
+| 429 | Too many login attempts from this IP |
+| 503 | Feature not wired on this instance (queue, logs, delivery probe, blob store, quota store) |
+
+### Idempotency
+
+| Operation | Repeated call |
+|-----------|---------------|
+| Create domain / account / alias | `409` (already exists): nothing changed. Treat `409` as "exists" if you only need it to exist. |
+| Create tenant | with `external_id`: `409` plus the existing tenant. Without it: creates a duplicate (names are not unique) |
+| PATCH domain / account / tenant | idempotent (same body, same result) |
+| DELETE domain / account / tenant / alias | second call returns `404` |
+| Queue retry / hold / unhold | idempotent (`200`) |
+
+## Examples
+
+The bodies below show the wire format as built by the handlers. Values are fictional.
+
+**Create a domain with DKIM**
+
+```http
+POST /api/v1/domains
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{"name":"example.org","mail_hostname":"mail.example.org","ssl_mode":"acme","dkim_enabled":true,"storage_bytes":1073741824}
+```
+
+```json
+201 Created
+{"id":2,"name":"example.org","tenant_id":1,"mail_hostname":"mail.example.org","ssl_mode":"acme",
+ "dkim_enabled":true,"dkim_selector":"beaver","dkim_dns_name":"beaver._domainkey.example.org",
+ "dkim_dns_value":"v=DKIM1; k=rsa; p=MIIBIjANBg...","storage_bytes":1073741824,
+ "account_count":0,"storage_used":0,"ssl_active":false,"dkim_active":true,"antispam_active":false}
+```
+
+**Create a mailbox**
+
+```http
+POST /api/v1/domains/example.org/accounts
+
+{"local_part":"alice","password":"correct horse battery staple"}
+```
+
+```json
+201 Created
+{"id":7,"local_part":"alice","email":"alice@example.org","role":"user","tenant_id":1,"active":true,
+ "storage_used":0,"storage_limit":0,"messages_used":0,"messages_limit":0}
+```
+
+**Set a mailbox quota (1 GiB, no message cap)**
+
+```http
+PATCH /api/v1/accounts/alice@example.org
+
+{"storage_limit":1073741824,"messages_limit":0}
+```
+
+```json
+200 OK
+{"id":7,"local_part":"alice","email":"alice@example.org","role":"user","tenant_id":1,"active":true,
+ "storage_used":52428800,"storage_limit":1073741824,"messages_used":1200,"messages_limit":0}
+```
+
+**Change password, then disable**
+
+```http
+PATCH /api/v1/accounts/alice@example.org
+
+{"password":"new secret"}
+```
+
+```http
+PATCH /api/v1/accounts/alice@example.org
+
+{"active":false}
+```
+
+**List mailboxes with usage**
+
+```json
+GET /api/v1/domains/example.org/accounts
+200 OK
+{"accounts":[{"id":7,"local_part":"alice","email":"alice@example.org","role":"user","tenant_id":1,"active":true,
+ "storage_used":52428800,"storage_limit":1073741824,"messages_used":1200,"messages_limit":0}]}
+```
+
+**DNS records to show the customer**
+
+```json
+GET /api/v1/domains/example.org/dns-recommended
+200 OK
+{"domain":"example.org","records":[
+ {"type":"MX","host":"example.org","value":"10 mail.example.org"},
+ {"type":"TXT","host":"example.org","value":"v=spf1 mx a:mail.example.org ~all"},
+ {"type":"TXT","host":"beaver._domainkey.example.org","value":"v=DKIM1; k=rsa; p=MIIBIjANBg..."},
+ {"type":"TXT","host":"_dmarc.example.org","value":"v=DMARC1; p=none; rua=mailto:dmarc-reports@example.org","note":"monitoring only; ..."},
+ {"type":"TXT","host":"_smtp._tls.example.org","value":"v=TLSRPTv1; rua=mailto:tls-reports@example.org"},
+ {"type":"CNAME","host":"autoconfig.example.org","value":"mail.example.org"},
+ {"type":"CNAME","host":"autodiscover.example.org","value":"mail.example.org"}]}
+```
+
+**Delete a domain**
+
+```http
+DELETE /api/v1/domains/example.org
+
+{"confirm":"example.org"}
+```
+
+```json
+200 OK
+{"name":"example.org","accounts_deleted":1}
+```
+
+**Error**
+
+```json
+409 Conflict
+{"error":"address already used by a mailbox or alias"}
+```
+
+## Notes for LLM agents and tool builders
+
+- Map one endpoint to one tool. Read-only tools (all `GET`, plus `/delivery/test`) are safe to call freely.
+- **Destructive calls**: `DELETE /tenants/{id}`, `DELETE /domains/{domain}`, `DELETE /accounts/{email}`,
+  `DELETE /queue/{id}`. They permanently delete mail or cancel delivery. Ask the human before calling them. Tenant and
+  domain deletes also require a `confirm` field equal to the name.
+- `PATCH` on domains, accounts and tenants changes only the fields you send; send `0` or `""` to clear a value.
+- Do not invent fields; unknown keys fail the whole request.
+- Always send `external_id` when creating a tenant, so a retried call cannot create a duplicate.
+- `PATCH /aliases/{email}` replaces the whole target list; to add one target, GET the alias and send the full list.
+- Prefer an API key (`provisioner`) over a password login; on `401` with an API key, stop and ask: the key was
+  revoked. With a session token, log in again (tokens expire after 12 h).
+- Never put passwords or API keys in logs or prompts. For an agent that serves one customer, a `tenant_admin`
+  account scoped to that tenant is narrower than a `provisioner` key.

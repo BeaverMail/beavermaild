@@ -1,0 +1,76 @@
+# BeaverMail
+
+Mail server in Go, one binary: SMTP (inbound, submission, outbound queue), IMAP, TLS with ACME, DKIM signing,
+SPF/DKIM/DMARC/ARC checks, antispam, multi-tenant admin UI and HTTP API. Planned: POP3, CalDAV, CardDAV, Sieve.
+
+## Status
+
+**Usable in production for small installations** (one server, a few domains and users). Version 0.x: configuration
+and API may still change between releases; read the [changelog](CHANGELOG.md) before upgrading.
+
+Not available yet: forwarding to external addresses (SRS), server-side filters (Sieve) and vacation replies, POP3,
+CalDAV/CardDAV. Linux amd64 only. Install: [docs/install.md](docs/install.md). Security reports: [SECURITY.md](SECURITY.md).
+
+## Build
+
+`beaver init` writes `/etc/beavermail/config.json` with data under `/var/lib/beavermail` (override with `-c`/`BEAVER_CONFIG` and `-data-dir`/`BEAVER_DATA_DIR`). Pass `-hostname mail.example.com` on a dedicated server: ACME certificate for that name, admin UI on `:443`, `:80` for ACME challenges and redirects, and public mail ports (SMTP `:25`, submission `:587`/`:465`, IMAP `:143`/`:993`). Without it everything stays on loopback dev ports and the admin UI listens on `127.0.0.1:8080` (use an SSH tunnel, `ssh -L 8080:127.0.0.1:8080 host`, or a reverse proxy).
+
+For local development, keep everything in the tree:
+
+```bash
+make beaver          # embeds admin UI (needs Node)
+./beaver version
+export BEAVER_CONFIG=data/config.json
+./beaver init -data-dir data
+./beaver seed
+./beaver auth alice@localhost beaver
+./beaver serve
+```
+
+Or pass `-c` per command: `./beaver -c data/config.json seed`
+
+Inbound SMTP listens on `127.0.0.1:1025` by default (`smtp.listen` in config.json, or `BEAVER_SMTP_LISTEN`). After `seed`, deliver a test message:
+
+```bash
+# swaks, or any SMTP client
+swaks --to alice@localhost --from sender@example.com --server 127.0.0.1 --port 1025 --body "hello"
+
+# minimal netcat session
+printf 'EHLO test\r\nMAIL FROM:<sender@example.com>\r\nRCPT TO:<alice@localhost>\r\nDATA\r\nSubject: hi\r\n\r\nhello\r\n.\r\nQUIT\r\n' | nc 127.0.0.1 1025
+```
+
+Messages are stored under the data dir (`store.sqlite` metadata, `blobs/` raw RFC 5322 bytes).
+
+IMAP listens on `127.0.0.1:1143` by default (`imap.listen` or `BEAVER_IMAP_LISTEN`). After delivering mail, read INBOX:
+
+```bash
+printf 'a1 LOGIN alice@localhost beaver\r\na2 SELECT INBOX\r\na3 FETCH 1 BODY[]\r\na4 LOGOUT\r\n' | nc 127.0.0.1 1143
+```
+
+Outbound mail uses a queue drained by `beaver serve` (local recipients go to INBOX; set `smtp.relay` or `BEAVER_SMTP_RELAY` for remote). Enqueue manually:
+
+```bash
+./beaver send -from sender@example.com -to alice@localhost hello via queue
+```
+
+Queue retry uses a fixed interval table (`queue.retry_intervals`): `2m, 5m, 10m, 15m, 30m, 1h, 2h, 24h, 3d` by default; `max_lifetime` 3d; worker poll `run_delay` 1s; delivered/failed entries stay listed (with the remote server's reply or last error) for `keep_completed` 7d (`"0"` deletes them at once). Override in `config.json`:
+
+```json
+"queue": { "run_delay": "5s" }
+```
+
+Or set `BEAVER_QUEUE_RUN_DELAY=5s` for faster local testing.
+
+## License
+
+Copyright (c) 2026 BLUEBOX SOFTWARE S.L.
+
+BeaverMail is licensed under the GNU Affero General Public License v3.0 only (`AGPL-3.0-only`), see
+[LICENSE](LICENSE). Third-party notices: [NOTICE](NOTICE).
+
+For a commercial license without the AGPL obligations, contact legal@blueboxsoft.com.
+
+## Contributing
+
+Contributions are accepted under the [Contributor License Agreement](CLA.md); the CLA Assistant bot asks you to sign it
+on your first pull request.

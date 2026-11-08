@@ -1,0 +1,55 @@
+# Example systemd unit for BeaverMail (the Debian package ships it with /usr/bin/beaver).
+# Tarball install:
+#   useradd --system --home-dir /var/lib/beavermail --shell /usr/sbin/nologin beavermail
+#   install -d -o root -g beavermail -m 2750 /etc/beavermail
+#   install -m 755 beaver /usr/local/bin/beaver
+#   install -D -m 755 beaver-plugin-antispam /var/lib/beavermail/plugins/beaver-plugin-antispam
+#   beaver init -data-dir /var/lib/beavermail -hostname mx.example.com
+#   cp beavermail.service /etc/systemd/system/ && systemctl daemon-reload && systemctl enable --now beavermail
+# systemd creates /var/lib/beavermail (StateDirectory) and gives it to beavermail on start.
+# Logs: journalctl -u beavermail (stderr) and log.file under the data dir.
+
+[Unit]
+Description=BeaverMail mail server (SMTP, IMAP, admin UI)
+Documentation=https://github.com/BeaverMail/beavermaild
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=beavermail
+Group=beavermail
+ExecStart=/usr/local/bin/beaver serve -c /etc/beavermail/config.json
+Restart=on-failure
+RestartSec=5s
+# SIGTERM drains sessions (IMAP BYE, SMTP 421) for up to ~7 s before exit.
+KillSignal=SIGTERM
+TimeoutStopSec=15s
+
+# Bind 25/80/143/443/465/587/993 without running as root.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+LimitNOFILE=65536
+
+# Hardening: only the data dir is writable; config is read-only; new files are owner-only
+# (beaver also sets this umask itself).
+UMask=0077
+# Created, owned by beavermail and set to 0700 by systemd on every start.
+StateDirectory=beavermail
+StateDirectoryMode=0700
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadOnlyPaths=/etc/beavermail
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

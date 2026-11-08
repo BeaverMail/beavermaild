@@ -1,0 +1,3 @@
+# Trusted From domains (subdomains included), one per line.
+# DMARC pass scores WHITELIST_DMARC (-7), DMARC fail scores BLACKLIST_DMARC (+6). Listed domains are not sent to DBL.
+# example.com
