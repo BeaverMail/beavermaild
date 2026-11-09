@@ -1,6 +1,8 @@
 // IMAP SEARCH program tree evaluation (AND/OR/NOT/parentheses).
 package mail
 
+import "context"
+
 // SearchExprKind tags nodes in an IMAP SEARCH program.
 type SearchExprKind int
 
@@ -27,16 +29,25 @@ func MatchSearchExpr(msgs []Message, expr SearchExpr) []uint32 {
 
 // MatchSearchExprWithLoader evaluates expr with optional raw loader for header/body criteria.
 func MatchSearchExprWithLoader(msgs []Message, expr SearchExpr, load RawLoader) []uint32 {
+	out, _ := MatchSearchExprContext(context.Background(), msgs, expr, load)
+	return out
+}
+
+// MatchSearchExprContext is MatchSearchExprWithLoader that stops with ctx.Err() once ctx is done.
+func MatchSearchExprContext(ctx context.Context, msgs []Message, expr SearchExpr, load RawLoader) ([]uint32, error) {
 	var out []uint32
 	pos := newSearchPos(msgs)
 	for i, m := range msgs {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		pos.seq = uint32(i + 1)
 		if !matchSearchExprOne(m, pos, &expr, load) {
 			continue
 		}
 		out = append(out, pos.seq)
 	}
-	return out
+	return out, nil
 }
 
 // UsesModSeq reports whether expr contains a MODSEQ criterion (RFC 7162: the SEARCH and SORT

@@ -2,6 +2,7 @@
 package mail
 
 import (
+	"context"
 	"sort"
 )
 
@@ -14,9 +15,18 @@ type threadMember struct {
 
 // ThreadReferences groups matching messages into threads sorted by arrival within each thread.
 func ThreadReferences(msgs []Message, expr SearchExpr, load RawLoader) [][]uint32 {
+	out, _ := ThreadReferencesContext(context.Background(), msgs, expr, load)
+	return out
+}
+
+// ThreadReferencesContext is ThreadReferences that stops with ctx.Err() once ctx is done.
+func ThreadReferencesContext(ctx context.Context, msgs []Message, expr SearchExpr, load RawLoader) ([][]uint32, error) {
 	var members []threadMember
 	pos := newSearchPos(msgs)
 	for i, m := range msgs {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		pos.seq = uint32(i + 1)
 		if !matchSearchExprOne(m, pos, &expr, load) {
 			continue
@@ -34,7 +44,7 @@ func ThreadReferences(msgs []Message, expr SearchExpr, load RawLoader) [][]uint3
 		members = append(members, tm)
 	}
 	if len(members) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	idToIdx := make(map[string]int, len(members))
@@ -89,7 +99,7 @@ func ThreadReferences(msgs []Message, expr SearchExpr, load RawLoader) [][]uint3
 	sort.Slice(threads, func(i, j int) bool {
 		return threads[i][0] < threads[j][0]
 	})
-	return threads
+	return threads, nil
 }
 
 // ThreadReferencesUIDs returns UID lists per thread.

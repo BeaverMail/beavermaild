@@ -25,10 +25,14 @@ func (s *session) cmdSort(ctx context.Context, tag, arg string, byUID bool) erro
 	case searchSyntaxError:
 		return s.tagged(tag, "BAD SORT syntax")
 	}
+	w := s.watchCommand(ctx)
 	load := mail.RawLoader(func(m mail.Message) ([]byte, error) {
-		return s.inbox.LoadRaw(ctx, m.Meta)
+		return s.inbox.LoadRaw(w.ctx, m.Meta)
 	})
-	seqs := mail.SortMessages(s.messages, keys, reverse, expr, load)
+	seqs, _ := mail.SortMessagesContext(w.ctx, s.messages, keys, reverse, expr, load)
+	if cause := w.end(); cause != nil {
+		return s.abortCommand(tag, cause)
+	}
 	resp := formatSort(s.seqsOrUIDs(seqs, byUID)) + s.searchModSeqSuffix(&expr, seqs)
 	if err := s.untagged(resp); err != nil {
 		return err
@@ -55,14 +59,16 @@ func (s *session) cmdThread(ctx context.Context, tag, arg string, byUID bool) er
 	case searchSyntaxError:
 		return s.tagged(tag, "BAD THREAD syntax")
 	}
+	w := s.watchCommand(ctx)
 	load := mail.RawLoader(func(m mail.Message) ([]byte, error) {
-		return s.inbox.LoadRaw(ctx, m.Meta)
+		return s.inbox.LoadRaw(w.ctx, m.Meta)
 	})
-	var threads [][]uint32
-	if byUID {
-		threads = mail.ThreadReferencesUIDs(s.messages, expr, load)
-	} else {
-		threads = mail.ThreadReferences(s.messages, expr, load)
+	threads, _ := mail.ThreadReferencesContext(w.ctx, s.messages, expr, load)
+	if cause := w.end(); cause != nil {
+		return s.abortCommand(tag, cause)
+	}
+	for i, th := range threads {
+		threads[i] = s.seqsOrUIDs(th, byUID)
 	}
 	if err := s.untagged(formatThread(threads)); err != nil {
 		return err

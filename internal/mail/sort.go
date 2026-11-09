@@ -2,6 +2,7 @@
 package mail
 
 import (
+	"context"
 	"net/mail"
 	"sort"
 	"strings"
@@ -39,12 +40,21 @@ type sortFields struct {
 
 // SortMessages returns 1-based sequence numbers matching expr, sorted by keys.
 func SortMessages(msgs []Message, keys []SortKey, reverse bool, expr SearchExpr, load RawLoader) []uint32 {
+	out, _ := SortMessagesContext(context.Background(), msgs, keys, reverse, expr, load)
+	return out
+}
+
+// SortMessagesContext is SortMessages that stops with ctx.Err() once ctx is done.
+func SortMessagesContext(ctx context.Context, msgs []Message, keys []SortKey, reverse bool, expr SearchExpr, load RawLoader) ([]uint32, error) {
 	if len(keys) == 0 {
-		return nil
+		return nil, nil
 	}
 	var rows []sortRow
 	pos := newSearchPos(msgs)
 	for i, m := range msgs {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		pos.seq = uint32(i + 1)
 		if !matchSearchExprOne(m, pos, &expr, load) {
 			continue
@@ -73,7 +83,7 @@ func SortMessages(msgs []Message, keys []SortKey, reverse bool, expr SearchExpr,
 	for i, r := range rows {
 		out[i] = r.seq
 	}
-	return out
+	return out, nil
 }
 
 // SortUIDs returns UIDs in SORT order.

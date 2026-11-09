@@ -616,10 +616,14 @@ func (s *session) cmdSearch(ctx context.Context, tag, arg string, byUID bool) er
 	case searchSyntaxError:
 		return s.tagged(tag, "BAD SEARCH syntax")
 	}
+	w := s.watchCommand(ctx)
 	load := mail.RawLoader(func(m mail.Message) ([]byte, error) {
-		return s.inbox.LoadRaw(ctx, m.Meta)
+		return s.inbox.LoadRaw(w.ctx, m.Meta)
 	})
-	seqs := mail.MatchSearchExprWithLoader(s.messages, expr, load)
+	seqs, _ := mail.MatchSearchExprContext(w.ctx, s.messages, expr, load)
+	if cause := w.end(); cause != nil {
+		return s.abortCommand(tag, cause)
+	}
 	resp := formatSearch(s.seqsOrUIDs(seqs, byUID)) + s.searchModSeqSuffix(&expr, seqs)
 	if err := s.untagged(resp); err != nil {
 		return err

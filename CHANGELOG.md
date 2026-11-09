@@ -12,6 +12,8 @@
 - IMAP THREAD: thread lists in the response follow each other with no space (`(1 2)(5)`), as RFC 5256 requires.
 - IMAP BODYSTRUCTURE: an empty MIME parameter value (e.g. `name=""`) is sent as `""` instead of `NIL`, which
   strict clients rejected as a parse error.
+- IMAP SEARCH/SORT/THREAD stop when the client disconnects, instead of reading every message of the mailbox
+  first; during shutdown they end with `NO [UNAVAILABLE]`.
 
 ## 0.3.0
 
