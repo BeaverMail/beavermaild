@@ -2,6 +2,7 @@
 package imap
 
 import (
+	"errors"
 	"strconv"
 	"strings"
 )
@@ -86,3 +87,39 @@ func parseTrailingUnchangedSince(rest string) (since uint64, remaining string, o
 func formatModSeq(modSeq uint64) string {
 	return "MODSEQ (" + strconv.FormatUint(modSeq, 10) + ")"
 }
+
+// parseChangedSince strips a trailing FETCH modifier "(CHANGEDSINCE n)" (RFC 7162 3.1.4).
+// found reports the modifier; ok is false when it is present but malformed.
+func parseChangedSince(rest string) (items string, since uint64, found, ok bool) {
+	rest = strings.TrimSpace(rest)
+	const paren = "(CHANGEDSINCE "
+	idx := strings.LastIndex(strings.ToUpper(rest), paren)
+	if idx < 0 {
+		return rest, 0, false, true
+	}
+	num, closed := strings.CutSuffix(rest[idx+len(paren):], ")")
+	n, err := strconv.ParseUint(strings.TrimSpace(num), 10, 63)
+	if !closed || err != nil {
+		return rest, 0, true, false
+	}
+	return strings.TrimSpace(rest[:idx]), n, true, true
+}
+
+// selectMailboxArg parses the SELECT/EXAMINE argument: a mailbox name optionally followed by
+// RFC 4466 select parameters, of which only CONDSTORE is known (it is always enabled anyway).
+func selectMailboxArg(arg string) (string, error) {
+	arg = strings.TrimSpace(arg)
+	if strings.HasSuffix(arg, ")") {
+		if i := strings.LastIndex(arg, " ("); i >= 0 {
+			for _, p := range strings.Fields(arg[i+2 : len(arg)-1]) {
+				if !strings.EqualFold(p, "CONDSTORE") {
+					return "", errUnknownSelectParam
+				}
+			}
+			arg = arg[:i]
+		}
+	}
+	return mailboxNameFromArg(arg)
+}
+
+var errUnknownSelectParam = errors.New("imap: unknown SELECT parameter")

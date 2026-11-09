@@ -170,17 +170,23 @@ func (s *session) run(ctx context.Context) error {
 				return err
 			}
 		case "SELECT":
-			name, err := mailboxNameFromArg(arg)
+			name, err := selectMailboxArg(arg)
 			if err != nil {
-				return s.tagged(tag, "BAD mailbox name syntax")
+				if err := s.tagged(tag, "BAD mailbox name syntax"); err != nil {
+					return err
+				}
+				continue
 			}
 			if err := s.openMailbox(ctx, tag, name, false); err != nil {
 				return err
 			}
 		case "EXAMINE":
-			name, err := mailboxNameFromArg(arg)
+			name, err := selectMailboxArg(arg)
 			if err != nil {
-				return s.tagged(tag, "BAD mailbox name syntax")
+				if err := s.tagged(tag, "BAD mailbox name syntax"); err != nil {
+					return err
+				}
+				continue
 			}
 			if err := s.openMailbox(ctx, tag, name, true); err != nil {
 				return err
@@ -542,6 +548,9 @@ func (s *session) cmdFetch(ctx context.Context, tag, arg string, byUID bool) err
 	}
 	indices := s.resolveIndices(set, byUID)
 	for _, idx := range indices {
+		if items.hasChangedSince && max(s.messages[idx].Meta.ModSeq, 1) <= items.changedSince {
+			continue
+		}
 		if err := s.writeFetch(ctx, idx+1, s.messages[idx], items, byUID); err != nil {
 			return err
 		}
@@ -565,7 +574,7 @@ func (s *session) cmdStore(ctx context.Context, tag, arg string, byUID bool) err
 		return s.tagged(tag, "BAD STORE syntax")
 	}
 	indices := s.resolveIndices(setParsed, byUID)
-	var modified bool
+	var failed []uint32
 	for _, idx := range indices {
 		msg := s.messages[idx]
 		var unchanged uint64
@@ -577,7 +586,7 @@ func (s *session) cmdStore(ctx context.Context, tag, arg string, byUID bool) err
 			return err
 		}
 		if !applied {
-			modified = true
+			failed = append(failed, s.seqsOrUIDs([]uint32{uint32(idx + 1)}, byUID)...)
 			continue
 		}
 		s.messages[idx].Meta = meta
@@ -599,8 +608,8 @@ func (s *session) cmdStore(ctx context.Context, tag, arg string, byUID bool) err
 			}
 		}
 	}
-	if modified {
-		return s.tagged(tag, "OK STORE completed (MODIFIED)")
+	if len(failed) > 0 {
+		return s.tagged(tag, "OK [MODIFIED "+formatUIDSet(failed)+"] Conditional STORE failed")
 	}
 	return s.tagged(tag, "OK STORE completed")
 }
@@ -1094,6 +1103,8 @@ func parseQuoted(s string) (val, rest string, ok bool) {
 type fetchItems struct {
 	uid, flags, size, envelope, bodystructure, internalDate, modseq bool
 	bodySections                                                    []bodySectionFetch
+	changedSince                                                    uint64
+	hasChangedSince                                                 bool
 }
 
 func parseFetchArg(arg string) (setStr string, items fetchItems, ok bool) {
@@ -1106,7 +1117,15 @@ func parseFetchArg(arg string) (setStr string, items fetchItems, ok bool) {
 		return arg, fetchItems{bodySections: []bodySectionFetch{{itemName: "BODY[]", section: ""}}}, true
 	}
 	setStr = strings.TrimSpace(arg[:i])
-	items, ok = parseFetchItems(arg[i+1:])
+	rest, since, found, ok := parseChangedSince(arg[i+1:])
+	if !ok {
+		return "", items, false
+	}
+	items, ok = parseFetchItems(rest)
+	if found {
+		// CHANGEDSINCE implies MODSEQ in every response (RFC 7162 3.1.4.1).
+		items.changedSince, items.hasChangedSince, items.modseq = since, true, true
+	}
 	return setStr, items, ok
 }
 
