@@ -31,18 +31,18 @@ func TestClearRecentFlags(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	n, err := inbox.ClearRecentFlags(ctx, acc.ID, mail.InboxMailboxID)
+	ids, err := inbox.ClearRecentFlags(ctx, acc.ID, mail.InboxMailboxID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != 1 {
-		t.Fatalf("recent %d", n)
+	if len(ids) != 1 {
+		t.Fatalf("recent %v", ids)
 	}
-	n, err = inbox.ClearRecentFlags(ctx, acc.ID, mail.InboxMailboxID)
+	ids, err = inbox.ClearRecentFlags(ctx, acc.ID, mail.InboxMailboxID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != 0 {
+	if n := len(ids); n != 0 {
 		t.Fatalf("second clear %d", n)
 	}
 }

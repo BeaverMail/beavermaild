@@ -60,11 +60,11 @@ func (ib *Inbox) SetFlags(ctx context.Context, accountID, emailID uint32, set, c
 	return err
 }
 
-// ClearRecentFlags clears \Recent on all messages in mailboxID and returns how many were recent.
-func (ib *Inbox) ClearRecentFlags(ctx context.Context, accountID, mailboxID uint32) (int, error) {
+// ClearRecentFlags clears \Recent on all messages in mailboxID and returns the IDs it cleared.
+func (ib *Inbox) ClearRecentFlags(ctx context.Context, accountID, mailboxID uint32) ([]uint32, error) {
 	msgs, err := ib.List(ctx, accountID, mailboxID)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	var ids []uint32
 	for _, m := range msgs {
@@ -73,11 +73,11 @@ func (ib *Inbox) ClearRecentFlags(ctx context.Context, accountID, mailboxID uint
 		}
 	}
 	if len(ids) == 0 {
-		return 0, nil
+		return nil, nil
 	}
-	var recent int
+	var cleared []uint32
 	err = ib.update(ctx, func(t *txn) error {
-		recent = 0
+		cleared = cleared[:0]
 		mbox, err := t.mailbox(accountID, mailboxID)
 		if err != nil {
 			return err
@@ -93,19 +93,19 @@ func (ib *Inbox) ClearRecentFlags(ctx context.Context, accountID, mailboxID uint
 			if meta.Flags&FlagRecent == 0 || meta.MailboxID != mailboxID {
 				continue
 			}
-			recent++
+			cleared = append(cleared, id)
 			meta.Flags &^= FlagRecent
 			meta.ModSeq = nextModSeq(&mbox)
 			if err := t.putMeta(accountID, id, meta); err != nil {
 				return err
 			}
 		}
-		if recent == 0 {
+		if len(cleared) == 0 {
 			return nil
 		}
 		return t.putMailbox(accountID, mbox)
 	})
-	return recent, err
+	return cleared, err
 }
 
 // GetMeta loads EmailMeta for accountID and emailID.

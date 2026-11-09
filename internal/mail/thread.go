@@ -1,27 +1,49 @@
-// IMAP THREAD REFERENCES (RFC 5255): group messages by Message-ID links.
+// IMAP THREAD REFERENCES (RFC 5256 section 4).
 package mail
 
 import (
 	"context"
-	"sort"
+	"net/mail"
+	"slices"
+	"strconv"
+	"time"
 )
 
-type threadMember struct {
-	seq     uint32
-	arrival int64
-	msgID   string
-	headers MsgHeaders
+// ThreadNode is one node of a thread tree: a message (Seq > 0) or a dummy that only groups its
+// children (Seq == 0, for a referenced message that is missing or a shared subject).
+type ThreadNode struct {
+	Seq      uint32
+	Children []*ThreadNode
 }
 
-// ThreadReferences groups matching messages into threads sorted by arrival within each thread.
-func ThreadReferences(msgs []Message, expr SearchExpr, load RawLoader) [][]uint32 {
+// threadContainer is a node while the threads are built.
+type threadContainer struct {
+	seq      uint32 // 0: dummy
+	date     time.Time
+	subject  string
+	parent   *threadContainer
+	children []*threadContainer
+}
+
+// ThreadReferences threads the messages matching expr; see ThreadReferencesContext.
+func ThreadReferences(msgs []Message, expr SearchExpr, load RawLoader) []*ThreadNode {
 	out, _ := ThreadReferencesContext(context.Background(), msgs, expr, load)
 	return out
 }
 
-// ThreadReferencesContext is ThreadReferences that stops with ctx.Err() once ctx is done.
-func ThreadReferencesContext(ctx context.Context, msgs []Message, expr SearchExpr, load RawLoader) ([][]uint32, error) {
-	var members []threadMember
+// ThreadReferencesContext runs the REFERENCES algorithm over the messages matching expr and
+// returns the thread trees in order. It stops with ctx.Err() once ctx is done.
+func ThreadReferencesContext(ctx context.Context, msgs []Message, expr SearchExpr, load RawLoader) ([]*ThreadNode, error) {
+	ids := map[string]*threadContainer{}
+	byID := func(id string) *threadContainer {
+		c := ids[id]
+		if c == nil {
+			c = &threadContainer{}
+			ids[id] = c
+		}
+		return c
+	}
+	var all []*threadContainer
 	pos := newSearchPos(msgs)
 	for i, m := range msgs {
 		if err := ctx.Err(); err != nil {
@@ -31,105 +53,230 @@ func ThreadReferencesContext(ctx context.Context, msgs []Message, expr SearchExp
 		if !matchSearchExprOne(m, pos, &expr, load) {
 			continue
 		}
-		tm := threadMember{
-			seq:     uint32(i + 1),
-			arrival: m.Meta.ReceivedAt,
-		}
+		var h MsgHeaders
 		if load != nil {
 			if raw, err := load(m); err == nil {
-				tm.headers = ParseMsgHeaders(raw)
-				tm.msgID = tm.headers.MessageID
+				h = ParseMsgHeaders(raw)
 			}
 		}
-		members = append(members, tm)
-	}
-	if len(members) == 0 {
-		return nil, nil
-	}
+		date := time.Unix(m.Meta.ReceivedAt, 0)
+		if t, err := mail.ParseDate(h.Date); err == nil {
+			date = t
+		}
 
-	idToIdx := make(map[string]int, len(members))
-	for i, m := range members {
-		if m.msgID != "" {
-			idToIdx[m.msgID] = i
+		// (1) The message's container: a missing or duplicate Message-ID gets a unique one.
+		id := h.MessageID
+		if id == "" || (ids[id] != nil && ids[id].seq != 0) {
+			id = "\x00" + strconv.Itoa(i)
 		}
-	}
-	parent := make([]int, len(members))
-	for i := range parent {
-		parent[i] = i
-	}
-	var find func(int) int
-	find = func(x int) int {
-		if parent[x] != x {
-			parent[x] = find(parent[x])
-		}
-		return parent[x]
-	}
-	union := func(a, b int) {
-		ra, rb := find(a), find(b)
-		if ra != rb {
-			parent[rb] = ra
-		}
-	}
-	for i, m := range members {
-		if p := findThreadParent(m.headers, idToIdx); p >= 0 {
-			union(i, p)
-		}
-	}
+		c := byID(id)
+		c.seq, c.date, c.subject = uint32(i+1), date, h.Subject
+		all = append(all, c)
 
-	groups := make(map[int][]threadMember)
-	for i, m := range members {
-		root := find(i)
-		groups[root] = append(groups[root], m)
-	}
-
-	threads := make([][]uint32, 0, len(groups))
-	for _, g := range groups {
-		sort.Slice(g, func(i, j int) bool {
-			if g[i].arrival != g[j].arrival {
-				return g[i].arrival < g[j].arrival
+		// (1A) Link the references in order, parent before child, without loops or re-parenting.
+		refs := h.References
+		if len(refs) == 0 {
+			if irt := ParseMessageIDList(h.InReplyTo); len(irt) > 0 {
+				refs = irt[:1]
 			}
-			return g[i].seq < g[j].seq
-		})
-		nums := make([]uint32, len(g))
-		for i, m := range g {
-			nums[i] = m.seq
 		}
-		threads = append(threads, nums)
+		var prev *threadContainer
+		for _, ref := range refs {
+			rc := byID(ref)
+			if prev != nil && rc.parent == nil && !isThreadAncestor(rc, prev) {
+				link(prev, rc)
+			}
+			prev = rc
+		}
+		// (1B) The last reference is the message's parent, replacing any earlier parent.
+		if prev != nil && prev != c && isThreadAncestor(c, prev) {
+			prev = nil
+		}
+		if c.parent != nil {
+			unlink(c)
+		}
+		if prev != nil && prev != c {
+			link(prev, c)
+		}
 	}
-	sort.Slice(threads, func(i, j int) bool {
-		return threads[i][0] < threads[j][0]
-	})
-	return threads, nil
+
+	// (2) Root set; (4) prune dummies.
+	var roots []*threadContainer
+	for _, c := range ids {
+		if c.parent == nil {
+			roots = append(roots, c)
+		}
+	}
+	roots = pruneThreads(roots, true)
+	for _, r := range roots {
+		r.parent = nil
+	}
+
+	// (5) Sort the root set by sent date (a dummy uses its first child's date).
+	for _, r := range roots {
+		sortThreadChildren(r)
+	}
+	sortThreadSiblings(roots)
+
+	// (6) Group the root set by base subject.
+	roots = groupThreadsBySubject(roots)
+
+	// (7) Sort children again: merges may have appended out of order.
+	for _, r := range roots {
+		sortThreadChildren(r)
+	}
+	out := make([]*ThreadNode, len(roots))
+	for i, r := range roots {
+		out[i] = r.node()
+	}
+	return out, nil
 }
 
-// ThreadReferencesUIDs returns UID lists per thread.
-func ThreadReferencesUIDs(msgs []Message, expr SearchExpr, load RawLoader) [][]uint32 {
-	threads := ThreadReferences(msgs, expr, load)
-	out := make([][]uint32, len(threads))
-	for i, th := range threads {
-		uids := make([]uint32, len(th))
-		for j, seq := range th {
-			uids[j] = msgs[seq-1].UID
+func link(parent, child *threadContainer) {
+	child.parent = parent
+	parent.children = append(parent.children, child)
+}
+
+func unlink(c *threadContainer) {
+	p := c.parent
+	p.children = slices.DeleteFunc(p.children, func(x *threadContainer) bool { return x == c })
+	c.parent = nil
+}
+
+// isThreadAncestor reports whether a is b or one of b's ancestors.
+func isThreadAncestor(a, b *threadContainer) bool {
+	for x := b; x != nil; x = x.parent {
+		if x == a {
+			return true
 		}
-		out[i] = uids
+	}
+	return false
+}
+
+// pruneThreads removes empty dummies and promotes the children of dummies, except a root dummy
+// with several children, which stays to group them.
+func pruneThreads(level []*threadContainer, root bool) []*threadContainer {
+	var out []*threadContainer
+	for _, c := range level {
+		c.children = pruneThreads(c.children, false)
+		for _, ch := range c.children {
+			ch.parent = c
+		}
+		switch {
+		case c.seq != 0:
+			out = append(out, c)
+		case len(c.children) == 0:
+		case root && len(c.children) > 1:
+			out = append(out, c)
+		default:
+			out = append(out, c.children...)
+		}
 	}
 	return out
 }
 
-func findThreadParent(h MsgHeaders, idToIdx map[string]int) int {
-	if h.InReplyTo != "" {
-		if idx, ok := idToIdx[h.InReplyTo]; ok {
-			return idx
-		}
+// threadDate is a node's sent date; a dummy takes its first child's date after sorting.
+func (c *threadContainer) threadDate() (time.Time, uint32) {
+	if c.seq == 0 && len(c.children) > 0 {
+		return c.children[0].threadDate()
 	}
-	for i := len(h.References) - 1; i >= 0; i-- {
-		id := h.References[i]
-		if id == h.MessageID {
+	return c.date, c.seq
+}
+
+func sortThreadSiblings(level []*threadContainer) {
+	slices.SortStableFunc(level, func(a, b *threadContainer) int {
+		da, sa := a.threadDate()
+		db, sb := b.threadDate()
+		if n := da.Compare(db); n != 0 {
+			return n
+		}
+		return int(sa) - int(sb)
+	})
+}
+
+func sortThreadChildren(c *threadContainer) {
+	for _, ch := range c.children {
+		sortThreadChildren(ch)
+	}
+	sortThreadSiblings(c.children)
+}
+
+// threadSubject is the subject a root groups by: its own, or its first child's for a dummy.
+func (c *threadContainer) threadSubject() (string, bool) {
+	if c.seq == 0 && len(c.children) > 0 {
+		return c.children[0].threadSubject()
+	}
+	return BaseSubject(c.subject)
+}
+
+// groupThreadsBySubject merges roots that share a base subject (RFC 5256 step 6).
+func groupThreadsBySubject(roots []*threadContainer) []*threadContainer {
+	// (6A) One root per subject: a dummy beats a message, a non-reply beats a reply.
+	table := map[string]*threadContainer{}
+	for _, r := range roots {
+		subj, reply := r.threadSubject()
+		if subj == "" {
 			continue
 		}
-		if idx, ok := idToIdx[id]; ok {
-			return idx
+		old := table[subj]
+		_, oldReply := old.subjectOrEmpty()
+		if old == nil || (r.seq == 0 && old.seq != 0) || (oldReply && !reply) {
+			table[subj] = r
 		}
 	}
-	return -1
+	// (6B) Merge every other root with the table one.
+	var out []*threadContainer
+	placeholder := map[*threadContainer]*threadContainer{} // table root -> dummy that took its place
+	for _, r := range roots {
+		if r.parent != nil {
+			// Already merged under a dummy created for it: the dummy goes here.
+			if d := placeholder[r]; d != nil {
+				out = append(out, d)
+			}
+			continue
+		}
+		subj, reply := r.threadSubject()
+		t := table[subj]
+		if subj == "" || t == nil || t == r {
+			out = append(out, r)
+			continue
+		}
+		_, tReply := t.threadSubject()
+		switch {
+		case t.seq == 0 && r.seq == 0:
+			for _, ch := range r.children {
+				link(t, ch)
+			}
+		case t.seq == 0:
+			link(t, r)
+		case reply && !tReply:
+			link(t, r)
+		default:
+			d := &threadContainer{}
+			if i := slices.Index(out, t); i >= 0 {
+				out[i] = d
+			} else {
+				placeholder[t] = d
+			}
+			table[subj] = d
+			link(d, t)
+			link(d, r)
+		}
+	}
+	return out
+}
+
+func (c *threadContainer) subjectOrEmpty() (string, bool) {
+	if c == nil {
+		return "", false
+	}
+	return c.threadSubject()
+}
+
+func (c *threadContainer) node() *ThreadNode {
+	n := &ThreadNode{Seq: c.seq}
+	for _, ch := range c.children {
+		n.Children = append(n.Children, ch.node())
+	}
+	return n
 }

@@ -2,6 +2,7 @@
 package mail
 
 import (
+	"cmp"
 	"context"
 	"net/mail"
 	"sort"
@@ -22,6 +23,12 @@ const (
 	SortTo
 )
 
+// SortCriterion is one sort key; Reverse applies to that key only (RFC 5256 "REVERSE key").
+type SortCriterion struct {
+	Key     SortKey
+	Reverse bool
+}
+
 type sortRow struct {
 	seq    uint32
 	fields sortFields
@@ -30,7 +37,6 @@ type sortRow struct {
 type sortFields struct {
 	arrival int64
 	date    time.Time
-	hasDate bool
 	from    string
 	to      string
 	cc      string
@@ -38,15 +44,15 @@ type sortFields struct {
 	size    uint32
 }
 
-// SortMessages returns 1-based sequence numbers matching expr, sorted by keys.
-func SortMessages(msgs []Message, keys []SortKey, reverse bool, expr SearchExpr, load RawLoader) []uint32 {
-	out, _ := SortMessagesContext(context.Background(), msgs, keys, reverse, expr, load)
+// SortMessages returns 1-based sequence numbers matching expr, sorted by crits.
+func SortMessages(msgs []Message, crits []SortCriterion, expr SearchExpr, load RawLoader) []uint32 {
+	out, _ := SortMessagesContext(context.Background(), msgs, crits, expr, load)
 	return out
 }
 
 // SortMessagesContext is SortMessages that stops with ctx.Err() once ctx is done.
-func SortMessagesContext(ctx context.Context, msgs []Message, keys []SortKey, reverse bool, expr SearchExpr, load RawLoader) ([]uint32, error) {
-	if len(keys) == 0 {
+func SortMessagesContext(ctx context.Context, msgs []Message, crits []SortCriterion, expr SearchExpr, load RawLoader) ([]uint32, error) {
+	if len(crits) == 0 {
 		return nil, nil
 	}
 	var rows []sortRow
@@ -64,20 +70,19 @@ func SortMessagesContext(ctx context.Context, msgs []Message, keys []SortKey, re
 			fields: loadSortFields(m, load),
 		})
 	}
+	// Rows start in sequence order and the sort is stable: exact ties keep mailbox order, even
+	// under REVERSE (RFC 5256 section 3).
 	sort.SliceStable(rows, func(i, j int) bool {
-		for _, key := range keys {
-			cmp := compareSortFields(rows[i].fields, rows[j].fields, key)
+		for _, c := range crits {
+			cmp := compareSortFields(rows[i].fields, rows[j].fields, c.Key)
+			if c.Reverse {
+				cmp = -cmp
+			}
 			if cmp != 0 {
-				if reverse {
-					return cmp > 0
-				}
 				return cmp < 0
 			}
 		}
-		if reverse {
-			return rows[i].seq > rows[j].seq
-		}
-		return rows[i].seq < rows[j].seq
+		return false
 	})
 	out := make([]uint32, len(rows))
 	for i, r := range rows {
@@ -86,20 +91,11 @@ func SortMessagesContext(ctx context.Context, msgs []Message, keys []SortKey, re
 	return out, nil
 }
 
-// SortUIDs returns UIDs in SORT order.
-func SortUIDs(msgs []Message, keys []SortKey, reverse bool, expr SearchExpr, load RawLoader) []uint32 {
-	seqs := SortMessages(msgs, keys, reverse, expr, load)
-	out := make([]uint32, len(seqs))
-	for i, seq := range seqs {
-		out[i] = msgs[seq-1].UID
-	}
-	return out
-}
-
 func loadSortFields(m Message, load RawLoader) sortFields {
 	f := sortFields{
 		arrival: m.Meta.ReceivedAt,
 		size:    m.Meta.Size,
+		date:    time.Unix(m.Meta.ReceivedAt, 0),
 	}
 	if load == nil {
 		return f
@@ -109,48 +105,38 @@ func loadSortFields(m Message, load RawLoader) sortFields {
 		return f
 	}
 	h := ParseMsgHeaders(raw)
-	f.from = strings.ToLower(h.From)
-	f.to = strings.ToLower(h.To)
-	f.cc = strings.ToLower(h.Cc)
-	f.subject = strings.ToLower(h.Subject)
-	if h.Date != "" {
-		if t, err := mail.ParseDate(h.Date); err == nil {
-			f.date = t.UTC()
-			f.hasDate = true
-		}
+	// i;ascii-casemap compares upper-cased ASCII.
+	f.from = strings.ToUpper(firstAddrMailbox(h.From))
+	f.to = strings.ToUpper(firstAddrMailbox(h.To))
+	f.cc = strings.ToUpper(firstAddrMailbox(h.Cc))
+	base, _ := BaseSubject(h.Subject)
+	f.subject = strings.ToUpper(base)
+	// DATE is the sent date; without a valid Date header it is the internal date (RFC 5256).
+	if t, err := mail.ParseDate(h.Date); err == nil {
+		f.date = t
 	}
 	return f
+}
+
+// firstAddrMailbox returns the local part (addr-mailbox) of the first address in a header value.
+func firstAddrMailbox(value string) string {
+	for _, v := range []string{value, stripAddressComments(value)} {
+		if addrs, err := mail.ParseAddressList(v); err == nil && len(addrs) > 0 {
+			local, _, _ := strings.Cut(addrs[0].Address, "@")
+			return local
+		}
+	}
+	return ""
 }
 
 func compareSortFields(a, b sortFields, key SortKey) int {
 	switch key {
 	case SortArrival:
-		return compareInt64(a.arrival, b.arrival)
+		return cmp.Compare(a.arrival, b.arrival)
 	case SortSize:
-		if a.size < b.size {
-			return -1
-		}
-		if a.size > b.size {
-			return 1
-		}
-		return 0
+		return cmp.Compare(a.size, b.size)
 	case SortDate:
-		if !a.hasDate && !b.hasDate {
-			return 0
-		}
-		if !a.hasDate {
-			return -1
-		}
-		if !b.hasDate {
-			return 1
-		}
-		if a.date.Before(b.date) {
-			return -1
-		}
-		if a.date.After(b.date) {
-			return 1
-		}
-		return 0
+		return a.date.Compare(b.date)
 	case SortFrom:
 		return strings.Compare(a.from, b.from)
 	case SortTo:
@@ -162,14 +148,4 @@ func compareSortFields(a, b sortFields, key SortKey) int {
 	default:
 		return 0
 	}
-}
-
-func compareInt64(a, b int64) int {
-	if a < b {
-		return -1
-	}
-	if a > b {
-		return 1
-	}
-	return 0
 }

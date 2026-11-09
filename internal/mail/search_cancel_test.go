@@ -25,7 +25,7 @@ func TestSearchSortThreadStopOnCanceledContext(t *testing.T) {
 	if loads != 1 {
 		t.Fatalf("search loaded %d messages after cancel", loads)
 	}
-	if _, err := SortMessagesContext(ctx, msgs, []SortKey{SortArrival}, false, expr, load); !errors.Is(err, context.Canceled) {
+	if _, err := SortMessagesContext(ctx, msgs, []SortCriterion{{Key: SortArrival}}, expr, load); !errors.Is(err, context.Canceled) {
 		t.Fatalf("sort err %v", err)
 	}
 	if _, err := ThreadReferencesContext(ctx, msgs, expr, load); !errors.Is(err, context.Canceled) {
