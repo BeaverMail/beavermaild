@@ -2,11 +2,13 @@ package mail_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/BeaverMail/beavermaild/internal/directory"
 	"github.com/BeaverMail/beavermaild/internal/mail"
+	"github.com/BeaverMail/beavermaild/internal/storage"
 	"github.com/BeaverMail/beavermaild/internal/storage/blob"
 	"github.com/BeaverMail/beavermaild/internal/storage/sqlite"
 )
@@ -178,8 +180,20 @@ func TestDeleteMailboxNonEmpty(t *testing.T) {
 	if _, err := inbox.Append(ctx, acc.ID, mb.ID, []byte("From: a@b\r\n\r\nx\r\n"), 0, time.Now().Unix()); err != nil {
 		t.Fatal(err)
 	}
-	if err := inbox.DeleteMailbox(ctx, acc.ID, mb.ID); err != mail.ErrMailboxNotEmpty {
-		t.Fatalf("delete non-empty err %v want %v", err, mail.ErrMailboxNotEmpty)
+	if err := inbox.DeleteMailbox(ctx, acc.ID, mb.ID); err != nil {
+		t.Fatalf("delete non-empty: %v", err)
+	}
+	if _, err := inbox.ResolveMailbox(ctx, acc.ID, "Archive"); !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("mailbox still there: %v", err)
+	}
+	if msgs, err := inbox.List(ctx, acc.ID, mb.ID); err != nil || len(msgs) != 0 {
+		t.Fatalf("messages left %d, err %v", len(msgs), err)
+	}
+	if q, err := inbox.QuotaStatus(ctx, acc.ID); err != nil || q.MessagesUsed != 0 || q.StorageUsed != 0 {
+		t.Fatalf("quota not released: %+v, err %v", q, err)
+	}
+	if _, err := inbox.CreateMailbox(ctx, acc.ID, "Archive"); err != nil {
+		t.Fatalf("recreate: %v", err)
 	}
 }
 

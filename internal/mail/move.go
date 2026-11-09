@@ -240,10 +240,21 @@ func (ib *Inbox) CreateMailbox(ctx context.Context, accountID uint32, name strin
 	return Mailbox{ID: id, Name: name, UIDValidity: 1, Subscribed: true}, nil
 }
 
-// DeleteMailbox removes an empty non-system folder.
+// DeleteMailbox removes a non-system folder and its messages (RFC 3501 DELETE).
+// ErrMailboxNotEmpty means a message arrived while it was being emptied.
 func (ib *Inbox) DeleteMailbox(ctx context.Context, accountID, mailboxID uint32) error {
 	if mailboxID <= DraftsMailboxID {
 		return ErrSystemMailbox
+	}
+	ids, err := ib.ListMailboxIndexEmailIDs(ctx, accountID, mailboxID)
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		// One message per transaction, as EXPUNGE does: blobs, index and quota stay consistent.
+		if err := ib.DeleteMessage(ctx, accountID, id); err != nil && !errors.Is(err, storage.ErrNotFound) {
+			return err
+		}
 	}
 	return ib.update(ctx, func(t *txn) error {
 		mbox, err := t.mailbox(accountID, mailboxID)

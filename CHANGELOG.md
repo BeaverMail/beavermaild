@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- IMAP `DELETE` removes a folder together with its messages, as RFC 3501 requires; it refused non-empty
+  folders with `NO mailbox not empty`. System folders stay protected.
 - IMAP: `SELECT`/`EXAMINE` accept the `(CONDSTORE)` select parameter; the parameter list was taken as part
   of the mailbox name, which created a folder called `INBOX (CONDSTORE)`. Unknown parameters get `BAD`.
 - IMAP: a `SELECT`/`EXAMINE` with an invalid mailbox name answers `BAD` and keeps the session open; it closed
