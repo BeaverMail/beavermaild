@@ -76,8 +76,9 @@ func TestIMAPFetchInbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// One FETCH response: plain items then the literal (RFC 3501; as Dovecot/Gmail).
-	if !strings.HasPrefix(line, "* 1 FETCH (UID 1 RFC822.SIZE ") || !strings.Contains(line, " BODY[] {") {
+	// One FETCH response: plain items then the literal (RFC 3501; as Dovecot/Gmail). BODY[] without
+	// PEEK sets \Seen, so FLAGS is reported too.
+	if !strings.HasPrefix(line, `* 1 FETCH (UID 1 FLAGS (\Seen) RFC822.SIZE `) || !strings.Contains(line, " BODY[] {") {
 		t.Fatalf("fetch %q", line)
 	}
 	n, err := literalSize(line)
@@ -163,7 +164,10 @@ func TestIMAPFetchInbox(t *testing.T) {
 	send(t, conn, "aj LOGOUT")
 }
 
-func TestIMAPAppendCreatesMailbox(t *testing.T) {
+// TestIMAPMissingMailboxNotCreated checks SELECT and APPEND do not create folders (RFC 3501):
+// SELECT answers NO, APPEND answers NO [TRYCREATE] before the literal is sent, and a non-sync
+// literal is consumed so the session stays in step; after CREATE the APPEND works.
+func TestIMAPMissingMailboxNotCreated(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -201,32 +205,35 @@ func TestIMAPAppendCreatesMailbox(t *testing.T) {
 	expectPrefix(t, read, "a1 OK")
 
 	send(t, conn, "a2 SELECT Queue")
-	expectPrefix(t, read, "* FLAGS")
-	expectPrefix(t, read, "* 0 EXISTS")
-	expectPrefix(t, read, "* 0 RECENT")
-	expectSelectOK(t, read)
-	expectPrefix(t, read, "a2 OK")
+	expectPrefix(t, read, "a2 NO")
 
 	raw := []byte("From: a@b\r\nSubject: queued\r\n\r\noutbox\r\n")
 	if _, err := fmt.Fprintf(conn, "a3 APPEND Queue (\\Seen) {%d}\r\n", len(raw)); err != nil {
 		t.Fatal(err)
 	}
-	expectPrefix(t, read, "+")
-	if _, err := conn.Write(raw); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := conn.Write([]byte("\r\n")); err != nil {
-		t.Fatal(err)
-	}
-	expectPrefix(t, read, "* 1 EXISTS")
-	expectPrefix(t, read, "a3 OK")
+	expectPrefix(t, read, "a3 NO [TRYCREATE]")
 
-	send(t, conn, "a4 SELECT Queue")
+	if _, err := fmt.Fprintf(conn, "a4 APPEND Queue {%d+}\r\n%s\r\n", len(raw), raw); err != nil {
+		t.Fatal(err)
+	}
+	expectPrefix(t, read, "a4 NO [TRYCREATE]")
+	send(t, conn, "a5 NOOP")
+	expectPrefix(t, read, "a5 OK")
+
+	send(t, conn, "a6 CREATE Queue")
+	expectPrefix(t, read, "a6 OK")
+	if _, err := fmt.Fprintf(conn, "a7 APPEND Queue (\\Seen) {%d}\r\n", len(raw)); err != nil {
+		t.Fatal(err)
+	}
+	expectPrefix(t, read, "+")
+	if _, err := fmt.Fprintf(conn, "%s\r\n", raw); err != nil {
+		t.Fatal(err)
+	}
+	expectPrefix(t, read, "a7 OK")
+
+	send(t, conn, "a8 SELECT Queue")
 	expectPrefix(t, read, "* FLAGS")
 	expectPrefix(t, read, "* 1 EXISTS")
-	expectPrefix(t, read, "* 1 RECENT")
-	expectSelectOK(t, read)
-	expectPrefix(t, read, "a4 OK")
 }
 
 func TestIMAPExpungeDeleted(t *testing.T) {

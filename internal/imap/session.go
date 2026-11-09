@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -172,7 +173,7 @@ func (s *session) run(ctx context.Context) error {
 		case "SELECT":
 			name, err := selectMailboxArg(arg)
 			if err != nil {
-				if err := s.tagged(tag, "BAD mailbox name syntax"); err != nil {
+				if err := s.tagged(tag, selectNameError(err)); err != nil {
 					return err
 				}
 				continue
@@ -183,7 +184,7 @@ func (s *session) run(ctx context.Context) error {
 		case "EXAMINE":
 			name, err := selectMailboxArg(arg)
 			if err != nil {
-				if err := s.tagged(tag, "BAD mailbox name syntax"); err != nil {
+				if err := s.tagged(tag, selectNameError(err)); err != nil {
 					return err
 				}
 				continue
@@ -468,7 +469,7 @@ func (s *session) openMailbox(ctx context.Context, tag, name string, examine boo
 	if s.principal.AccountID == 0 {
 		return s.tagged(tag, "NO LOGIN required")
 	}
-	mbox, err := s.resolveOrCreateMailbox(ctx, name)
+	mbox, err := s.inbox.ResolveMailbox(ctx, s.principal.AccountID, name)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			return s.tagged(tag, "NO mailbox does not exist")
@@ -551,11 +552,32 @@ func (s *session) cmdFetch(ctx context.Context, tag, arg string, byUID bool) err
 		if items.hasChangedSince && max(s.messages[idx].Meta.ModSeq, 1) <= items.changedSince {
 			continue
 		}
-		if err := s.writeFetch(ctx, idx+1, s.messages[idx], items, byUID); err != nil {
+		msgItems, err := s.markSeenOnFetch(ctx, idx, items)
+		if err != nil {
+			return err
+		}
+		if err := s.writeFetch(ctx, idx+1, s.messages[idx], msgItems, byUID); err != nil {
 			return err
 		}
 	}
 	return s.tagged(tag, "OK FETCH completed")
+}
+
+// markSeenOnFetch sets \Seen when a FETCH reads a body without PEEK (RFC 3501) and adds FLAGS to
+// the response so the client learns about the change.
+func (s *session) markSeenOnFetch(ctx context.Context, idx int, items fetchItems) (fetchItems, error) {
+	msg := s.messages[idx]
+	if s.readOnly || msg.Meta.Flags&mail.FlagSeen != 0 ||
+		!slices.ContainsFunc(items.bodySections, func(bs bodySectionFetch) bool { return bs.setsSeen }) {
+		return items, nil
+	}
+	_, meta, err := s.inbox.SetFlagsIfUnchanged(ctx, s.principal.AccountID, msg.StorageID(), mail.FlagSeen, 0, nil, nil, 0)
+	if err != nil {
+		return items, err
+	}
+	s.messages[idx].Meta = meta
+	items.flags = true
+	return items, nil
 }
 
 func (s *session) cmdStore(ctx context.Context, tag, arg string, byUID bool) error {
@@ -565,7 +587,7 @@ func (s *session) cmdStore(ctx context.Context, tag, arg string, byUID bool) err
 	if s.readOnly {
 		return s.tagged(tag, "NO mailbox is read-only")
 	}
-	setStr, mode, set, clear, kwAdd, kwRemove, silent, unchangedSince, hasUnchanged, ok := parseStoreArg(arg)
+	setStr, _, set, clear, kwAdd, kwRemove, silent, unchangedSince, hasUnchanged, ok := parseStoreArg(arg)
 	if !ok {
 		return s.tagged(tag, "BAD STORE syntax")
 	}
@@ -590,7 +612,7 @@ func (s *session) cmdStore(ctx context.Context, tag, arg string, byUID bool) err
 			continue
 		}
 		s.messages[idx].Meta = meta
-		if !silent && mode != storeSilent {
+		if !silent {
 			line := fmt.Sprintf("%d FETCH (FLAGS %s", idx+1, mail.FormatMessageFlags(meta))
 			if byUID {
 				line = fmt.Sprintf("%d FETCH (UID %d FLAGS %s", idx+1, msg.UID, mail.FormatMessageFlags(meta))
@@ -851,7 +873,7 @@ func (s *session) resolveIndices(set seqSet, byUID bool) []int {
 }
 
 func (s *session) writeFetch(ctx context.Context, seq int, msg mail.Message, items fetchItems, byUID bool) error {
-	needRaw := len(items.bodySections) > 0 || items.envelope || items.bodystructure
+	needRaw := len(items.bodySections) > 0 || items.envelope || items.bodystructure || items.body
 	var raw []byte
 	if needRaw {
 		var err error
@@ -877,11 +899,14 @@ func (s *session) writeFetch(ctx context.Context, seq int, msg mail.Message, ite
 	if items.bodystructure {
 		parts = append(parts, "BODYSTRUCTURE "+formatBodyStructure(raw))
 	}
+	if items.body {
+		parts = append(parts, "BODY "+formatBody(raw))
+	}
 	if items.internalDate {
 		parts = append(parts, "INTERNALDATE "+formatInternalDate(msg.Meta.ReceivedAt))
 	}
 	// MODSEQ only when requested, or on FLAGS-only UID sync (not with BODY literals; TB parser rejects that).
-	flagsOnly := items.flags && !items.size && !items.envelope && !items.bodystructure &&
+	flagsOnly := items.flags && !items.size && !items.envelope && !items.bodystructure && !items.body &&
 		!items.internalDate && len(items.bodySections) == 0
 	if s.condstore && (items.modseq || flagsOnly) {
 		modSeq := msg.Meta.ModSeq
@@ -963,18 +988,6 @@ func splitCommand(arg string) (cmd, rest string) {
 func (s *session) continuation() error {
 	_, err := fmt.Fprintf(s.conn, "+ Ready for additional command text\r\n")
 	return err
-}
-
-// resolveOrCreateMailbox opens a folder, creating it when missing (IMAP clients often skip CREATE).
-func (s *session) resolveOrCreateMailbox(ctx context.Context, name string) (mail.Mailbox, error) {
-	mbox, err := s.inbox.ResolveMailbox(ctx, s.principal.AccountID, name)
-	if errors.Is(err, storage.ErrNotFound) {
-		mbox, err = s.inbox.CreateMailbox(ctx, s.principal.AccountID, name)
-		if errors.Is(err, mail.ErrMailboxExists) {
-			mbox, err = s.inbox.ResolveMailbox(ctx, s.principal.AccountID, name)
-		}
-	}
-	return mbox, err
 }
 
 func (s *session) untagged(line string) error {
@@ -1101,10 +1114,10 @@ func parseQuoted(s string) (val, rest string, ok bool) {
 }
 
 type fetchItems struct {
-	uid, flags, size, envelope, bodystructure, internalDate, modseq bool
-	bodySections                                                    []bodySectionFetch
-	changedSince                                                    uint64
-	hasChangedSince                                                 bool
+	uid, flags, size, envelope, bodystructure, body, internalDate, modseq bool
+	bodySections                                                          []bodySectionFetch
+	changedSince                                                          uint64
+	hasChangedSince                                                       bool
 }
 
 func parseFetchArg(arg string) (setStr string, items fetchItems, ok bool) {
@@ -1132,6 +1145,17 @@ func parseFetchArg(arg string) (setStr string, items fetchItems, ok bool) {
 func parseFetchItems(rest string) (fetchItems, bool) {
 	upper := strings.ToUpper(rest)
 	var items fetchItems
+	// RFC 3501 macros, alone and without parentheses.
+	switch strings.TrimSpace(upper) {
+	case "FAST":
+		return fetchItems{flags: true, internalDate: true, size: true}, true
+	case "ALL":
+		return fetchItems{flags: true, internalDate: true, size: true, envelope: true}, true
+	case "FULL":
+		return fetchItems{flags: true, internalDate: true, size: true, envelope: true, body: true}, true
+	}
+	// BODY alone is the non-extensible BODYSTRUCTURE; BODY[...] and BODY.PEEK[...] are sections.
+	items.body = slices.Contains(strings.Fields(strings.NewReplacer("(", " ", ")", " ").Replace(upper)), "BODY")
 	items.uid = strings.Contains(upper, "UID")
 	items.flags = strings.Contains(upper, "FLAGS")
 	items.size = strings.Contains(upper, "RFC822.SIZE")
@@ -1141,7 +1165,7 @@ func parseFetchItems(rest string) (fetchItems, bool) {
 	items.internalDate = strings.Contains(upper, "INTERNALDATE")
 	items.modseq = strings.Contains(upper, "MODSEQ")
 	if !items.uid && !items.flags && !items.size && len(items.bodySections) == 0 && !items.envelope &&
-		!items.bodystructure && !items.internalDate && !items.modseq {
+		!items.bodystructure && !items.body && !items.internalDate && !items.modseq {
 		return items, false
 	}
 	return items, true
@@ -1150,7 +1174,7 @@ func parseFetchItems(rest string) (fetchItems, bool) {
 type storeMode int
 
 const (
-	storeSilent storeMode = iota
+	storeReplace storeMode = iota
 	storeAdd
 	storeRemove
 )
@@ -1159,7 +1183,7 @@ func parseStoreArg(arg string) (setStr string, mode storeMode, set, clear uint32
 	arg = strings.TrimSpace(arg)
 	i := strings.IndexByte(arg, ' ')
 	if i < 0 {
-		return "", storeSilent, 0, 0, nil, nil, false, 0, false, false
+		return "", storeReplace, 0, 0, nil, nil, false, 0, false, false
 	}
 	setStr = strings.TrimSpace(arg[:i])
 	rest := strings.TrimSpace(arg[i+1:])
@@ -1181,7 +1205,7 @@ func parseStoreArg(arg string) (setStr string, mode storeMode, set, clear uint32
 	}
 	mode, set, clear, kwAdd, kwRemove, silent, ok = parseStoreFlags(rest)
 	if !ok {
-		return setStr, storeSilent, 0, 0, nil, nil, false, 0, false, false
+		return setStr, storeReplace, 0, 0, nil, nil, false, 0, false, false
 	}
 	return setStr, mode, set, clear, kwAdd, kwRemove, silent, unchangedSince, hasUnchanged, true
 }
@@ -1204,18 +1228,18 @@ func parseStoreFlags(rest string) (mode storeMode, set, clear uint32, kwAdd, kwR
 		mode = storeRemove
 		rest = strings.TrimSpace(rest[len("-FLAGS"):])
 	case strings.HasPrefix(upper, "FLAGS.SILENT"):
-		mode = storeSilent
+		mode = storeReplace
 		silent = true
 		rest = strings.TrimSpace(rest[len("FLAGS.SILENT"):])
 	case strings.HasPrefix(upper, "FLAGS"):
-		mode = storeSilent
+		mode = storeReplace
 		rest = strings.TrimSpace(rest[len("FLAGS"):])
 	default:
-		return storeSilent, 0, 0, nil, nil, false, false
+		return storeReplace, 0, 0, nil, nil, false, false
 	}
 	bits, kws, ok := parseIMAPFlagList(rest)
 	if !ok {
-		return storeSilent, 0, 0, nil, nil, false, false
+		return storeReplace, 0, 0, nil, nil, false, false
 	}
 	switch mode {
 	case storeAdd:
@@ -1224,9 +1248,11 @@ func parseStoreFlags(rest string) (mode storeMode, set, clear uint32, kwAdd, kwR
 	case storeRemove:
 		clear = bits
 		kwRemove = kws
-	case storeSilent:
+	case storeReplace:
 		set = bits
 		clear = ^uint32(0) &^ bits
+		kwAdd = kws
+		kwRemove = []string{mail.AllKeywords}
 	}
 	return mode, set, clear, kwAdd, kwRemove, silent, true
 }

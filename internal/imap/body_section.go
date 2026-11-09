@@ -16,6 +16,7 @@ type bodySectionFetch struct {
 	itemName  string
 	section   string
 	hdrFields []string // set for HEADER.FIELDS sections
+	setsSeen  bool     // BODY[...] without PEEK, RFC822, RFC822.TEXT: fetching sets \Seen
 
 	// partial is set for BODY[...]<origin.count>: only count bytes from origin are sent.
 	partial bool
@@ -86,7 +87,7 @@ func parseAllBodyFetches(rest string) []bodySectionFetch {
 			pos = len(rest)
 			continue
 		}
-		_, _, item, spec, next, ok := scanBodyBracketItem(rest, pick)
+		_, peek, item, spec, next, ok := scanBodyBracketItem(rest, pick)
 		if !ok {
 			pos = pick + 1
 			continue
@@ -100,6 +101,7 @@ func parseAllBodyFetches(rest string) []bodySectionFetch {
 		} else {
 			bs = bodySectionFetch{itemName: item, section: spec}
 		}
+		bs.setsSeen = !peek
 		if origin, count, n, ok := parsePartial(rest, next); ok {
 			bs.partial, bs.origin, bs.count = true, origin, count
 			next += n
@@ -111,7 +113,7 @@ func parseAllBodyFetches(rest string) []bodySectionFetch {
 		out = append(out, bodySectionFetch{itemName: "RFC822.HEADER", section: "HEADER"})
 	}
 	if strings.Contains(upper, "RFC822.TEXT") {
-		out = append(out, bodySectionFetch{itemName: "RFC822.TEXT", section: "TEXT"})
+		out = append(out, bodySectionFetch{itemName: "RFC822.TEXT", section: "TEXT", setsSeen: true})
 	}
 	hasFull := false
 	for _, bs := range out {
@@ -122,7 +124,7 @@ func parseAllBodyFetches(rest string) []bodySectionFetch {
 	}
 	if !hasFull && strings.Contains(upper, "RFC822") && !strings.Contains(upper, "RFC822.SIZE") &&
 		!strings.Contains(upper, "RFC822.HEADER") && !strings.Contains(upper, "RFC822.TEXT") {
-		out = append(out, bodySectionFetch{itemName: "RFC822", section: ""})
+		out = append(out, bodySectionFetch{itemName: "RFC822", section: "", setsSeen: true})
 	}
 	return out
 }

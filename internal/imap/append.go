@@ -22,8 +22,26 @@ func (s *session) cmdAppend(ctx context.Context, tag, arg string) error {
 	if !ok || size <= 0 || size > mail.MaxAppendBytes {
 		return s.tagged(tag, "BAD APPEND syntax")
 	}
+	// Check the mailbox before the literal: a client must not create folders by APPENDing (RFC 3501
+	// says NO [TRYCREATE]), and a sync literal is then never uploaded.
+	var mbox mail.Mailbox
+	var refuse string
 	if err := mail.ValidateMailboxName(mboxName); err != nil {
-		return s.tagged(tag, "BAD mailbox name syntax")
+		refuse = "BAD mailbox name syntax"
+	} else if mbox, err = s.inbox.ResolveMailbox(ctx, s.principal.AccountID, mboxName); errors.Is(err, storage.ErrNotFound) {
+		refuse = "NO [TRYCREATE] mailbox does not exist"
+	} else if err != nil {
+		return err
+	}
+	if refuse != "" {
+		if nonsync {
+			// The client already sends a {n+} literal: drop it, or its bytes would be read as commands.
+			s.bumpReadDeadline()
+			if _, err := io.CopyN(io.Discard, s.r, int64(size)); err != nil {
+				return err
+			}
+		}
+		return s.tagged(tag, refuse)
 	}
 	if !nonsync {
 		if err := s.continuation(); err != nil {
@@ -32,14 +50,6 @@ func (s *session) cmdAppend(ctx context.Context, tag, arg string) error {
 	}
 	raw, err := s.readLiteral(size)
 	if err != nil {
-		return err
-	}
-
-	mbox, err := s.resolveOrCreateMailbox(ctx, mboxName)
-	if err != nil {
-		if errors.Is(err, storage.ErrNotFound) {
-			return s.tagged(tag, "NO mailbox does not exist")
-		}
 		return err
 	}
 

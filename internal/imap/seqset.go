@@ -38,13 +38,8 @@ func parseSeqSet(s string) (seqSet, error) {
 			if err != nil {
 				return seqSet{}, err
 			}
-			if lo == 0 || hi == 0 {
-				out.ranges = append(out.ranges, seqRange{lo: lo, hi: hi})
-			} else if lo > hi {
-				return seqSet{}, fmt.Errorf("imap: invalid sequence range")
-			} else {
-				out.ranges = append(out.ranges, seqRange{lo: lo, hi: hi})
-			}
+			// Order does not matter: 3:1 is 1:3 (RFC 3501 seq-range); expand swaps once * is known.
+			out.ranges = append(out.ranges, seqRange{lo: lo, hi: hi})
 			continue
 		}
 		n, err := parseSeqToken(part)
@@ -86,8 +81,8 @@ func (ss seqSet) expandSeq(count uint32) []uint32 {
 		if hi == 0 {
 			hi = count
 		}
-		if lo == 0 || hi == 0 {
-			continue
+		if lo > hi {
+			lo, hi = hi, lo
 		}
 		if lo > count {
 			continue
@@ -122,11 +117,8 @@ func (ss seqSet) expandUID(msgs []messageRef) []int {
 		if hi == 0 {
 			hi = maxUID
 		}
-		if lo == 0 || hi == 0 {
-			continue
-		}
 		if lo > hi {
-			continue
+			lo, hi = hi, lo
 		}
 		for i, m := range msgs {
 			if m.uid < lo || m.uid > hi {

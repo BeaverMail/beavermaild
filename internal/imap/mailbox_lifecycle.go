@@ -12,11 +12,11 @@ func (s *session) cmdClose(ctx context.Context, tag string) error {
 	if !s.selected {
 		return s.tagged(tag, "NO not selected")
 	}
-	if s.readOnly {
-		return s.tagged(tag, "NO mailbox is read-only")
-	}
-	if err := s.purgeDeleted(ctx); err != nil {
-		return err
+	// A read-only mailbox (EXAMINE) is closed without expunging (RFC 3501 CLOSE).
+	if !s.readOnly {
+		if err := s.purgeDeleted(ctx); err != nil {
+			return err
+		}
 	}
 	s.unselect()
 	return s.tagged(tag, "OK CLOSE completed")

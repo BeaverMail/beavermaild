@@ -225,6 +225,11 @@ func parseSearchAtom(tokens []string) (mail.SearchCriteria, int, bool) {
 			return mail.SearchCriteria{}, 0, false
 		}
 		val := tokens[1]
+		if val == "" {
+			// An empty substring is in every text: the criterion matches all messages.
+			c.All = true
+			return c, 2, true
+		}
 		switch key {
 		case "FROM":
 			c.From = val

@@ -13,7 +13,12 @@ import (
 )
 
 // formatBodyStructure returns the RFC 3501 BODYSTRUCTURE parenthesized list for raw.
-func formatBodyStructure(raw []byte) string {
+func formatBodyStructure(raw []byte) string { return formatBodyPart(raw, true) }
+
+// formatBody is the non-extensible BODY form: BODYSTRUCTURE without extension data.
+func formatBody(raw []byte) string { return formatBodyPart(raw, false) }
+
+func formatBodyPart(raw []byte, ext bool) string {
 	msg, err := mail.ReadMessage(bytes.NewReader(raw))
 	if err != nil {
 		return `("TEXT" "PLAIN" NIL NIL NIL "7BIT" 0 0)`
@@ -21,7 +26,7 @@ func formatBodyStructure(raw []byte) string {
 	body, _ := io.ReadAll(msg.Body)
 	ct := msg.Header.Get("Content-Type")
 	mediaType, params := parseMediaType(ct)
-	return formatMIMEPart(mediaType, params, msg.Header, body)
+	return formatMIMEPart(mediaType, params, msg.Header, body, ext)
 }
 
 func mimeGet(hdr map[string][]string, key string) string {
@@ -52,15 +57,15 @@ func parseMediaType(ct string) (mediaType string, params map[string]string) {
 	return mt, p
 }
 
-func formatMIMEPart(mediaType string, params map[string]string, hdr map[string][]string, body []byte) string {
+func formatMIMEPart(mediaType string, params map[string]string, hdr map[string][]string, body []byte, ext bool) string {
 	major, subtype, _ := strings.Cut(strings.ToLower(mediaType), "/")
 	if major == "multipart" {
-		return formatMultipart(subtype, params, body)
+		return formatMultipart(subtype, params, body, ext)
 	}
-	return formatLeafPart(major, subtype, params, hdr, body)
+	return formatLeafPart(major, subtype, params, hdr, body, ext)
 }
 
-func formatMultipart(subtype string, params map[string]string, body []byte) string {
+func formatMultipart(subtype string, params map[string]string, body []byte, ext bool) string {
 	boundary := params["boundary"]
 	if boundary == "" {
 		return `(("TEXT" "PLAIN" NIL NIL NIL "7BIT" 0 0) "` + strings.ToUpper(subtype) + `" NIL)`
@@ -77,7 +82,7 @@ func formatMultipart(subtype string, params map[string]string, body []byte) stri
 		}
 		partBody, _ := io.ReadAll(p)
 		mt, pr := parseMediaType(p.Header.Get("Content-Type"))
-		parts = append(parts, formatMIMEPart(mt, pr, p.Header, partBody))
+		parts = append(parts, formatMIMEPart(mt, pr, p.Header, partBody, ext))
 	}
 	if len(parts) == 0 {
 		parts = append(parts, `("TEXT" "PLAIN" NIL NIL NIL "7BIT" 0 0)`)
@@ -87,10 +92,13 @@ func formatMultipart(subtype string, params map[string]string, body []byte) stri
 		sub = "MIXED"
 	}
 	// RFC 3501 body-type-mpart = 1*body SP media-subtype: child parts are written back to back.
+	if !ext {
+		return "(" + strings.Join(parts, "") + ` "` + sub + `")`
+	}
 	return "(" + strings.Join(parts, "") + ` "` + sub + `" ` + formatIMAPParams(params) + ")"
 }
 
-func formatLeafPart(major, subtype string, params map[string]string, hdr map[string][]string, body []byte) string {
+func formatLeafPart(major, subtype string, params map[string]string, hdr map[string][]string, body []byte, ext bool) string {
 	if major == "" {
 		major = "text"
 	}
@@ -111,7 +119,7 @@ func formatLeafPart(major, subtype string, params map[string]string, hdr map[str
 	// body-type-msg: a message/rfc822 part also carries the inner ENVELOPE, BODYSTRUCTURE and line count.
 	if major == "MESSAGE" && subtype == "RFC822" {
 		return `("` + major + `" "` + subtype + `" ` + paramsStr + ` ` + id + ` ` + desc + ` "` + enc + `" ` + strconv.Itoa(size) +
-			` ` + formatEnvelope(body) + ` ` + formatBodyStructure(body) + ` ` + strconv.Itoa(countLines(body)) + `)`
+			` ` + formatEnvelope(body) + ` ` + formatBodyPart(body, ext) + ` ` + strconv.Itoa(countLines(body)) + `)`
 	}
 	return `("` + major + `" "` + subtype + `" ` + paramsStr + ` ` + id + ` ` + desc + ` "` + enc + `" ` + strconv.Itoa(size) + `)`
 }

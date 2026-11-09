@@ -157,3 +157,45 @@ func TestIMAPCheck(t *testing.T) {
 	send(t, conn, "k3 CHECK")
 	expectPrefix(t, read, "k3 OK CHECK completed")
 }
+
+// TestIMAPCloseAfterExamine checks CLOSE on a read-only mailbox answers OK and expunges nothing.
+func TestIMAPCloseAfterExamine(t *testing.T) {
+	t.Parallel()
+
+	ctx, accID, inbox, ln, cleanup := startIMAPTestServer(t)
+	defer cleanup()
+
+	if _, err := inbox.Deliver(ctx, accID, []byte("Subject: c\r\n\r\nx\r\n")); err != nil {
+		t.Fatal(err)
+	}
+
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	read := bufio.NewReader(conn)
+	expectPrefix(t, read, "* OK")
+	send(t, conn, "c1 LOGIN alice@localhost beaver")
+	expectPrefix(t, read, "c1 OK")
+	open := func(tag, cmd string) string {
+		send(t, conn, tag+" "+cmd+" INBOX")
+		var all string
+		for line := ""; !strings.HasPrefix(line, tag+" OK"); {
+			line, _ = read.ReadString('\n')
+			all += line
+		}
+		return all
+	}
+	open("c2", "SELECT")
+	send(t, conn, `c3 STORE 1 +FLAGS.SILENT (\Deleted)`)
+	expectPrefix(t, read, "c3 OK")
+
+	open("c4", "EXAMINE")
+	send(t, conn, "c5 CLOSE")
+	expectPrefix(t, read, "c5 OK")
+	if got := open("c6", "SELECT"); !strings.Contains(got, "* 1 EXISTS") {
+		t.Fatalf("CLOSE after EXAMINE expunged: %q", got)
+	}
+}

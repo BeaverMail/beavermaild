@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- IMAP: `SELECT`/`EXAMINE` and `APPEND` no longer create a missing folder (RFC 3501). `SELECT` answers `NO`;
+  `APPEND` answers `NO [TRYCREATE]` before the literal, so the client can `CREATE` and retry. Clients that
+  relied on the implicit creation must send `CREATE` first. An invalid name in `SELECT` answers `NO`.
+- IMAP APPEND: a refused `APPEND` with a non-synchronizing literal (`{n+}`) consumes the literal; its bytes
+  were read as commands.
+- IMAP: reversed sequence ranges (`3:1`, `*:4`) are accepted as RFC 3501 allows, and a UID range past the
+  largest UID (`9:*`) still matches the last message; they got `BAD` or matched nothing.
+- IMAP FETCH: `BODY` (non-extensible body structure) and the `FAST`/`ALL`/`FULL` macros; they got `BAD`.
+- IMAP FETCH: `BODY[...]` without `PEEK`, `RFC822` and `RFC822.TEXT` set `\Seen` in a read-write mailbox and
+  report the new `FLAGS`, as RFC 3501 requires.
+- IMAP SEARCH: an empty string (`SUBJECT ""`) matches every message instead of `BAD`; `HEADER field ""`
+  matches only messages that have the field; a repeated field matches on any of its occurrences.
+- IMAP `CLOSE` after `EXAMINE` answers `OK` and expunges nothing; it answered `NO mailbox is read-only`.
+- IMAP: system flags are case-insensitive (`\seen` is `\Seen`) in APPEND, STORE and SEARCH; lowercase flags
+  were ignored on APPEND and stored as keywords on STORE.
+- IMAP STORE: `FLAGS` (replace, without `.SILENT`) answers with the untagged `FETCH`, as `+FLAGS`/`-FLAGS` do,
+  and replaces keywords too; they were kept, and keywords in the list were dropped.
 - IMAP `DELETE` removes a folder together with its messages, as RFC 3501 requires; it refused non-empty
   folders with `NO mailbox not empty`. System folders stay protected.
 - IMAP: `SELECT`/`EXAMINE` accept the `(CONDSTORE)` select parameter; the parameter list was taken as part

@@ -123,3 +123,12 @@ func selectMailboxArg(arg string) (string, error) {
 }
 
 var errUnknownSelectParam = errors.New("imap: unknown SELECT parameter")
+
+// selectNameError answers a SELECT/EXAMINE argument that names no possible mailbox: an unknown
+// select parameter is a syntax error; an invalid name just does not exist (CREATE refuses it).
+func selectNameError(err error) string {
+	if errors.Is(err, errUnknownSelectParam) {
+		return "BAD unknown SELECT parameter"
+	}
+	return "NO mailbox does not exist"
+}

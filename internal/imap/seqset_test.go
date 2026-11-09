@@ -1,6 +1,9 @@
 package imap
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
 func TestParseSeqSetExpand(t *testing.T) {
 	t.Parallel()
@@ -17,6 +20,28 @@ func TestParseSeqSetExpand(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("got %v want %v", got, want)
 		}
+	}
+}
+
+// TestSeqSetReversedRanges checks 3:1 == 1:3 and *:4 == 4:* (RFC 3501 seq-range), and that a
+// UID range past the largest UID still matches the last message.
+func TestSeqSetReversedRanges(t *testing.T) {
+	t.Parallel()
+	for in, want := range map[string][]uint32{"3:1": {1, 2, 3}, "*:4": {4, 5}, "1,*": {1, 5}} {
+		set, err := parseSeqSet(in)
+		if err != nil {
+			t.Fatalf("%s: %v", in, err)
+		}
+		if got := set.expandSeq(5); !slices.Equal(got, want) {
+			t.Fatalf("%s: got %v want %v", in, got, want)
+		}
+	}
+	set, err := parseSeqSet("9:*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := set.expandUID([]messageRef{{uid: 1}, {uid: 4}}); !slices.Equal(got, []int{1}) {
+		t.Fatalf("9:* got %v", got)
 	}
 }
 
