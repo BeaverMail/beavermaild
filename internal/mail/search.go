@@ -43,9 +43,9 @@ type SearchCriteria struct {
 	Since      *time.Time // inclusive, start of day UTC (ReceivedAt)
 	Before     *time.Time // exclusive, start of day UTC (ReceivedAt)
 	On         *time.Time // calendar day UTC (ReceivedAt)
-	SentSince  *time.Time // Date header, inclusive day UTC
-	SentBefore *time.Time // Date header, exclusive day UTC
-	SentOn     *time.Time // Date header, calendar day UTC
+	SentSince  *time.Time // Date header, inclusive day in the sender's zone
+	SentBefore *time.Time // Date header, exclusive day in the sender's zone
+	SentOn     *time.Time // Date header, calendar day in the sender's zone
 	Keyword    string     // KEYWORD criterion
 	Unkeyword  string     // UNKEYWORD criterion
 }
@@ -263,7 +263,8 @@ func parseMessageDate(raw []byte) (time.Time, bool) {
 	if err != nil {
 		return time.Time{}, false
 	}
-	return t.UTC(), true
+	// Keep the sender's zone: SENT* compare the date as written, ignoring time and zone (RFC 3501).
+	return t, true
 }
 
 func matchSearchHeaders(raw []byte, c SearchCriteria) bool {
@@ -271,16 +272,16 @@ func matchSearchHeaders(raw []byte, c SearchCriteria) bool {
 	if err != nil {
 		return false
 	}
-	if c.From != "" && !headerContains(msg.Header.Get("From"), c.From) {
+	if c.From != "" && !addressContains(msg.Header.Get("From"), c.From) {
 		return false
 	}
-	if c.To != "" && !headerContains(msg.Header.Get("To"), c.To) {
+	if c.To != "" && !addressContains(msg.Header.Get("To"), c.To) {
 		return false
 	}
-	if c.CC != "" && !headerContains(msg.Header.Get("Cc"), c.CC) {
+	if c.CC != "" && !addressContains(msg.Header.Get("Cc"), c.CC) {
 		return false
 	}
-	if c.BCC != "" && !headerContains(msg.Header.Get("Bcc"), c.BCC) {
+	if c.BCC != "" && !addressContains(msg.Header.Get("Bcc"), c.BCC) {
 		return false
 	}
 	if c.Subject != "" && !headerContains(msg.Header.Get("Subject"), c.Subject) {
@@ -304,6 +305,47 @@ func headerContains(haystack, needle string) bool {
 		haystack = decoded
 	}
 	return rawContains([]byte(haystack), needle)
+}
+
+// addressContains matches an address criterion against the field as written and without RFC 5322
+// comments, so "user@example.org" finds "<user (c)@ (c) example.org>" while a real name kept in
+// a comment ("user@example.org (Real Name)") still matches.
+func addressContains(value, needle string) bool {
+	return headerContains(value, needle) || headerContains(stripAddressComments(value), needle)
+}
+
+// stripAddressComments drops parenthesized comments outside quoted strings and the spaces next
+// to '@' they leave behind.
+func stripAddressComments(s string) string {
+	var b strings.Builder
+	depth, quoted := 0, false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c == '\\' && i+1 < len(s):
+			if depth == 0 {
+				b.WriteByte(c)
+				b.WriteByte(s[i+1])
+			}
+			i++
+		case c == '"' && depth == 0:
+			quoted = !quoted
+			b.WriteByte(c)
+		case c == '(' && !quoted:
+			depth++
+		case c == ')' && !quoted && depth > 0:
+			depth--
+		case depth == 0:
+			b.WriteByte(c)
+		}
+	}
+	out := b.String()
+	for _, sp := range []string{" @", "@ "} {
+		for strings.Contains(out, sp) {
+			out = strings.ReplaceAll(out, sp, "@")
+		}
+	}
+	return out
 }
 
 // headerDecoder decodes the charsets the stdlib knows (UTF-8, ISO-8859-1, US-ASCII);

@@ -96,3 +96,56 @@ func TestMatchSearchHeaderRepeatedAndEmpty(t *testing.T) {
 		}
 	}
 }
+
+// TestSearchSentDateSenderZone follows imaptest search-date: SENT* use the Date header's own day,
+// ignoring its time and zone (00:00 +0200 on the 25th is the 25th, not the 24th in UTC).
+func TestSearchSentDateSenderZone(t *testing.T) {
+	t.Parallel()
+
+	dates := []string{
+		"Sat, 24 Mar 2007 23:00:00 +0200",
+		"Sun, 25 Mar 2007 00:00:00 +0200",
+		"Sun, 25 Mar 2007 23:00:00 +0300",
+		"Mon, 26 Mar 2007 00:00:00 +0300",
+	}
+	msgs := make([]mail.Message, len(dates))
+	for i := range msgs {
+		msgs[i] = mail.Message{UID: uint32(i + 1)}
+	}
+	load := func(m mail.Message) ([]byte, error) {
+		return []byte("Date: " + dates[m.UID-1] + "\r\n\r\nx\r\n"), nil
+	}
+	day := func(d int) *time.Time { t := time.Date(2007, 3, d, 0, 0, 0, 0, time.UTC); return &t }
+	for name, tc := range map[string]struct {
+		c    mail.SearchCriteria
+		want int
+	}{
+		"senton 25":     {mail.SearchCriteria{SentOn: day(25)}, 2},
+		"sentbefore 25": {mail.SearchCriteria{SentBefore: day(25)}, 1},
+		"sentsince 26":  {mail.SearchCriteria{SentSince: day(26)}, 1},
+	} {
+		if got := mail.MatchSearchWithLoader(msgs, tc.c, load); len(got) != tc.want {
+			t.Errorf("%s: got %v want %d", name, got, tc.want)
+		}
+	}
+}
+
+// TestSearchFromCommentedAddress follows imaptest search-addresses: comments inside an address
+// do not hide it, and a real name written as a comment still matches.
+func TestSearchFromCommentedAddress(t *testing.T) {
+	t.Parallel()
+
+	froms := []string{
+		"<user-from (comment)@ (comment) example.org>",
+		"user-from@example.org (RealFrom)",
+		"other@example.org",
+	}
+	msgs := []mail.Message{{UID: 1}, {UID: 2}, {UID: 3}}
+	load := func(m mail.Message) ([]byte, error) { return []byte("From: " + froms[m.UID-1] + "\r\n\r\nx\r\n"), nil }
+	if got := mail.MatchSearchWithLoader(msgs, mail.SearchCriteria{From: "user-from@example.org"}, load); len(got) != 2 {
+		t.Fatalf("address: got %v", got)
+	}
+	if got := mail.MatchSearchWithLoader(msgs, mail.SearchCriteria{From: "realfrom"}, load); len(got) != 1 {
+		t.Fatalf("real name in comment: got %v", got)
+	}
+}
