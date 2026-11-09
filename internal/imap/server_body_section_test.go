@@ -52,7 +52,8 @@ func TestIMAPBodySectionFetch(t *testing.T) {
 	if _, err := io.ReadFull(read, body); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(body), "application/pdf") || !strings.Contains(string(body), "%PDF") {
+	// BODY[2] is the part content only; its MIME header is BODY[2.MIME] (RFC 3501).
+	if string(body) != "%PDF-1.4" {
 		t.Fatalf("attachment %q", body)
 	}
 	expectPrefix(t, read, ")")

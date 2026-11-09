@@ -2,11 +2,9 @@
 package imap
 
 import (
+	"bufio"
 	"bytes"
-	"fmt"
-	"io"
-	"mime/multipart"
-	"net/mail"
+	"net/textproto"
 	"strconv"
 	"strings"
 )
@@ -15,7 +13,7 @@ import (
 type bodySectionFetch struct {
 	itemName  string
 	section   string
-	hdrFields []string // set for HEADER.FIELDS sections
+	hdrFields []string // set for HEADER.FIELDS[.NOT] sections
 	setsSeen  bool     // BODY[...] without PEEK, RFC822, RFC822.TEXT: fetching sets \Seen
 
 	// partial is set for BODY[...]<origin.count>: only count bytes from origin are sent.
@@ -96,8 +94,8 @@ func parseAllBodyFetches(rest string) []bodySectionFetch {
 		var bs bodySectionFetch
 		if spec == "" {
 			bs = bodySectionFetch{itemName: item, section: ""}
-		} else if fields, ok := parseHeaderFieldsSection(spec); ok {
-			bs = bodySectionFetch{itemName: item, section: "HEADER.FIELDS", hdrFields: fields}
+		} else if section, fields, ok := parseHeaderFieldsSection(spec); ok {
+			bs = bodySectionFetch{itemName: item, section: section, hdrFields: fields}
 		} else {
 			bs = bodySectionFetch{itemName: item, section: spec}
 		}
@@ -152,38 +150,28 @@ func scanBodyBracketItem(s string, from int) (start int, peek bool, itemName, sp
 	return start, peek, itemName, spec, end + 1, true
 }
 
-func parseHeaderFieldsSection(spec string) ([]string, bool) {
+// parseHeaderFieldsSection parses "[path.]HEADER.FIELDS[.NOT] (f1 f2)" and returns the section
+// without the field list (e.g. "1.HEADER.FIELDS.NOT") and the fields.
+func parseHeaderFieldsSection(spec string) (section string, fields []string, ok bool) {
 	spec = strings.TrimSpace(spec)
-	if !strings.HasPrefix(strings.ToUpper(spec), "HEADER.FIELDS") {
-		return nil, false
+	upper := strings.ToUpper(spec)
+	idx := strings.Index(upper, "HEADER.FIELDS")
+	if idx < 0 {
+		return "", nil, false
 	}
-	rest := strings.TrimSpace(spec[len("HEADER.FIELDS"):])
-	if rest == "" || rest[0] != '(' {
-		return []string{}, true
+	if _, ok := parseSectionPath(strings.TrimSuffix(upper[:idx], ".")); !ok {
+		return "", nil, false
 	}
-	depth := 0
-	end := -1
-	for i, c := range rest {
-		switch c {
-		case '(':
-			depth++
-		case ')':
-			depth--
-			if depth == 0 {
-				end = i
-				goto done
-			}
-		}
+	nameEnd := idx + len("HEADER.FIELDS")
+	if strings.HasPrefix(upper[nameEnd:], ".NOT") {
+		nameEnd += len(".NOT")
 	}
-done:
-	if end < 0 {
-		return nil, false
+	section = upper[:nameEnd]
+	rest := strings.TrimSpace(spec[nameEnd:])
+	if !strings.HasPrefix(rest, "(") || !strings.HasSuffix(rest, ")") {
+		return "", nil, false
 	}
-	inner := strings.TrimSpace(rest[1:end])
-	if inner == "" {
-		return []string{}, true
-	}
-	return strings.Fields(inner), true
+	return section, strings.Fields(rest[1 : len(rest)-1]), true
 }
 
 // bodyFetchResponseName maps BODY.PEEK[...] request items to BODY[...] in FETCH responses (RFC 3501).
@@ -194,72 +182,190 @@ func bodyFetchResponseName(itemName string) string {
 	return itemName
 }
 
-// extractBodySection returns bytes for an IMAP BODY section specifier.
-func extractBodySection(raw []byte, section string, hdrFields []string) []byte {
-	section = strings.TrimSpace(section)
-	if section == "" {
-		return raw
-	}
-	if strings.EqualFold(section, "HEADER.FIELDS") {
-		return extractHeaderFields(raw, hdrFields)
-	}
-	upper := strings.ToUpper(section)
-	if upper == "HEADER" {
-		hdr, _ := splitHeaderBody(raw)
-		return hdr
-	}
-	if upper == "TEXT" {
-		_, body := splitHeaderBody(raw)
-		return body
-	}
+// mimeEntity is one MIME entity as raw slices of the message: header (with its blank line) and body.
+type mimeEntity struct {
+	header, body []byte
+	inDigest     bool // child of multipart/digest: no Content-Type means message/rfc822 (RFC 2046)
+}
 
-	suffix := ""
-	pathStr := section
-	for _, suf := range []string{".HEADER", ".TEXT", ".MIME"} {
-		if strings.HasSuffix(strings.ToUpper(pathStr), suf) {
-			suffix = strings.TrimPrefix(suf, ".")
-			pathStr = strings.TrimSpace(pathStr[:len(pathStr)-len(suf)])
+func splitEntity(raw []byte) mimeEntity {
+	// A part with no header fields starts with the blank line itself.
+	for _, nl := range []string{"\r\n", "\n"} {
+		if strings.HasPrefix(string(raw[:min(len(raw), 2)]), nl) {
+			return mimeEntity{header: raw[:len(nl)], body: raw[len(nl):]}
+		}
+	}
+	h, b := splitHeaderBody(raw)
+	return mimeEntity{header: h, body: b}
+}
+
+// mediaType returns the entity's lower-case media type and parameters, with the RFC 2046 default.
+func (e mimeEntity) mediaType() (string, map[string]string) {
+	hdr, _ := textproto.NewReader(bufio.NewReader(bytes.NewReader(e.header))).ReadMIMEHeader()
+	return entityMediaType(hdr.Get("Content-Type"), e.inDigest)
+}
+
+func entityMediaType(contentType string, inDigest bool) (string, map[string]string) {
+	if strings.TrimSpace(contentType) == "" {
+		if inDigest {
+			return "message/rfc822", map[string]string{}
+		}
+		return "text/plain", map[string]string{}
+	}
+	mt, params := parseMediaType(contentType)
+	return strings.ToLower(mt), params
+}
+
+// extractBodySection returns the bytes of BODY[section] (RFC 3501 6.4.5), exactly as stored.
+func extractBodySection(raw []byte, section string, hdrFields []string) []byte {
+	upper := strings.ToUpper(strings.TrimSpace(section))
+	pathStr, text := upper, ""
+	for _, suf := range []string{"HEADER.FIELDS.NOT", "HEADER.FIELDS", "HEADER", "TEXT", "MIME"} {
+		if upper == suf || strings.HasSuffix(upper, "."+suf) {
+			pathStr, text = strings.TrimSuffix(strings.TrimSuffix(upper, suf), "."), suf
 			break
 		}
 	}
-	indices := parseSectionIndices(pathStr)
-	part, ok := fetchMIMEPart(raw, indices)
+	path, ok := parseSectionPath(pathStr)
 	if !ok {
 		return []byte{}
 	}
-	switch suffix {
-	case "":
-		return part
-	case "HEADER", "MIME":
-		hdr, _ := splitHeaderBody(part)
-		return hdr
-	case "TEXT":
-		_, body := splitHeaderBody(part)
-		return body
-	default:
+	if len(path) == 0 {
+		if text == "" {
+			return raw
+		}
+		return messageText(splitEntity(raw), text, hdrFields)
+	}
+	part, ok := findPart(raw, path)
+	if !ok {
 		return []byte{}
+	}
+	switch text {
+	case "":
+		return part.body
+	case "MIME":
+		return part.header
+	}
+	// HEADER/TEXT of a part refer to the message a message/rfc822 part encapsulates; other parts
+	// are answered from their own header and body.
+	if mt, _ := part.mediaType(); mt == "message/rfc822" {
+		part = splitEntity(part.body)
+	}
+	return messageText(part, text, hdrFields)
+}
+
+func messageText(e mimeEntity, text string, fields []string) []byte {
+	switch text {
+	case "HEADER":
+		return e.header
+	case "TEXT":
+		return e.body
+	case "HEADER.FIELDS":
+		return filterHeaderFields(e.header, fields, true)
+	case "HEADER.FIELDS.NOT":
+		return filterHeaderFields(e.header, fields, false)
+	}
+	return []byte{}
+}
+
+// findPart walks a part path: numbers index multipart children; a non-multipart message has a
+// single part 1 (itself); a message/rfc822 part continues into the message it encapsulates.
+func findPart(raw []byte, path []int) (mimeEntity, bool) {
+	cur, isMessage := splitEntity(raw), true
+	for i, n := range path {
+		var part mimeEntity
+		mt, params := cur.mediaType()
+		switch {
+		case strings.HasPrefix(mt, "multipart/"):
+			children := splitMultipart(cur.body, params["boundary"])
+			if n > len(children) {
+				return mimeEntity{}, false
+			}
+			part = splitEntity(children[n-1])
+			part.inDigest = mt == "multipart/digest"
+		case isMessage && n == 1:
+			part = cur
+		default:
+			return mimeEntity{}, false
+		}
+		if i == len(path)-1 {
+			return part, true
+		}
+		if pt, _ := part.mediaType(); pt == "message/rfc822" {
+			cur, isMessage = splitEntity(part.body), true
+		} else {
+			cur, isMessage = part, false
+		}
+	}
+	return mimeEntity{}, false
+}
+
+// splitMultipart returns the raw body parts between "--boundary" delimiter lines; the line break
+// before each delimiter belongs to the delimiter (RFC 2046), the preamble and epilogue are dropped.
+func splitMultipart(body []byte, boundary string) [][]byte {
+	if boundary == "" {
+		return nil
+	}
+	delim := []byte("--" + boundary)
+	var parts [][]byte
+	start := -1
+	for pos := 0; ; {
+		i := indexLineStart(body, pos, delim)
+		if i < 0 {
+			return parts
+		}
+		if start >= 0 {
+			end := i
+			if end >= start+2 && body[end-2] == '\r' && body[end-1] == '\n' {
+				end -= 2
+			} else if end >= start+1 && body[end-1] == '\n' {
+				end--
+			}
+			parts = append(parts, body[start:max(end, start)])
+		}
+		after := i + len(delim)
+		if bytes.HasPrefix(body[after:], []byte("--")) {
+			return parts
+		}
+		nl := bytes.IndexByte(body[after:], '\n')
+		if nl < 0 {
+			return parts
+		}
+		start = after + nl + 1
+		pos = start
 	}
 }
 
-func parseSectionIndices(path string) []int {
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return nil
-	}
-	parts := strings.Split(path, ".")
-	var out []int
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p == "" {
-			continue
+// indexLineStart finds sep at the start of a line at or after from.
+func indexLineStart(b []byte, from int, sep []byte) int {
+	for from <= len(b) {
+		i := bytes.Index(b[from:], sep)
+		if i < 0 {
+			return -1
 		}
-		var n int
-		if _, err := fmt.Sscanf(p, "%d", &n); err != nil || n < 1 {
-			return nil
+		i += from
+		if i == 0 || b[i-1] == '\n' {
+			return i
+		}
+		from = i + 1
+	}
+	return -1
+}
+
+// parseSectionPath parses "1.2.3" (empty for none); every number must be positive.
+func parseSectionPath(path string) ([]int, bool) {
+	if path == "" {
+		return nil, true
+	}
+	var out []int
+	for _, p := range strings.Split(path, ".") {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 1 {
+			return nil, false
 		}
 		out = append(out, n)
 	}
-	return out
+	return out, true
 }
 
 func splitHeaderBody(raw []byte) (header, body []byte) {
@@ -270,72 +376,4 @@ func splitHeaderBody(raw []byte) (header, body []byte) {
 		return raw[:i+2], raw[i+2:]
 	}
 	return raw, nil
-}
-
-func fetchMIMEPart(raw []byte, path []int) ([]byte, bool) {
-	if len(path) == 0 {
-		return raw, true
-	}
-	msg, err := mail.ReadMessage(bytes.NewReader(raw))
-	if err != nil {
-		return nil, false
-	}
-	mediaType, params := parseMediaType(msg.Header.Get("Content-Type"))
-	if !strings.HasPrefix(strings.ToLower(mediaType), "multipart/") {
-		if len(path) == 1 && path[0] == 1 {
-			return raw, true
-		}
-		return nil, false
-	}
-	body, err := io.ReadAll(msg.Body)
-	if err != nil {
-		return nil, false
-	}
-	part, ok := readMultipartPart(params["boundary"], body, path[0])
-	if !ok {
-		return nil, false
-	}
-	if len(path) == 1 {
-		return part, true
-	}
-	return fetchMIMEPart(part, path[1:])
-}
-
-func readMultipartPart(boundary string, body []byte, n int) ([]byte, bool) {
-	if boundary == "" || n < 1 {
-		return nil, false
-	}
-	mr := multipart.NewReader(bytes.NewReader(body), boundary)
-	for i := 1; ; i++ {
-		p, err := mr.NextPart()
-		if err == io.EOF {
-			return nil, false
-		}
-		if err != nil {
-			return nil, false
-		}
-		if i == n {
-			return serializeMIMEPart(p)
-		}
-		_, _ = io.Copy(io.Discard, p)
-	}
-}
-
-func serializeMIMEPart(p *multipart.Part) ([]byte, bool) {
-	body, err := io.ReadAll(p)
-	if err != nil {
-		return nil, false
-	}
-	var b bytes.Buffer
-	for key, vals := range p.Header {
-		for _, v := range vals {
-			b.WriteString(key)
-			b.WriteString(": ")
-			b.WriteString(v)
-			b.WriteString("\r\n")
-		}
-	}
-	b.WriteString("\r\n")
-	b.Write(body)
-	return b.Bytes(), true
 }

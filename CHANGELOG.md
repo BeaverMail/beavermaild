@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- IMAP FETCH: `BODY[n]` returns the part content only, as RFC 3501 requires; it included the part's MIME
+  header, which is `BODY[n.MIME]`. Section bytes are returned as stored: quoted-printable parts were
+  decoded and part headers reordered.
+- IMAP FETCH: part numbers continue into `message/rfc822` parts (`BODY[2.1]`), and `HEADER`/`TEXT`/
+  `HEADER.FIELDS` of such a part refer to the encapsulated message; they returned the outer message.
+  `HEADER.FIELDS.NOT` and part-prefixed `HEADER.FIELDS` (`BODY[1.HEADER.FIELDS (...)]`) are supported.
+  Parts of a `multipart/digest` without `Content-Type` are `message/rfc822` (RFC 2046), in FETCH and
+  BODYSTRUCTURE.
+- IMAP BODYSTRUCTURE: part sizes and encodings come from the raw part, like `BODY[n]`; quoted-printable
+  parts were measured decoded.
+- IMAP SEARCH: `SENTBEFORE`/`SENTON`/`SENTSINCE` use the day written in the `Date` header, ignoring its time
+  and zone; they compared the UTC day. Address criteria (`FROM`, `TO`, `CC`, `BCC`) also match addresses
+  written with RFC 5322 comments.
 - IMAP: `SELECT`/`EXAMINE` and `APPEND` no longer create a missing folder (RFC 3501). `SELECT` answers `NO`;
   `APPEND` answers `NO [TRYCREATE]` before the literal, so the client can `CREATE` and retry. Clients that
   relied on the implicit creation must send `CREATE` first. An invalid name in `SELECT` answers `NO`.

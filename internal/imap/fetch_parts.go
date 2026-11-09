@@ -9,11 +9,17 @@ import (
 // extractHeaderFields returns the requested header lines exactly as stored (original order,
 // name case and folding) followed by the delimiting blank line, per RFC 3501 HEADER.FIELDS.
 func extractHeaderFields(raw []byte, fields []string) []byte {
+	hdr, _ := splitHeaderBody(raw)
+	return filterHeaderFields(hdr, fields, true)
+}
+
+// filterHeaderFields keeps the listed fields of a header block (keepListed, HEADER.FIELDS) or all
+// the others (keepListed=false, HEADER.FIELDS.NOT).
+func filterHeaderFields(hdr []byte, fields []string, keepListed bool) []byte {
 	want := make(map[string]struct{}, len(fields))
 	for _, f := range fields {
 		want[strings.ToUpper(strings.TrimSpace(f))] = struct{}{}
 	}
-	hdr, _ := splitHeaderBody(raw)
 	var out []byte
 	keep := false
 	for len(hdr) > 0 {
@@ -28,7 +34,7 @@ func extractHeaderFields(raw []byte, fields []string) []byte {
 		if line[0] != ' ' && line[0] != '\t' { // not a folded continuation: a new field starts
 			name, _, ok := bytes.Cut(line, []byte(":"))
 			_, wanted := want[strings.ToUpper(strings.TrimSpace(string(name)))]
-			keep = ok && wanted
+			keep = ok && wanted == keepListed
 		}
 		if keep {
 			out = append(out, line...)

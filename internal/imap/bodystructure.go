@@ -2,11 +2,12 @@
 package imap
 
 import (
+	"bufio"
 	"bytes"
 	"io"
 	"mime"
-	"mime/multipart"
 	"net/mail"
+	"net/textproto"
 	"strconv"
 	"strings"
 	"time"
@@ -70,19 +71,13 @@ func formatMultipart(subtype string, params map[string]string, body []byte, ext 
 	if boundary == "" {
 		return `(("TEXT" "PLAIN" NIL NIL NIL "7BIT" 0 0) "` + strings.ToUpper(subtype) + `" NIL)`
 	}
-	mr := multipart.NewReader(bytes.NewReader(body), boundary)
+	// Same raw split as BODY[n]: sizes and encodings match the bytes FETCH returns.
 	var parts []string
-	for {
-		p, err := mr.NextPart()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			break
-		}
-		partBody, _ := io.ReadAll(p)
-		mt, pr := parseMediaType(p.Header.Get("Content-Type"))
-		parts = append(parts, formatMIMEPart(mt, pr, p.Header, partBody, ext))
+	for _, child := range splitMultipart(body, boundary) {
+		e := splitEntity(child)
+		hdr, _ := textproto.NewReader(bufio.NewReader(bytes.NewReader(e.header))).ReadMIMEHeader()
+		mt, pr := entityMediaType(hdr.Get("Content-Type"), strings.EqualFold(subtype, "digest"))
+		parts = append(parts, formatMIMEPart(mt, pr, hdr, e.body, ext))
 	}
 	if len(parts) == 0 {
 		parts = append(parts, `("TEXT" "PLAIN" NIL NIL NIL "7BIT" 0 0)`)
