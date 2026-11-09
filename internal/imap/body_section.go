@@ -7,6 +7,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/mail"
+	"strconv"
 	"strings"
 )
 
@@ -15,6 +16,57 @@ type bodySectionFetch struct {
 	itemName  string
 	section   string
 	hdrFields []string // set for HEADER.FIELDS sections
+
+	// partial is set for BODY[...]<origin.count>: only count bytes from origin are sent.
+	partial bool
+	origin  int
+	count   int
+}
+
+// parsePartial parses a "<origin.count>" suffix at s[pos:], returning the bytes it spans.
+func parsePartial(s string, pos int) (origin, count, n int, ok bool) {
+	if pos >= len(s) || s[pos] != '<' {
+		return 0, 0, 0, false
+	}
+	end := strings.IndexByte(s[pos:], '>')
+	if end < 0 {
+		return 0, 0, 0, false
+	}
+	o, c, found := strings.Cut(s[pos+1:pos+end], ".")
+	if !found || !isDigits(o) || !isDigits(c) {
+		return 0, 0, 0, false
+	}
+	origin, err1 := strconv.Atoi(o)
+	count, err2 := strconv.Atoi(c)
+	if err1 != nil || err2 != nil || count == 0 {
+		return 0, 0, 0, false
+	}
+	return origin, count, end + 1, true
+}
+
+// partialData returns the bytes of data a BODY[...]<origin.count> fetch sends.
+func (bs bodySectionFetch) partialData(data []byte) []byte {
+	if !bs.partial {
+		return data
+	}
+	if bs.origin >= len(data) {
+		return nil
+	}
+	end := len(data)
+	if bs.count < end-bs.origin {
+		end = bs.origin + bs.count
+	}
+	return data[bs.origin:end]
+}
+
+// responseName is the item name in the FETCH response: BODY.PEEK becomes BODY, and a partial
+// fetch carries only its origin (RFC 3501 section 7.4.2).
+func (bs bodySectionFetch) responseName() string {
+	name := bodyFetchResponseName(bs.itemName)
+	if bs.partial {
+		name += "<" + strconv.Itoa(bs.origin) + ">"
+	}
+	return name
 }
 
 func parseAllBodyFetches(rest string) []bodySectionFetch {
@@ -40,13 +92,19 @@ func parseAllBodyFetches(rest string) []bodySectionFetch {
 			continue
 		}
 		spec = strings.TrimSpace(spec)
+		var bs bodySectionFetch
 		if spec == "" {
-			out = append(out, bodySectionFetch{itemName: item, section: ""})
+			bs = bodySectionFetch{itemName: item, section: ""}
 		} else if fields, ok := parseHeaderFieldsSection(spec); ok {
-			out = append(out, bodySectionFetch{itemName: item, section: "HEADER.FIELDS", hdrFields: fields})
+			bs = bodySectionFetch{itemName: item, section: "HEADER.FIELDS", hdrFields: fields}
 		} else {
-			out = append(out, bodySectionFetch{itemName: item, section: spec})
+			bs = bodySectionFetch{itemName: item, section: spec}
 		}
+		if origin, count, n, ok := parsePartial(rest, next); ok {
+			bs.partial, bs.origin, bs.count = true, origin, count
+			next += n
+		}
+		out = append(out, bs)
 		pos = next
 	}
 	if strings.Contains(upper, "RFC822.HEADER") {

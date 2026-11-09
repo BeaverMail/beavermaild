@@ -97,3 +97,17 @@ func TestBodyStructureEmptyParamValue(t *testing.T) {
 		t.Fatalf("want empty string param: %s", got)
 	}
 }
+
+func TestQuoteIMAPString8BitIsLiteral(t *testing.T) {
+	t.Parallel()
+
+	if got := quoteIMAPString("José"); got != "{5}\r\nJosé" {
+		t.Fatalf("8-bit %q", got)
+	}
+	if got := quoteIMAPString("a\x00b"); got != `"ab"` {
+		t.Fatalf("NUL %q", got)
+	}
+	if got := quoteIMAPString("caf\xc3\xa9\r\nx"); got != "{8}\r\ncafé  x" {
+		t.Fatalf("8-bit with newline %q", got)
+	}
+}

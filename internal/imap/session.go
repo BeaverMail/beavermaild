@@ -334,7 +334,7 @@ func (s *session) capabilityLine() string {
 		caps = append(caps, "LOGINDISABLED")
 	}
 	if s.principal.AccountID != 0 {
-		caps = append(caps, "IDLE", "NAMESPACE", "UIDPLUS", "UNSELECT", "SPECIAL-USE", "LIST-EXTENDED", "CONDSTORE", "SORT", "THREAD=REFERENCES", "QUOTA")
+		caps = append(caps, "ENABLE", "IDLE", "NAMESPACE", "UIDPLUS", "UNSELECT", "SPECIAL-USE", "LIST-EXTENDED", "CONDSTORE", "SORT", "THREAD=REFERENCES", "QUOTA")
 	}
 	return "CAPABILITY " + strings.Join(caps, " ")
 }
@@ -902,8 +902,8 @@ func (s *session) writeFetchWithLiterals(seq int, parts []string, sections []bod
 	}
 	sep := ""
 	for _, bs := range sections {
-		data := extractBodySection(raw, bs.section, bs.hdrFields)
-		if _, err := fmt.Fprintf(s.conn, "%s%s {%d}\r\n", sep, bodyFetchResponseName(bs.itemName), len(data)); err != nil {
+		data := bs.partialData(extractBodySection(raw, bs.section, bs.hdrFields))
+		if _, err := fmt.Fprintf(s.conn, "%s%s {%d}\r\n", sep, bs.responseName(), len(data)); err != nil {
 			return err
 		}
 		if _, err := s.conn.Write(data); err != nil {
@@ -1272,7 +1272,7 @@ func parseStatusArg(arg string) (name string, fields []string, ok bool) {
 	}
 	for _, f := range strings.Fields(strings.ToUpper(inner)) {
 		switch f {
-		case "MESSAGES", "RECENT", "UNSEEN", "UIDNEXT", "UIDVALIDITY":
+		case "MESSAGES", "RECENT", "UNSEEN", "UIDNEXT", "UIDVALIDITY", "HIGHESTMODSEQ":
 			fields = append(fields, f)
 		default:
 			return "", nil, false
@@ -1298,6 +1298,8 @@ func formatStatus(name string, fields []string, st mail.MailboxStatus) string {
 			parts = append(parts, fmt.Sprintf("UIDNEXT %d", st.UIDNext))
 		case "UIDVALIDITY":
 			parts = append(parts, fmt.Sprintf("UIDVALIDITY %d", st.UIDValidity))
+		case "HIGHESTMODSEQ":
+			parts = append(parts, fmt.Sprintf("HIGHESTMODSEQ %d", st.HighestModSeq))
 		}
 	}
 	return fmt.Sprintf("STATUS %s (%s)", formatListMailbox(name), strings.Join(parts, " "))

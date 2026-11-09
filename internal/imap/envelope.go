@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"fmt"
 	"net/mail"
+	"strconv"
 	"strings"
 )
 
@@ -135,21 +136,37 @@ func nstring(s string) string {
 	return quoteIMAPString(s)
 }
 
-// quoteIMAPString encodes an IMAP quoted string (escapes \ and "). An empty value is "" (not NIL:
-// body-fld-param values must be strings), and CR/LF, which a quoted string cannot hold, become spaces.
+// quoteIMAPString encodes an IMAP string for FETCH responses. An empty value is "" (not NIL:
+// body-fld-param values must be strings). CR/LF become spaces and NUL is dropped: neither fits a
+// quoted string, and NUL fits no IMAP4rev1 string at all. A value with 8-bit bytes (decoded
+// RFC 2047 names, RFC 2231 filenames) is sent as a literal, since quoted strings are 7-bit only.
 func quoteIMAPString(s string) string {
 	s = strings.TrimSpace(s)
+	var clean strings.Builder
+	eightBit := false
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; {
+		case c == 0:
+		case c == '\r' || c == '\n':
+			clean.WriteByte(' ')
+		default:
+			if c >= 0x80 {
+				eightBit = true
+			}
+			clean.WriteByte(c)
+		}
+	}
+	v := clean.String()
+	if eightBit {
+		return "{" + strconv.Itoa(len(v)) + "}\r\n" + v
+	}
 	var b strings.Builder
 	b.WriteByte('"')
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\r' || s[i] == '\n' {
-			b.WriteByte(' ')
-			continue
-		}
-		if s[i] == '\\' || s[i] == '"' {
+	for i := 0; i < len(v); i++ {
+		if v[i] == '\\' || v[i] == '"' {
 			b.WriteByte('\\')
 		}
-		b.WriteByte(s[i])
+		b.WriteByte(v[i])
 	}
 	b.WriteByte('"')
 	return b.String()

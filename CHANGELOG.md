@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- IMAP: `STATUS` returns `HIGHESTMODSEQ` (RFC 7162, required with CONDSTORE), and `ENABLE` is advertised in
+  CAPABILITY.
+- IMAP FETCH: strings with non-ASCII bytes in ENVELOPE and BODYSTRUCTURE (decoded sender names, RFC 2231
+  filenames) are sent as literals: IMAP4rev1 quoted strings are 7-bit only.
+- IMAP FETCH: partial fetches `BODY[...]<origin.count>` return the requested byte range.
 - IMAP SEARCH: `CHARSET` (UTF-8 and US-ASCII; others get `NO [BADCHARSET]`), literal search strings, bare
   sequence sets, `UID` with sequence-set lists, and the CONDSTORE `MODSEQ` criterion with `(MODSEQ n)` in the
   SEARCH and SORT responses.

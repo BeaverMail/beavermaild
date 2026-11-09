@@ -15,6 +15,8 @@ type MailboxStatus struct {
 	Unseen      uint32
 	UIDNext     uint32
 	UIDValidity uint32
+	// HighestModSeq is the mailbox HIGHESTMODSEQ (RFC 7162), as reported on SELECT.
+	HighestModSeq uint64
 }
 
 // Status returns requested STATUS fields for mailboxID.
@@ -27,10 +29,20 @@ func (ib *Inbox) Status(ctx context.Context, accountID, mailboxID uint32, fields
 	if err != nil {
 		return MailboxStatus{}, err
 	}
-	if statusNeedFlagCounts(fields) {
+	// A mailbox without a stored HIGHESTMODSEQ (older data) gets it from the messages, as SELECT does.
+	if statusNeedFlagCounts(fields) || (statusWants(fields, "HIGHESTMODSEQ") && mbox.HighestModSeq == 0) {
 		return ib.statusFromMessages(ctx, accountID, mailboxID, mbox)
 	}
 	return ib.statusFromIndex(ctx, accountID, mailboxID, mbox)
+}
+
+func statusWants(fields []string, item string) bool {
+	for _, f := range fields {
+		if strings.EqualFold(strings.TrimSpace(f), item) {
+			return true
+		}
+	}
+	return false
 }
 
 func statusNeedFlagCounts(fields []string) bool {
@@ -59,9 +71,10 @@ func (ib *Inbox) statusFromIndex(ctx context.Context, accountID, mailboxID uint3
 		uidNext = 1
 	}
 	return MailboxStatus{
-		Messages:    messages,
-		UIDNext:     uidNext,
-		UIDValidity: mbox.UIDValidity,
+		Messages:      messages,
+		UIDNext:       uidNext,
+		UIDValidity:   mbox.UIDValidity,
+		HighestModSeq: mbox.HighestModSeq,
 	}, nil
 }
 
@@ -71,6 +84,7 @@ func (ib *Inbox) statusFromMessages(ctx context.Context, accountID, mailboxID ui
 		return MailboxStatus{}, err
 	}
 	var unseen, recent uint32
+	_, _, highestMod := MailboxSelectState(msgs, mbox.HighestModSeq)
 	for _, m := range msgs {
 		if m.Meta.Flags&FlagRecent != 0 {
 			recent++
@@ -84,10 +98,11 @@ func (ib *Inbox) statusFromMessages(ctx context.Context, accountID, mailboxID ui
 		uidNext = 1
 	}
 	return MailboxStatus{
-		Messages:    uint32(len(msgs)),
-		Recent:      recent,
-		Unseen:      unseen,
-		UIDNext:     uidNext,
-		UIDValidity: mbox.UIDValidity,
+		Messages:      uint32(len(msgs)),
+		Recent:        recent,
+		Unseen:        unseen,
+		UIDNext:       uidNext,
+		UIDValidity:   mbox.UIDValidity,
+		HighestModSeq: highestMod,
 	}, nil
 }
