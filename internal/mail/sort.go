@@ -43,8 +43,10 @@ func SortMessages(msgs []Message, keys []SortKey, reverse bool, expr SearchExpr,
 		return nil
 	}
 	var rows []sortRow
+	pos := newSearchPos(msgs)
 	for i, m := range msgs {
-		if !matchSearchExprOne(m, &expr, load) {
+		pos.seq = uint32(i + 1)
+		if !matchSearchExprOne(m, pos, &expr, load) {
 			continue
 		}
 		rows = append(rows, sortRow{

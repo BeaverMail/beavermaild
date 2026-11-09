@@ -29,7 +29,7 @@ func TestFormatSortAndThread(t *testing.T) {
 	if got := formatSort(nil); got != "SORT" {
 		t.Fatalf("empty sort %q", got)
 	}
-	if got := formatThread([][]uint32{{1, 2}, {5}}); got != "THREAD (1 2) (5)" {
+	if got := formatThread([][]uint32{{1, 2}, {5}}); got != "THREAD (1 2)(5)" {
 		t.Fatalf("thread %q", got)
 	}
 }

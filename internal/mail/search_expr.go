@@ -28,13 +28,51 @@ func MatchSearchExpr(msgs []Message, expr SearchExpr) []uint32 {
 // MatchSearchExprWithLoader evaluates expr with optional raw loader for header/body criteria.
 func MatchSearchExprWithLoader(msgs []Message, expr SearchExpr, load RawLoader) []uint32 {
 	var out []uint32
+	pos := newSearchPos(msgs)
 	for i, m := range msgs {
-		if !matchSearchExprOne(m, &expr, load) {
+		pos.seq = uint32(i + 1)
+		if !matchSearchExprOne(m, pos, &expr, load) {
 			continue
 		}
-		out = append(out, uint32(i+1))
+		out = append(out, pos.seq)
 	}
 	return out
+}
+
+// UsesModSeq reports whether expr contains a MODSEQ criterion (RFC 7162: the SEARCH and SORT
+// responses then carry the highest mod-sequence of the returned messages).
+func (e *SearchExpr) UsesModSeq() bool {
+	if e == nil {
+		return false
+	}
+	switch e.Kind {
+	case SearchExprCrit:
+		return e.Crit.ModSeq != nil
+	case SearchExprAnd:
+		for _, child := range e.And {
+			if child.UsesModSeq() {
+				return true
+			}
+		}
+		return false
+	case SearchExprOr:
+		return e.Or[0].UsesModSeq() || e.Or[1].UsesModSeq()
+	case SearchExprNot:
+		return e.Not.UsesModSeq()
+	default:
+		return false
+	}
+}
+
+// HighestModSeq returns the largest per-message mod-sequence among the 1-based seqs of msgs.
+func HighestModSeq(msgs []Message, seqs []uint32) uint64 {
+	var highest uint64
+	for _, seq := range seqs {
+		if ms := msgs[seq-1].Meta.ModSeq; ms > highest {
+			highest = ms
+		}
+	}
+	return highest
 }
 
 // MatchSearchUIDExprWithLoader returns UIDs matching expr.
@@ -47,24 +85,24 @@ func MatchSearchUIDExprWithLoader(msgs []Message, expr SearchExpr, load RawLoade
 	return out
 }
 
-func matchSearchExprOne(m Message, expr *SearchExpr, load RawLoader) bool {
+func matchSearchExprOne(m Message, pos searchPos, expr *SearchExpr, load RawLoader) bool {
 	if expr == nil {
 		return false
 	}
 	switch expr.Kind {
 	case SearchExprCrit:
-		return matchSearchOne(m, expr.Crit, load)
+		return matchSearchOne(m, pos, expr.Crit, load)
 	case SearchExprAnd:
 		for _, child := range expr.And {
-			if !matchSearchExprOne(m, child, load) {
+			if !matchSearchExprOne(m, pos, child, load) {
 				return false
 			}
 		}
 		return len(expr.And) > 0
 	case SearchExprOr:
-		return matchSearchExprOne(m, expr.Or[0], load) || matchSearchExprOne(m, expr.Or[1], load)
+		return matchSearchExprOne(m, pos, expr.Or[0], load) || matchSearchExprOne(m, pos, expr.Or[1], load)
 	case SearchExprNot:
-		return !matchSearchExprOne(m, expr.Not, load)
+		return !matchSearchExprOne(m, pos, expr.Not, load)
 	default:
 		return false
 	}

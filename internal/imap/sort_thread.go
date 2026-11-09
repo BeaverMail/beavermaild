@@ -18,20 +18,19 @@ func (s *session) cmdSort(ctx context.Context, tag, arg string, byUID bool) erro
 	if !ok {
 		return s.tagged(tag, "BAD SORT syntax")
 	}
-	expr, ok := parseSearchExpr(searchArg)
-	if !ok {
+	expr, st := parseSortSearch(searchArg)
+	switch st {
+	case searchBadCharset:
+		return s.tagged(tag, "NO [BADCHARSET ("+searchCharsets+")] charset not supported")
+	case searchSyntaxError:
 		return s.tagged(tag, "BAD SORT syntax")
 	}
 	load := mail.RawLoader(func(m mail.Message) ([]byte, error) {
 		return s.inbox.LoadRaw(ctx, m.Meta)
 	})
-	var nums []uint32
-	if byUID {
-		nums = mail.SortUIDs(s.messages, keys, reverse, expr, load)
-	} else {
-		nums = mail.SortMessages(s.messages, keys, reverse, expr, load)
-	}
-	if err := s.untagged(formatSort(nums)); err != nil {
+	seqs := mail.SortMessages(s.messages, keys, reverse, expr, load)
+	resp := formatSort(s.seqsOrUIDs(seqs, byUID)) + s.searchModSeqSuffix(&expr, seqs)
+	if err := s.untagged(resp); err != nil {
 		return err
 	}
 	return s.tagged(tag, "OK SORT completed")
@@ -49,8 +48,11 @@ func (s *session) cmdThread(ctx context.Context, tag, arg string, byUID bool) er
 	if algo != "REFERENCES" {
 		return s.tagged(tag, "BAD THREAD algorithm not supported")
 	}
-	expr, ok := parseSearchExpr(searchArg)
-	if !ok {
+	expr, st := parseSortSearch(searchArg)
+	switch st {
+	case searchBadCharset:
+		return s.tagged(tag, "NO [BADCHARSET ("+searchCharsets+")] charset not supported")
+	case searchSyntaxError:
 		return s.tagged(tag, "BAD THREAD syntax")
 	}
 	load := mail.RawLoader(func(m mail.Message) ([]byte, error) {
@@ -70,7 +72,7 @@ func (s *session) cmdThread(ctx context.Context, tag, arg string, byUID bool) er
 
 // parseSortArg splits sort criteria "(...)" from the optional SEARCH program.
 func parseSortArg(arg string) (keys []mail.SortKey, reverse bool, searchArg string, ok bool) {
-	arg = strings.TrimSpace(arg)
+	arg = strings.TrimLeft(arg, " ")
 	if arg == "" || arg[0] != '(' {
 		return nil, false, "", false
 	}
@@ -82,9 +84,10 @@ func parseSortArg(arg string) (keys []mail.SortKey, reverse bool, searchArg stri
 			depth++
 		case ')':
 			depth--
-			if depth == 0 {
-				end = i
-			}
+		}
+		if depth == 0 {
+			end = i
+			break
 		}
 	}
 	if end < 0 {
@@ -94,8 +97,8 @@ func parseSortArg(arg string) (keys []mail.SortKey, reverse bool, searchArg stri
 	if !ok || len(keys) == 0 {
 		return nil, false, "", false
 	}
-	searchArg = strings.TrimSpace(arg[end+1:])
-	if searchArg == "" {
+	searchArg = strings.TrimLeft(arg[end+1:], " ")
+	if strings.TrimSpace(searchArg) == "" {
 		searchArg = "ALL"
 	}
 	return keys, reverse, searchArg, true
@@ -153,11 +156,7 @@ func parseThreadArg(arg string) (algo, searchArg string, ok bool) {
 	if algo != "REFERENCES" && algo != "ORDEREDSUBJECT" && algo != "REFS" {
 		return "", "", false
 	}
-	searchArg = strings.TrimSpace(rest)
-	if searchArg == "" {
-		searchArg = "ALL"
-	}
-	return algo, searchArg, true
+	return algo, rest, true
 }
 
 func formatSort(nums []uint32) string {
@@ -172,9 +171,10 @@ func formatThread(threads [][]uint32) string {
 		return "THREAD"
 	}
 	var b strings.Builder
-	b.WriteString("THREAD")
+	// thread-data = "THREAD" [SP 1*thread-list]: the lists follow each other with no space (RFC 5256).
+	b.WriteString("THREAD ")
 	for _, th := range threads {
-		b.WriteString(" (")
+		b.WriteByte('(')
 		b.WriteString(joinUints(th))
 		b.WriteByte(')')
 	}

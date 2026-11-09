@@ -88,6 +88,14 @@ func (s *session) run(ctx context.Context) error {
 			}
 			continue
 		}
+		if takesSearchLiterals(cmd, arg) {
+			var ok bool
+			if arg, ok, err = s.readCommandLiterals(tag, arg); err != nil {
+				return err
+			} else if !ok {
+				continue
+			}
+		}
 		switch cmd {
 		case "CAPABILITY":
 			if err := s.untagged(s.capabilityLine()); err != nil {
@@ -601,23 +609,43 @@ func (s *session) cmdSearch(ctx context.Context, tag, arg string, byUID bool) er
 	if !s.selected {
 		return s.tagged(tag, "NO not selected")
 	}
-	expr, ok := parseSearchExpr(arg)
-	if !ok {
+	expr, st := parseSearchCommand(arg)
+	switch st {
+	case searchBadCharset:
+		return s.tagged(tag, "NO [BADCHARSET ("+searchCharsets+")] charset not supported")
+	case searchSyntaxError:
 		return s.tagged(tag, "BAD SEARCH syntax")
 	}
 	load := mail.RawLoader(func(m mail.Message) ([]byte, error) {
 		return s.inbox.LoadRaw(ctx, m.Meta)
 	})
-	var nums []uint32
-	if byUID {
-		nums = mail.MatchSearchUIDExprWithLoader(s.messages, expr, load)
-	} else {
-		nums = mail.MatchSearchExprWithLoader(s.messages, expr, load)
-	}
-	if err := s.untagged(formatSearch(nums)); err != nil {
+	seqs := mail.MatchSearchExprWithLoader(s.messages, expr, load)
+	resp := formatSearch(s.seqsOrUIDs(seqs, byUID)) + s.searchModSeqSuffix(&expr, seqs)
+	if err := s.untagged(resp); err != nil {
 		return err
 	}
 	return s.tagged(tag, "OK SEARCH completed")
+}
+
+// seqsOrUIDs maps 1-based sequence numbers to UIDs for the UID form of a command.
+func (s *session) seqsOrUIDs(seqs []uint32, byUID bool) []uint32 {
+	if !byUID {
+		return seqs
+	}
+	out := make([]uint32, len(seqs))
+	for i, seq := range seqs {
+		out[i] = s.messages[seq-1].UID
+	}
+	return out
+}
+
+// searchModSeqSuffix returns " (MODSEQ n)" for a SEARCH/SORT response whose program used MODSEQ
+// and matched something (RFC 7162 section 3.1.5), else "".
+func (s *session) searchModSeqSuffix(expr *mail.SearchExpr, seqs []uint32) string {
+	if len(seqs) == 0 || !expr.UsesModSeq() {
+		return ""
+	}
+	return fmt.Sprintf(" (MODSEQ %d)", mail.HighestModSeq(s.messages, seqs))
 }
 
 func (s *session) cmdStatus(ctx context.Context, tag, arg string) error {
@@ -909,13 +937,14 @@ func parseMailboxName(arg string) string {
 	return arg
 }
 
+// splitCommand splits off the first word. The rest keeps trailing bytes, which may belong to a literal.
 func splitCommand(arg string) (cmd, rest string) {
-	arg = strings.TrimSpace(arg)
+	arg = strings.TrimLeft(arg, " ")
 	i := strings.IndexByte(arg, ' ')
 	if i < 0 {
-		return strings.ToUpper(arg), ""
+		return strings.ToUpper(strings.TrimSpace(arg)), ""
 	}
-	return strings.ToUpper(strings.TrimSpace(arg[:i])), strings.TrimSpace(arg[i+1:])
+	return strings.ToUpper(strings.TrimSpace(arg[:i])), strings.TrimLeft(arg[i+1:], " ")
 }
 
 func (s *session) continuation() error {

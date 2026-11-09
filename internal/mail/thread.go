@@ -15,8 +15,10 @@ type threadMember struct {
 // ThreadReferences groups matching messages into threads sorted by arrival within each thread.
 func ThreadReferences(msgs []Message, expr SearchExpr, load RawLoader) [][]uint32 {
 	var members []threadMember
+	pos := newSearchPos(msgs)
 	for i, m := range msgs {
-		if !matchSearchExprOne(m, &expr, load) {
+		pos.seq = uint32(i + 1)
+		if !matchSearchExprOne(m, pos, &expr, load) {
 			continue
 		}
 		tm := threadMember{

@@ -8,17 +8,74 @@ import (
 	"github.com/BeaverMail/beavermaild/internal/mail"
 )
 
-// parseSearchExpr parses a full IMAP SEARCH criteria program.
-func parseSearchExpr(arg string) (mail.SearchExpr, bool) {
-	tokens := tokenizeSearchArg(strings.TrimSpace(arg))
+// searchParseStatus is the outcome of parsing a SEARCH, SORT or THREAD search program.
+type searchParseStatus int
+
+const (
+	searchParsed searchParseStatus = iota
+	searchSyntaxError
+	searchBadCharset
+)
+
+// searchCharsets lists the charsets accepted for search strings, as sent in [BADCHARSET (...)].
+// Strings are matched as UTF-8, of which US-ASCII is a subset.
+const searchCharsets = "UTF-8 US-ASCII"
+
+func supportedSearchCharset(name string) bool {
+	return strings.EqualFold(name, "UTF-8") || strings.EqualFold(name, "US-ASCII")
+}
+
+// parseSearchCommand parses SEARCH arguments: [CHARSET name] search-program.
+func parseSearchCommand(arg string) (mail.SearchExpr, searchParseStatus) {
+	tokens := tokenizeSearchArg(arg)
+	if len(tokens) >= 1 && strings.EqualFold(tokens[0], "CHARSET") {
+		if len(tokens) < 2 {
+			return mail.SearchExpr{}, searchSyntaxError
+		}
+		if !supportedSearchCharset(tokens[1]) {
+			return mail.SearchExpr{}, searchBadCharset
+		}
+		tokens = tokens[2:]
+	}
+	return parseSearchTokens(tokens)
+}
+
+// parseSortSearch parses the "charset search-program" tail of SORT and THREAD (RFC 5256).
+// The charset is mandatory there; a missing one is tolerated, and an empty program means ALL.
+func parseSortSearch(arg string) (mail.SearchExpr, searchParseStatus) {
+	tokens := tokenizeSearchArg(arg)
+	hasCharset := len(tokens) > 0 && supportedSearchCharset(tokens[0])
+	if hasCharset {
+		tokens = tokens[1:]
+	}
 	if len(tokens) == 0 {
-		return mail.SearchExpr{}, false
+		return mail.SearchExpr{Kind: mail.SearchExprCrit, Crit: mail.SearchCriteria{All: true}}, searchParsed
+	}
+	expr, st := parseSearchTokens(tokens)
+	if st != searchParsed && !hasCharset {
+		// An unknown first atom followed by a valid program is an unsupported charset.
+		if _, tail := parseSearchTokens(tokens[1:]); tail == searchParsed || len(tokens) == 1 {
+			return mail.SearchExpr{}, searchBadCharset
+		}
+	}
+	return expr, st
+}
+
+// parseSearchExpr parses a bare IMAP SEARCH criteria program (no charset).
+func parseSearchExpr(arg string) (mail.SearchExpr, bool) {
+	expr, st := parseSearchTokens(tokenizeSearchArg(arg))
+	return expr, st == searchParsed
+}
+
+func parseSearchTokens(tokens []string) (mail.SearchExpr, searchParseStatus) {
+	if len(tokens) == 0 {
+		return mail.SearchExpr{}, searchSyntaxError
 	}
 	expr, rest, ok := parseSearchCriteriaList(tokens)
 	if !ok || len(rest) != 0 {
-		return mail.SearchExpr{}, false
+		return mail.SearchExpr{}, searchSyntaxError
 	}
-	return expr, true
+	return expr, searchParsed
 }
 
 // parseSearchCriteriaList parses one-or-more search-keys ANDed together.
@@ -136,17 +193,33 @@ func parseSearchAtom(tokens []string) (mail.SearchCriteria, int, bool) {
 		if len(tokens) < 2 {
 			return mail.SearchCriteria{}, 0, false
 		}
-		lo, hi, ok := parseUIDSearchRange(tokens[1])
+		uids, ok := parseSearchSeqSet(tokens[1])
 		if !ok {
 			return mail.SearchCriteria{}, 0, false
 		}
-		c.UIDSet = true
-		c.UIDMin = lo
-		c.UIDMax = hi
-		if !searchAtomHasCriterion(c) {
+		c.UIDs = uids
+		return c, 2, true
+	case "MODSEQ":
+		// MODSEQ [entry-name entry-type-req] mod-sequence-valzer (RFC 7162). Mod-sequences are
+		// kept per message, not per flag, so the optional entry is accepted and ignored.
+		n := 2
+		if len(tokens) >= 4 && !isDigits(tokens[1]) {
+			switch strings.ToLower(tokens[2]) {
+			case "priv", "shared", "all":
+			default:
+				return mail.SearchCriteria{}, 0, false
+			}
+			n = 4
+		}
+		if len(tokens) < n {
 			return mail.SearchCriteria{}, 0, false
 		}
-		return c, 2, true
+		v, err := strconv.ParseUint(tokens[n-1], 10, 63)
+		if err != nil {
+			return mail.SearchCriteria{}, 0, false
+		}
+		c.ModSeq = &v
+		return c, n, true
 	case "FROM", "TO", "CC", "BCC", "SUBJECT", "TEXT", "BODY":
 		if len(tokens) < 2 {
 			return mail.SearchCriteria{}, 0, false
@@ -239,7 +312,12 @@ func parseSearchAtom(tokens []string) (mail.SearchCriteria, int, bool) {
 		}
 		return c, 2, true
 	default:
-		return mail.SearchCriteria{}, 0, false
+		seqs, ok := parseSearchSeqSet(tokens[0])
+		if !ok {
+			return mail.SearchCriteria{}, 0, false
+		}
+		c.Seqs = seqs
+		return c, 1, true
 	}
 	if !searchAtomHasCriterion(c) {
 		return mail.SearchCriteria{}, 0, false
@@ -248,7 +326,7 @@ func parseSearchAtom(tokens []string) (mail.SearchCriteria, int, bool) {
 }
 
 func searchAtomHasCriterion(c mail.SearchCriteria) bool {
-	return c.All || c.Seen != nil || c.UIDSet || c.Flagged != nil || c.Answered != nil ||
+	return c.All || c.Seen != nil || c.UIDs != nil || c.Seqs != nil || c.ModSeq != nil || c.Flagged != nil || c.Answered != nil ||
 		c.Deleted != nil || c.Draft != nil || c.Recent != nil ||
 		c.From != "" || c.To != "" || c.CC != "" || c.BCC != "" || c.Subject != "" ||
 		c.Text != "" || c.Body != "" || len(c.Headers) > 0 ||
@@ -256,4 +334,16 @@ func searchAtomHasCriterion(c mail.SearchCriteria) bool {
 		c.Since != nil || c.Before != nil || c.On != nil ||
 		c.SentSince != nil || c.SentBefore != nil || c.SentOn != nil ||
 		c.Keyword != "" || c.Unkeyword != ""
+}
+
+func isDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
 }

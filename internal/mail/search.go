@@ -3,6 +3,7 @@ package mail
 
 import (
 	"bytes"
+	"mime"
 	"net/mail"
 	"strings"
 	"time"
@@ -23,9 +24,9 @@ type SearchCriteria struct {
 	Deleted  *bool
 	Draft    *bool
 	Recent   *bool
-	UIDMin   uint32
-	UIDMax   uint32
-	UIDSet   bool
+	UIDs     []SeqRange // UID criterion; nil when unset
+	Seqs     []SeqRange // bare sequence-set criterion; nil when unset
+	ModSeq   *uint64    // MODSEQ criterion: per-message mod-sequence >= value
 
 	From       string
 	To         string
@@ -47,6 +48,49 @@ type SearchCriteria struct {
 	Unkeyword  string     // UNKEYWORD criterion
 }
 
+// SeqRange is one IMAP sequence-set range; 0 stands for "*" (the largest value in the mailbox).
+type SeqRange struct {
+	Lo, Hi uint32
+}
+
+// seqRangesContain reports whether n falls in ranges, with "*" resolved to largest.
+func seqRangesContain(ranges []SeqRange, n, largest uint32) bool {
+	for _, r := range ranges {
+		lo, hi := r.Lo, r.Hi
+		if lo == 0 {
+			lo = largest
+		}
+		if hi == 0 {
+			hi = largest
+		}
+		if lo > hi {
+			lo, hi = hi, lo
+		}
+		if n >= lo && n <= hi {
+			return true
+		}
+	}
+	return false
+}
+
+// searchPos locates one message in the mailbox, for sequence-set and UID criteria.
+type searchPos struct {
+	seq    uint32 // 1-based sequence number
+	count  uint32 // messages in the mailbox ("*" for sequence sets)
+	maxUID uint32 // largest UID in the mailbox ("*" for UID sets)
+}
+
+// newSearchPos returns the position of msgs[0]; advance with seq++.
+func newSearchPos(msgs []Message) searchPos {
+	p := searchPos{count: uint32(len(msgs))}
+	for _, m := range msgs {
+		if m.UID > p.maxUID {
+			p.maxUID = m.UID
+		}
+	}
+	return p
+}
+
 // RawLoader loads RFC 822 bytes for header SEARCH criteria.
 type RawLoader func(Message) ([]byte, error)
 
@@ -58,17 +102,25 @@ func MatchSearch(msgs []Message, c SearchCriteria) []uint32 {
 // MatchSearchWithLoader matches criteria, loading raw message bytes when header fields are set.
 func MatchSearchWithLoader(msgs []Message, c SearchCriteria, load RawLoader) []uint32 {
 	var out []uint32
+	pos := newSearchPos(msgs)
 	for i, m := range msgs {
-		if !matchSearchOne(m, c, load) {
+		pos.seq = uint32(i + 1)
+		if !matchSearchOne(m, pos, c, load) {
 			continue
 		}
-		out = append(out, uint32(i+1))
+		out = append(out, pos.seq)
 	}
 	return out
 }
 
-func matchSearchOne(m Message, c SearchCriteria, load RawLoader) bool {
-	if c.UIDSet && (m.UID < c.UIDMin || m.UID > c.UIDMax) {
+func matchSearchOne(m Message, pos searchPos, c SearchCriteria, load RawLoader) bool {
+	if c.UIDs != nil && !seqRangesContain(c.UIDs, m.UID, pos.maxUID) {
+		return false
+	}
+	if c.Seqs != nil && !seqRangesContain(c.Seqs, pos.seq, pos.count) {
+		return false
+	}
+	if c.ModSeq != nil && m.Meta.ModSeq < *c.ModSeq {
 		return false
 	}
 	if c.Seen != nil {
@@ -155,7 +207,7 @@ func matchSearchOne(m Message, c SearchCriteria, load RawLoader) bool {
 }
 
 func searchHasCriterion(c SearchCriteria) bool {
-	return c.UIDSet || c.Seen != nil || c.Flagged != nil || c.Answered != nil ||
+	return c.UIDs != nil || c.Seqs != nil || c.ModSeq != nil || c.Seen != nil || c.Flagged != nil || c.Answered != nil ||
 		c.Deleted != nil || c.Draft != nil || c.Recent != nil ||
 		c.Keyword != "" || c.Unkeyword != "" ||
 		needsRawSearch(c) || c.Larger != nil || c.Smaller != nil ||
@@ -240,9 +292,18 @@ func matchSearchHeaders(raw []byte, c SearchCriteria) bool {
 	return true
 }
 
+// headerContains matches needle against the header value with RFC 2047 encoded words decoded,
+// so a UTF-8 search finds "=?UTF-8?Q?...?=" subjects and names.
 func headerContains(haystack, needle string) bool {
+	if decoded, err := headerDecoder.DecodeHeader(haystack); err == nil {
+		haystack = decoded
+	}
 	return rawContains([]byte(haystack), needle)
 }
+
+// headerDecoder decodes the charsets the stdlib knows (UTF-8, ISO-8859-1, US-ASCII);
+// words in other charsets fail to decode and the raw value is searched instead.
+var headerDecoder = new(mime.WordDecoder)
 
 // rawContains is case-insensitive substring search on RFC822 bytes or header text.
 func rawContains(raw []byte, needle string) bool {

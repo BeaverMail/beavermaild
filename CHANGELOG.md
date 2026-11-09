@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- IMAP SEARCH: `CHARSET` (UTF-8 and US-ASCII; others get `NO [BADCHARSET]`), literal search strings, bare
+  sequence sets, `UID` with sequence-set lists, and the CONDSTORE `MODSEQ` criterion with `(MODSEQ n)` in the
+  SEARCH and SORT responses.
+- IMAP SEARCH: header criteria match RFC 2047 encoded words decoded, so UTF-8 searches find encoded subjects
+  and names.
+- IMAP SORT/THREAD: accept the charset argument RFC 5256 requires; a search program with parentheses after the
+  sort keys no longer fails with `BAD`.
+- IMAP THREAD: thread lists in the response follow each other with no space (`(1 2)(5)`), as RFC 5256 requires.
+
 ## 0.3.0
 
 - License: GNU AGPL v3.0 only (`AGPL-3.0-only`), copyright BLUEBOX SOFTWARE S.L. Contributions under the
