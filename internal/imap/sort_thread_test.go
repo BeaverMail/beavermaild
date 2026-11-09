@@ -9,14 +9,19 @@ import (
 func TestParseSortArg(t *testing.T) {
 	t.Parallel()
 
-	keys, rev, search, ok := parseSortArg(`(DATE SUBJECT) UNSEEN`)
-	if !ok || rev || search != "UNSEEN" || len(keys) != 2 || keys[0] != mail.SortDate || keys[1] != mail.SortSubject {
-		t.Fatalf("parse %+v rev=%v search=%q ok=%v", keys, rev, search, ok)
+	crits, search, ok := parseSortArg(`(DATE SUBJECT) UNSEEN`)
+	if !ok || search != "UNSEEN" || len(crits) != 2 || crits[0] != (mail.SortCriterion{Key: mail.SortDate}) ||
+		crits[1] != (mail.SortCriterion{Key: mail.SortSubject}) {
+		t.Fatalf("parse %+v search=%q ok=%v", crits, search, ok)
 	}
 
-	keys, rev, search, ok = parseSortArg(`(REVERSE ARRIVAL)`)
-	if !ok || !rev || search != "ALL" || len(keys) != 1 || keys[0] != mail.SortArrival {
-		t.Fatalf("reverse %+v rev=%v search=%q", keys, rev, search)
+	// REVERSE applies to the next key only.
+	crits, search, ok = parseSortArg(`(ARRIVAL REVERSE SIZE)`)
+	if !ok || search != "ALL" || len(crits) != 2 || crits[0].Reverse || !crits[1].Reverse {
+		t.Fatalf("reverse %+v search=%q", crits, search)
+	}
+	if _, _, ok := parseSortArg(`(ARRIVAL REVERSE)`); ok {
+		t.Fatal("trailing REVERSE accepted")
 	}
 }
 
@@ -29,7 +34,14 @@ func TestFormatSortAndThread(t *testing.T) {
 	if got := formatSort(nil); got != "SORT" {
 		t.Fatalf("empty sort %q", got)
 	}
-	if got := formatThread([][]uint32{{1, 2}, {5}}); got != "THREAD (1 2)(5)" {
+	id := func(n uint32) uint32 { return n }
+	leaf := func(n uint32, ch ...*mail.ThreadNode) *mail.ThreadNode { return &mail.ThreadNode{Seq: n, Children: ch} }
+	threads := []*mail.ThreadNode{
+		leaf(1, leaf(2, leaf(4)), leaf(3)),
+		leaf(0, leaf(5), leaf(6)),
+		leaf(7, leaf(8, leaf(9))),
+	}
+	if got := formatThread(threads, id); got != "THREAD (1 (2 4)(3))((5)(6))(7 8 9)" {
 		t.Fatalf("thread %q", got)
 	}
 }

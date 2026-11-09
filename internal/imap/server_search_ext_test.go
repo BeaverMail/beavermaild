@@ -84,7 +84,8 @@ func TestIMAPSearchCharsetSeqSetModSeq(t *testing.T) {
 	expectPrefix(t, read, "* SEARCH\r\n")
 	expectPrefix(t, read, "c11 OK")
 
-	send(t, conn, "c12 SORT (REVERSE ARRIVAL) UTF-8 OR (FROM alice@example.com) (FROM bob@example.com)")
+	// Deliveries share a second, so ARRIVAL would tie (ties keep mailbox order); FROM differs.
+	send(t, conn, "c12 SORT (REVERSE FROM) UTF-8 OR (FROM alice@example.com) (FROM bob@example.com)")
 	expectPrefix(t, read, "* SORT 2 1\r\n")
 	expectPrefix(t, read, "c12 OK")
 

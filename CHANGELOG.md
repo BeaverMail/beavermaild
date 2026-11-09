@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- IMAP SORT follows RFC 5256: `REVERSE` applies to the key after it, exact ties keep mailbox order, `FROM`/
+  `TO`/`CC` sort on the first address's local part, `SUBJECT` on the base subject (without `Re:`, `Fwd:`,
+  `[list]`...), and `DATE` falls back to the internal date when the `Date` header is missing or invalid.
+- IMAP THREAD REFERENCES implements the RFC 5256 algorithm and answers with thread trees
+  (`(1 (2 4)(3))`): missing parents become grouping nodes, and threads with the same base subject are
+  merged. It answered flat lists.
+- IMAP `\Recent`: `EXAMINE` no longer clears it; after `SELECT` the selecting session keeps reporting
+  its recent messages (`FLAGS`, `SEARCH RECENT`/`NEW`/`OLD`) while other sessions see none.
+  `STORE FLAGS` no longer clears `\Recent`.
 - IMAP FETCH: `BODY[n]` returns the part content only, as RFC 3501 requires; it included the part's MIME
   header, which is `BODY[n.MIME]`. Section bytes are returned as stored: quoted-printable parts were
   decoded and part headers reordered.

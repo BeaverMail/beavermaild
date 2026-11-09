@@ -14,7 +14,7 @@ func (s *session) cmdSort(ctx context.Context, tag, arg string, byUID bool) erro
 	if !s.selected {
 		return s.tagged(tag, "NO not selected")
 	}
-	keys, reverse, searchArg, ok := parseSortArg(arg)
+	crits, searchArg, ok := parseSortArg(arg)
 	if !ok {
 		return s.tagged(tag, "BAD SORT syntax")
 	}
@@ -29,7 +29,7 @@ func (s *session) cmdSort(ctx context.Context, tag, arg string, byUID bool) erro
 	load := mail.RawLoader(func(m mail.Message) ([]byte, error) {
 		return s.inbox.LoadRaw(w.ctx, m.Meta)
 	})
-	seqs, _ := mail.SortMessagesContext(w.ctx, s.messages, keys, reverse, expr, load)
+	seqs, _ := mail.SortMessagesContext(w.ctx, s.messages, crits, expr, load)
 	if cause := w.end(); cause != nil {
 		return s.abortCommand(tag, cause)
 	}
@@ -67,20 +67,23 @@ func (s *session) cmdThread(ctx context.Context, tag, arg string, byUID bool) er
 	if cause := w.end(); cause != nil {
 		return s.abortCommand(tag, cause)
 	}
-	for i, th := range threads {
-		threads[i] = s.seqsOrUIDs(th, byUID)
+	num := func(seq uint32) uint32 {
+		if byUID {
+			return s.messages[seq-1].UID
+		}
+		return seq
 	}
-	if err := s.untagged(formatThread(threads)); err != nil {
+	if err := s.untagged(formatThread(threads, num)); err != nil {
 		return err
 	}
 	return s.tagged(tag, "OK THREAD completed")
 }
 
 // parseSortArg splits sort criteria "(...)" from the optional SEARCH program.
-func parseSortArg(arg string) (keys []mail.SortKey, reverse bool, searchArg string, ok bool) {
+func parseSortArg(arg string) (crits []mail.SortCriterion, searchArg string, ok bool) {
 	arg = strings.TrimLeft(arg, " ")
 	if arg == "" || arg[0] != '(' {
-		return nil, false, "", false
+		return nil, "", false
 	}
 	depth := 0
 	end := -1
@@ -97,41 +100,42 @@ func parseSortArg(arg string) (keys []mail.SortKey, reverse bool, searchArg stri
 		}
 	}
 	if end < 0 {
-		return nil, false, "", false
+		return nil, "", false
 	}
-	keys, reverse, ok = parseSortKeyList(strings.TrimSpace(arg[1:end]))
-	if !ok || len(keys) == 0 {
-		return nil, false, "", false
+	crits, ok = parseSortKeyList(strings.TrimSpace(arg[1:end]))
+	if !ok {
+		return nil, "", false
 	}
 	searchArg = strings.TrimLeft(arg[end+1:], " ")
 	if strings.TrimSpace(searchArg) == "" {
 		searchArg = "ALL"
 	}
-	return keys, reverse, searchArg, true
+	return crits, searchArg, true
 }
 
-func parseSortKeyList(inner string) ([]mail.SortKey, bool, bool) {
-	tokens := strings.Fields(strings.ToUpper(inner))
-	if len(tokens) == 0 {
-		return nil, false, false
-	}
-	var reverse bool
-	var keys []mail.SortKey
-	for _, tok := range tokens {
+// parseSortKeyList parses sort keys; REVERSE applies to the key that follows it (RFC 5256).
+func parseSortKeyList(inner string) ([]mail.SortCriterion, bool) {
+	var crits []mail.SortCriterion
+	reverse := false
+	for _, tok := range strings.Fields(strings.ToUpper(inner)) {
 		if tok == "REVERSE" {
-			reverse = !reverse
+			if reverse {
+				return nil, false
+			}
+			reverse = true
 			continue
 		}
 		key, ok := parseSortKey(tok)
 		if !ok {
-			return nil, false, false
+			return nil, false
 		}
-		keys = append(keys, key)
+		crits = append(crits, mail.SortCriterion{Key: key, Reverse: reverse})
+		reverse = false
 	}
-	if len(keys) == 0 {
-		return nil, reverse, false
+	if len(crits) == 0 || reverse {
+		return nil, false
 	}
-	return keys, reverse, true
+	return crits, true
 }
 
 func parseSortKey(tok string) (mail.SortKey, bool) {
@@ -172,19 +176,50 @@ func formatSort(nums []uint32) string {
 	return "SORT " + joinUints(nums)
 }
 
-func formatThread(threads [][]uint32) string {
+// formatThread writes thread-data (RFC 5256): "THREAD" then one parenthesized list per thread,
+// lists back to back with no space. num maps a sequence number to the number to send.
+func formatThread(threads []*mail.ThreadNode, num func(uint32) uint32) string {
 	if len(threads) == 0 {
 		return "THREAD"
 	}
 	var b strings.Builder
-	// thread-data = "THREAD" [SP 1*thread-list]: the lists follow each other with no space (RFC 5256).
 	b.WriteString("THREAD ")
 	for _, th := range threads {
 		b.WriteByte('(')
-		b.WriteString(joinUints(th))
+		writeThreadMembers(&b, th, num)
 		b.WriteByte(')')
 	}
 	return b.String()
+}
+
+// writeThreadMembers writes a chain of single replies as "1 2 3", then the branches of the node
+// where the chain forks as nested lists: "1 (2 4)(3)". A dummy contributes no number.
+func writeThreadMembers(b *strings.Builder, n *mail.ThreadNode, num func(uint32) uint32) {
+	first := true
+	for {
+		if n.Seq != 0 {
+			if !first {
+				b.WriteByte(' ')
+			}
+			b.WriteString(strconv.FormatUint(uint64(num(n.Seq)), 10))
+			first = false
+		}
+		if n.Seq == 0 || len(n.Children) != 1 {
+			break
+		}
+		n = n.Children[0]
+	}
+	if len(n.Children) == 0 {
+		return
+	}
+	if !first {
+		b.WriteByte(' ')
+	}
+	for _, ch := range n.Children {
+		b.WriteByte('(')
+		writeThreadMembers(b, ch, num)
+		b.WriteByte(')')
+	}
 }
 
 func joinUints(nums []uint32) string {

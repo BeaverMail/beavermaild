@@ -49,6 +49,7 @@ func (s *session) pushIdleMailboxChanges(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	s.keepRecent(fresh)
 	return s.applyIdleMailboxDiff(fresh, highest)
 }
 

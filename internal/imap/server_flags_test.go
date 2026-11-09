@@ -69,3 +69,72 @@ func TestIMAPFlagsCaseAndStoreReplace(t *testing.T) {
 	}
 	expectPrefix(t, read, "f9 OK")
 }
+
+// TestIMAPRecentSession follows imaptest select/search-flags: EXAMINE keeps \Recent; SELECT takes
+// it for the selecting session, which keeps reporting it, while other sessions see none.
+func TestIMAPRecentSession(t *testing.T) {
+	t.Parallel()
+
+	ctx, accID, inbox, ln, cleanup := startIMAPTestServer(t)
+	defer cleanup()
+	for range 2 {
+		if _, err := inbox.Deliver(ctx, accID, []byte("Subject: r\r\n\r\nx\r\n")); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	dial := func(tag string) (net.Conn, *bufio.Reader) {
+		conn, err := net.Dial("tcp", ln.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { conn.Close() })
+		read := bufio.NewReader(conn)
+		expectPrefix(t, read, "* OK")
+		send(t, conn, tag+" LOGIN alice@localhost beaver")
+		expectPrefix(t, read, tag+" OK")
+		return conn, read
+	}
+	conn, read := dial("r0")
+	cmd := func(line string) string {
+		t.Helper()
+		send(t, conn, line)
+		tag, _, _ := strings.Cut(line, " ")
+		var out string
+		for {
+			l, err := read.ReadString('\n')
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.HasPrefix(l, tag+" ") {
+				if !strings.HasPrefix(l, tag+" OK") {
+					t.Fatalf("%s: %q", line, l)
+				}
+				return out
+			}
+			out += l
+		}
+	}
+
+	if got := cmd("r1 EXAMINE INBOX"); !strings.Contains(got, "* 2 RECENT") {
+		t.Fatalf("examine %q", got)
+	}
+	cmd("r2 CLOSE")
+	if got := cmd("r3 STATUS INBOX (RECENT)"); !strings.Contains(got, "RECENT 2") {
+		t.Fatalf("status after examine %q", got)
+	}
+	if got := cmd("r4 SELECT INBOX"); !strings.Contains(got, "* 2 RECENT") {
+		t.Fatalf("select %q", got)
+	}
+	if got := cmd("r5 SEARCH RECENT"); got != "* SEARCH 1 2\r\n" {
+		t.Fatalf("search recent %q", got)
+	}
+	if got := cmd(`r6 STORE 1 FLAGS (\Seen)`); !strings.Contains(got, `\Recent`) || !strings.Contains(got, `\Seen`) {
+		t.Fatalf("store keeps recent %q", got)
+	}
+
+	other, otherRead := dial("o0")
+	send(t, other, "o1 STATUS INBOX (RECENT)")
+	expectPrefix(t, otherRead, "* STATUS INBOX (RECENT 0)")
+	expectPrefix(t, otherRead, "o1 OK")
+}

@@ -34,15 +34,18 @@ type session struct {
 
 	condstore bool
 
-	principal       directory.Principal
-	authGate        security.AuthGate
-	readTimeout     time.Duration
-	selected        bool
-	readOnly        bool
-	mbox            mail.Mailbox
-	messages        []mail.Message
-	idleWatchModSeq uint64       // mailbox HighestModSeq at last IDLE sync
-	stopping        *atomic.Bool // server shutdown flag (nil when not served by a Server)
+	principal   directory.Principal
+	authGate    security.AuthGate
+	readTimeout time.Duration
+	selected    bool
+	readOnly    bool
+	mbox        mail.Mailbox
+	messages    []mail.Message
+	// recent holds the messages this session saw as \Recent when it selected the mailbox. SELECT
+	// clears the flag in storage so no other session sees it, but this session keeps reporting it.
+	recent          map[uint32]struct{} // EmailID set
+	idleWatchModSeq uint64              // mailbox HighestModSeq at last IDLE sync
+	stopping        *atomic.Bool        // server shutdown flag (nil when not served by a Server)
 }
 
 func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *mail.Inbox, certs *tlsload.Certs, secure, tlsRequired bool, gate security.AuthGate, readTimeout time.Duration) *session {
@@ -476,14 +479,24 @@ func (s *session) openMailbox(ctx context.Context, tag, name string, examine boo
 		}
 		return err
 	}
-	recent, err := s.inbox.ClearRecentFlags(ctx, s.principal.AccountID, mbox.ID)
-	if err != nil {
-		return err
+	// EXAMINE leaves \Recent alone; SELECT takes the recent messages for this session (RFC 3501).
+	s.recent = nil
+	if !examine {
+		ids, err := s.inbox.ClearRecentFlags(ctx, s.principal.AccountID, mbox.ID)
+		if err != nil {
+			return err
+		}
+		s.recent = make(map[uint32]struct{}, len(ids))
+		for _, id := range ids {
+			s.recent[id] = struct{}{}
+		}
 	}
 	msgs, err := s.inbox.List(ctx, s.principal.AccountID, mbox.ID)
 	if err != nil {
 		return err
 	}
+	s.keepRecent(msgs)
+	recent := countRecentFlags(msgs)
 	highest, err := s.inbox.HighestModSeq(ctx, s.principal.AccountID, mbox.ID)
 	if err != nil {
 		return err
@@ -576,6 +589,7 @@ func (s *session) markSeenOnFetch(ctx context.Context, idx int, items fetchItems
 		return items, err
 	}
 	s.messages[idx].Meta = meta
+	s.keepRecent(s.messages[idx : idx+1])
 	items.flags = true
 	return items, nil
 }
@@ -612,6 +626,8 @@ func (s *session) cmdStore(ctx context.Context, tag, arg string, byUID bool) err
 			continue
 		}
 		s.messages[idx].Meta = meta
+		s.keepRecent(s.messages[idx : idx+1])
+		meta = s.messages[idx].Meta
 		if !silent {
 			line := fmt.Sprintf("%d FETCH (FLAGS %s", idx+1, mail.FormatMessageFlags(meta))
 			if byUID {
@@ -830,8 +846,19 @@ func (s *session) cmdMove(ctx context.Context, tag, arg string, byUID bool) erro
 	if err != nil {
 		return err
 	}
+	s.keepRecent(msgs)
 	s.messages = msgs
 	return s.tagged(tag, fmt.Sprintf("OK [%s] MOVE completed", formatCopyUID(dest.UIDValidity, srcUIDs, destUIDs)))
+}
+
+// keepRecent sets \Recent on the messages this session took as recent at SELECT, after their
+// metadata was reloaded from storage (where SELECT cleared it).
+func (s *session) keepRecent(msgs []mail.Message) {
+	for i := range msgs {
+		if _, ok := s.recent[msgs[i].EmailID]; ok {
+			msgs[i].Meta.Flags |= mail.FlagRecent
+		}
+	}
 }
 
 func (s *session) emailIDsFromIndices(indices []int) []uint32 {
@@ -1250,7 +1277,7 @@ func parseStoreFlags(rest string) (mode storeMode, set, clear uint32, kwAdd, kwR
 		kwRemove = kws
 	case storeReplace:
 		set = bits
-		clear = ^uint32(0) &^ bits
+		clear = mail.StoreableIMAPFlags &^ bits // \Recent is not the client's to change (RFC 3501)
 		kwAdd = kws
 		kwRemove = []string{mail.AllKeywords}
 	}
