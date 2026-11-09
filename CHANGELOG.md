@@ -10,6 +10,8 @@
 - IMAP SORT/THREAD: accept the charset argument RFC 5256 requires; a search program with parentheses after the
   sort keys no longer fails with `BAD`.
 - IMAP THREAD: thread lists in the response follow each other with no space (`(1 2)(5)`), as RFC 5256 requires.
+- IMAP BODYSTRUCTURE: an empty MIME parameter value (e.g. `name=""`) is sent as `""` instead of `NIL`, which
+  strict clients rejected as a parse error.
 
 ## 0.3.0
 

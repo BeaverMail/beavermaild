@@ -135,15 +135,17 @@ func nstring(s string) string {
 	return quoteIMAPString(s)
 }
 
-// quoteIMAPString encodes an IMAP quoted string (escapes \ and ").
+// quoteIMAPString encodes an IMAP quoted string (escapes \ and "). An empty value is "" (not NIL:
+// body-fld-param values must be strings), and CR/LF, which a quoted string cannot hold, become spaces.
 func quoteIMAPString(s string) string {
 	s = strings.TrimSpace(s)
-	if s == "" {
-		return "NIL"
-	}
 	var b strings.Builder
 	b.WriteByte('"')
 	for i := 0; i < len(s); i++ {
+		if s[i] == '\r' || s[i] == '\n' {
+			b.WriteByte(' ')
+			continue
+		}
 		if s[i] == '\\' || s[i] == '"' {
 			b.WriteByte('\\')
 		}

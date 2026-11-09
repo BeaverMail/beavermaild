@@ -76,3 +76,24 @@ func TestQuoteIMAPStringEscapes(t *testing.T) {
 		t.Fatalf("quote %q", got)
 	}
 }
+
+func TestQuoteIMAPStringEmptyAndNewlines(t *testing.T) {
+	t.Parallel()
+
+	if got := quoteIMAPString(""); got != `""` {
+		t.Fatalf("empty %q", got)
+	}
+	if got := quoteIMAPString("a\r\nb"); got != `"a  b"` {
+		t.Fatalf("newlines %q", got)
+	}
+}
+
+func TestBodyStructureEmptyParamValue(t *testing.T) {
+	t.Parallel()
+
+	raw := []byte("Content-Type: text/plain; name=\"\"\r\n\r\nhi\r\n")
+	got := formatBodyStructure(raw)
+	if !strings.Contains(got, `("NAME" "")`) {
+		t.Fatalf("want empty string param: %s", got)
+	}
+}
