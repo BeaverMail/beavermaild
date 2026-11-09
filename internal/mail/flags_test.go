@@ -52,3 +52,19 @@ func TestIsStoreableFlag(t *testing.T) {
 		t.Fatal("recent not storeable")
 	}
 }
+
+func TestParseIMAPFlagNameCaseInsensitive(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{`\Seen`, `\seen`, `\SEEN`, "Seen"} {
+		if b, ok := mail.ParseIMAPFlagName(name); !ok || b != mail.FlagSeen {
+			t.Fatalf("%q -> %d %v", name, b, ok)
+		}
+	}
+	// A bare keyword is not a system flag unless it matches exactly (legacy "Seen").
+	if _, ok := mail.ParseIMAPFlagName("seen"); ok {
+		t.Fatal(`bare "seen" taken as \Seen`)
+	}
+	if _, ok := mail.ParseIMAPFlagName(`\Junk`); ok {
+		t.Fatal(`\Junk taken as a system flag`)
+	}
+}

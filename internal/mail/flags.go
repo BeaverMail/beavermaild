@@ -56,22 +56,30 @@ func FormatIMAPFlags(f uint32) string {
 
 // ParseIMAPFlagName maps an IMAP system flag name to a bit (empty if unknown).
 func ParseIMAPFlagName(name string) (uint32, bool) {
-	switch name {
-	case `\Seen`, "Seen":
-		return FlagSeen, true
-	case `\Draft`, "Draft":
-		return FlagDraft, true
-	case `\Deleted`, "Deleted":
-		return FlagDeleted, true
-	case `\Answered`, "Answered":
-		return FlagAnswered, true
-	case `\Flagged`, "Flagged":
-		return FlagFlagged, true
-	case `\Recent`, "Recent":
-		return FlagRecent, true
-	default:
+	// System flags are case-insensitive (RFC 3501: \seen is \Seen); bare names stay exact.
+	if rest, ok := strings.CutPrefix(name, `\`); ok {
+		name = rest
+		for _, f := range systemFlagNames {
+			if strings.EqualFold(name, f.name) {
+				return f.bit, true
+			}
+		}
 		return 0, false
 	}
+	for _, f := range systemFlagNames {
+		if name == f.name {
+			return f.bit, true
+		}
+	}
+	return 0, false
+}
+
+var systemFlagNames = []struct {
+	name string
+	bit  uint32
+}{
+	{"Seen", FlagSeen}, {"Draft", FlagDraft}, {"Deleted", FlagDeleted},
+	{"Answered", FlagAnswered}, {"Flagged", FlagFlagged}, {"Recent", FlagRecent},
 }
 
 // IsStoreableFlag reports whether clients may set or clear the flag via STORE.

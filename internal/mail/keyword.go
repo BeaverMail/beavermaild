@@ -39,9 +39,16 @@ func HasKeyword(meta storage.EmailMeta, keyword string) bool {
 	return false
 }
 
+// AllKeywords in ApplyKeywords' remove list drops every custom keyword (STORE FLAGS replace).
+const AllKeywords = `\*`
+
 // ApplyKeywords adds and removes custom keywords on meta (system flags use Flags bits).
 func ApplyKeywords(meta *storage.EmailMeta, add, remove []string) {
 	for _, name := range remove {
+		if name == AllKeywords {
+			meta.Keywords = nil
+			continue
+		}
 		name = NormalizeKeyword(name)
 		if bit, ok := ParseIMAPFlagName(name); ok {
 			meta.Flags &^= bit

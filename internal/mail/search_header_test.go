@@ -75,3 +75,24 @@ func TestMatchSearchHeaderCriterion(t *testing.T) {
 		t.Fatalf("header search %v", found)
 	}
 }
+
+// TestMatchSearchHeaderRepeatedAndEmpty checks a repeated field matches on any occurrence and an
+// empty value matches only messages that have the field (RFC 3501 HEADER).
+func TestMatchSearchHeaderRepeatedAndEmpty(t *testing.T) {
+	t.Parallel()
+
+	raws := [][]byte{
+		[]byte("X-Extra: hello\r\nX-Extra: another\r\n\r\nbody\r\n"),
+		[]byte("Subject: none\r\n\r\nbody\r\n"),
+	}
+	msgs := []mail.Message{{UID: 1}, {UID: 2}}
+	load := func(m mail.Message) ([]byte, error) { return raws[m.UID-1], nil }
+	for value, want := range map[string]int{"another": 1, "": 1, "missing": 0} {
+		found := mail.MatchSearchWithLoader(msgs, mail.SearchCriteria{
+			Headers: []mail.HeaderCriterion{{Field: "X-Extra", Value: value}},
+		}, load)
+		if len(found) != want {
+			t.Fatalf("X-Extra %q: got %v want %d", value, found, want)
+		}
+	}
+}

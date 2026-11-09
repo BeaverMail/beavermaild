@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"mime"
 	"net/mail"
+	"net/textproto"
+	"slices"
 	"strings"
 	"time"
 )
@@ -285,7 +287,10 @@ func matchSearchHeaders(raw []byte, c SearchCriteria) bool {
 		return false
 	}
 	for _, h := range c.Headers {
-		if !headerContains(msg.Header.Get(h.Field), h.Value) {
+		// HEADER field "" matches messages that have the field, whatever its value (RFC 3501).
+		// Every occurrence counts: a repeated field matches if any of its values does.
+		values, present := msg.Header[textproto.CanonicalMIMEHeaderKey(h.Field)]
+		if !present || !slices.ContainsFunc(values, func(v string) bool { return headerContains(v, h.Value) }) {
 			return false
 		}
 	}
