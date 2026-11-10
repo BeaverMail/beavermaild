@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"sync"
 	"time"
 
 	"github.com/BeaverMail/beavermaild/internal/storage"
@@ -14,8 +15,45 @@ import (
 // txnAttempts bounds reruns of one update under write contention.
 const txnAttempts = 100
 
-// errTxnContention is returned when an update keeps losing its CAS checks.
-var errTxnContention = errors.New("mail: too much write contention")
+// ErrContention is returned when an update keeps losing its CAS checks; the caller may retry.
+var ErrContention = errors.New("mail: too much write contention")
+
+// accountLockWait bounds the wait for another writer of the same account. Past it the update runs
+// unlocked, still safe through CAS: a nesting the reentrancy check misses costs a delay, never a deadlock.
+const accountLockWait = 5 * time.Second
+
+// accountLocks serializes the updates of one account in this process. Optimistic CAS alone lets a
+// transaction with several hot rows (APPEND: mailbox, email counter, quota) lose every retry to
+// smaller ones; queueing them leaves CAS only the conflicts with other processes.
+var accountLocks sync.Map // accountLockKey -> chan struct{} (capacity 1)
+
+type accountLockKey struct {
+	store   storage.Store
+	account uint32
+}
+
+type heldLockKey struct{}
+
+// lockAccount takes the account's write lock unless ctx already holds it (a nested update). It
+// returns the context to pass to nested calls and the release function.
+func (ib *Inbox) lockAccount(ctx context.Context, accountID uint32) (context.Context, func()) {
+	key := accountLockKey{ib.store, accountID}
+	if held, _ := ctx.Value(heldLockKey{}).(accountLockKey); held == key {
+		return ctx, func() {}
+	}
+	v, _ := accountLocks.LoadOrStore(key, make(chan struct{}, 1))
+	ch := v.(chan struct{})
+	timer := time.NewTimer(accountLockWait)
+	defer timer.Stop()
+	select {
+	case ch <- struct{}{}:
+		return context.WithValue(ctx, heldLockKey{}, key), func() { <-ch }
+	case <-timer.C:
+		return ctx, func() {}
+	case <-ctx.Done():
+		return ctx, func() {}
+	}
+}
 
 // txn collects the reads and writes of one update. Every row read through get is asserted
 // unchanged at commit, so a concurrent writer (goroutine or another process on the same store)
@@ -30,8 +68,11 @@ type txn struct {
 }
 
 // update runs fn in a txn and commits its writes in one batch, rerunning fn on CAS conflict.
-// fn must not have side effects outside the txn, as it may run several times.
-func (ib *Inbox) update(ctx context.Context, fn func(t *txn) error) error {
+// fn must not have side effects outside the txn, as it may run several times. Updates of the same
+// account run one at a time; fn must pass t.ctx to any nested update so it does not wait for itself.
+func (ib *Inbox) update(ctx context.Context, accountID uint32, fn func(t *txn) error) error {
+	ctx, unlock := ib.lockAccount(ctx, accountID)
+	defer unlock()
 	for attempt := range txnAttempts {
 		t := &txn{ctx: ctx, ib: ib, read: map[string][]byte{}, write: map[string][]byte{}}
 		if err := fn(t); err != nil {
@@ -63,7 +104,7 @@ func (ib *Inbox) update(ctx context.Context, fn func(t *txn) error) error {
 		}
 		time.Sleep(time.Duration(1+rand.IntN(attempt+1)) * time.Millisecond)
 	}
-	return errTxnContention
+	return ErrContention
 }
 
 // get returns the value for key as seen by this txn (its own writes first).
@@ -138,6 +179,23 @@ func emailKey(accountID, emailID uint32) []byte {
 
 func emailCounterKey(accountID uint32) []byte {
 	return storage.AppendKey(nil, storage.SubspaceLookup, 0, 0, 0, fmt.Appendf(nil, "meta/email/%d", accountID))
+}
+
+func uidValidityCounterKey(accountID uint32) []byte {
+	return storage.AppendKey(nil, storage.SubspaceLookup, 0, 0, 0, fmt.Appendf(nil, "meta/uidvalidity/%d", accountID))
+}
+
+// nextUIDValidity allocates a UIDVALIDITY for a new mailbox: never reused within the account, so a
+// mailbox deleted and created again (which may get the same id) never repeats its old value. It starts
+// from the clock, as Dovecot does, so it also stays above the values of mailboxes created before it.
+func (t *txn) nextUIDValidity(accountID uint32) (uint32, error) {
+	key := uidValidityCounterKey(accountID)
+	var last uint32
+	if err := t.getPersist(key, &last); err != nil && !errors.Is(err, storage.ErrNotFound) {
+		return 0, err
+	}
+	next := max(last+1, uint32(time.Now().Unix()))
+	return next, t.setPersist(key, next)
 }
 
 func (t *txn) mailbox(accountID, mailboxID uint32) (storage.Mailbox, error) {

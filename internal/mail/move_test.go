@@ -78,7 +78,7 @@ func TestCreateDeleteMailbox(t *testing.T) {
 	}
 
 	inbox := mail.NewInbox(store, blob.NewFS(t.TempDir()+"/blobs"))
-	mb, err := inbox.CreateMailbox(ctx, acc.ID, "Archive")
+	mb, err := inbox.CreateMailbox(ctx, acc.ID, "Archive", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,6 +90,21 @@ func TestCreateDeleteMailbox(t *testing.T) {
 	}
 	if err := inbox.DeleteMailbox(ctx, acc.ID, mail.InboxMailboxID); err != mail.ErrSystemMailbox {
 		t.Fatalf("delete inbox err %v", err)
+	}
+	// Created again it may reuse the id, so UIDVALIDITY must change (RFC 3501 2.3.1.1).
+	again, err := inbox.CreateMailbox(ctx, acc.ID, "Archive", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.UIDValidity == mb.UIDValidity {
+		t.Fatalf("recreated mailbox kept UIDVALIDITY %d", mb.UIDValidity)
+	}
+	st, err := inbox.ResolveMailbox(ctx, acc.ID, "Archive")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.UIDValidity != again.UIDValidity {
+		t.Fatalf("stored UIDVALIDITY %d, CREATE returned %d", st.UIDValidity, again.UIDValidity)
 	}
 }
 
@@ -110,24 +125,24 @@ func TestCreateMailboxCreatesParents(t *testing.T) {
 	}
 
 	inbox := mail.NewInbox(store, blob.NewFS(t.TempDir()+"/blobs"))
-	if _, err := inbox.CreateMailbox(ctx, acc.ID, "Projects"); err != nil {
+	if _, err := inbox.CreateMailbox(ctx, acc.ID, "Projects", true); err != nil {
 		t.Fatal(err)
 	}
-	mb, err := inbox.CreateMailbox(ctx, acc.ID, "projects/2026/Q1")
+	mb, err := inbox.CreateMailbox(ctx, acc.ID, "projects/2026/Q1", true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if mb.Name != "projects/2026/Q1" {
 		t.Fatalf("name %q", mb.Name)
 	}
-	notes, err := inbox.CreateMailbox(ctx, acc.ID, "Notes/")
+	notes, err := inbox.CreateMailbox(ctx, acc.ID, "Notes/", true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if notes.Name != "Notes" {
 		t.Fatalf("trailing delimiter kept: %q", notes.Name)
 	}
-	if _, err := inbox.CreateMailbox(ctx, acc.ID, "Projects/2026"); err != mail.ErrMailboxExists {
+	if _, err := inbox.CreateMailbox(ctx, acc.ID, "Projects/2026", true); err != mail.ErrMailboxExists {
 		t.Fatalf("parent not created: %v", err)
 	}
 
@@ -173,7 +188,7 @@ func TestDeleteMailboxNonEmpty(t *testing.T) {
 
 	blobs := blob.NewFS(t.TempDir() + "/blobs")
 	inbox := mail.NewInbox(store, blobs)
-	mb, err := inbox.CreateMailbox(ctx, acc.ID, "Archive")
+	mb, err := inbox.CreateMailbox(ctx, acc.ID, "Archive", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +207,7 @@ func TestDeleteMailboxNonEmpty(t *testing.T) {
 	if q, err := inbox.QuotaStatus(ctx, acc.ID); err != nil || q.MessagesUsed != 0 || q.StorageUsed != 0 {
 		t.Fatalf("quota not released: %+v, err %v", q, err)
 	}
-	if _, err := inbox.CreateMailbox(ctx, acc.ID, "Archive"); err != nil {
+	if _, err := inbox.CreateMailbox(ctx, acc.ID, "Archive", true); err != nil {
 		t.Fatalf("recreate: %v", err)
 	}
 }
@@ -247,16 +262,15 @@ func TestRenameMailbox(t *testing.T) {
 	}
 
 	inbox := mail.NewInbox(store, blob.NewFS(t.TempDir()+"/blobs"))
-	mb, err := inbox.CreateMailbox(ctx, acc.ID, "Old")
+	mb, err := inbox.CreateMailbox(ctx, acc.ID, "Old", true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = mb
 	renamed, err := inbox.RenameMailbox(ctx, acc.ID, "Old", "New")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if renamed.Name != "New" || renamed.UIDValidity != 2 {
+	if renamed.Name != "New" || renamed.UIDValidity <= mb.UIDValidity {
 		t.Fatalf("renamed %+v", renamed)
 	}
 	if _, err := inbox.ResolveMailbox(ctx, acc.ID, "New"); err != nil {
@@ -265,7 +279,7 @@ func TestRenameMailbox(t *testing.T) {
 	if _, err := inbox.RenameMailbox(ctx, acc.ID, "INBOX", "X"); err != mail.ErrSystemMailbox {
 		t.Fatalf("rename inbox err %v", err)
 	}
-	if _, err := inbox.CreateMailbox(ctx, acc.ID, "Taken"); err != nil {
+	if _, err := inbox.CreateMailbox(ctx, acc.ID, "Taken", true); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := inbox.RenameMailbox(ctx, acc.ID, "New", "Taken"); err != mail.ErrMailboxExists {

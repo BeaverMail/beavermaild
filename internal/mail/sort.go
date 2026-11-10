@@ -119,8 +119,14 @@ func loadSortFields(m Message, load RawLoader) sortFields {
 }
 
 // firstAddrMailbox returns the local part (addr-mailbox) of the first address in a header value.
+// A leading group ("name: a@b;") counts as an address whose mailbox is the group name, as in the
+// IMAP ENVELOPE.
 func firstAddrMailbox(value string) string {
-	for _, v := range []string{value, stripAddressComments(value)} {
+	plain := strings.TrimSpace(stripAddressComments(value))
+	if i := strings.IndexByte(plain, ':'); i > 0 && !strings.ContainsAny(plain[:i], "@<\",") {
+		return strings.TrimSpace(plain[:i])
+	}
+	for _, v := range []string{value, plain} {
 		if addrs, err := mail.ParseAddressList(v); err == nil && len(addrs) > 0 {
 			local, _, _ := strings.Cut(addrs[0].Address, "@")
 			return local

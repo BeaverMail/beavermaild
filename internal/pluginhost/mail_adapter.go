@@ -34,7 +34,7 @@ func (h *HostMail) ResolveMailbox(ctx context.Context, accountID uint32, imapNam
 	if err == nil {
 		return ref.ID, nil
 	}
-	created, err := h.stack.Inbox.CreateMailbox(ctx, accountID, imapName)
+	created, err := h.stack.Inbox.CreateMailbox(ctx, accountID, imapName, true)
 	if err != nil {
 		return 0, err
 	}

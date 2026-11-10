@@ -72,16 +72,18 @@ func (ib *Inbox) ClearRecentFlags(ctx context.Context, accountID, mailboxID uint
 			ids = append(ids, m.EmailID)
 		}
 	}
+	return ib.ClearRecentFlagsOf(ctx, accountID, mailboxID, ids)
+}
+
+// ClearRecentFlagsOf clears \Recent on the given messages of mailboxID and returns the IDs it
+// cleared: the caller is the one session that reports them as recent (RFC 3501 2.3.2).
+func (ib *Inbox) ClearRecentFlagsOf(ctx context.Context, accountID, mailboxID uint32, ids []uint32) ([]uint32, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
 	var cleared []uint32
-	err = ib.update(ctx, func(t *txn) error {
+	err := ib.update(ctx, accountID, func(t *txn) error {
 		cleared = cleared[:0]
-		mbox, err := t.mailbox(accountID, mailboxID)
-		if err != nil {
-			return err
-		}
 		for _, id := range ids {
 			meta, err := t.meta(accountID, id)
 			if errors.Is(err, storage.ErrNotFound) {
@@ -94,16 +96,13 @@ func (ib *Inbox) ClearRecentFlags(ctx context.Context, accountID, mailboxID uint
 				continue
 			}
 			cleared = append(cleared, id)
+			// No MODSEQ bump: \Recent is per-session state, and sessions that did not claim it never see it.
 			meta.Flags &^= FlagRecent
-			meta.ModSeq = nextModSeq(&mbox)
 			if err := t.putMeta(accountID, id, meta); err != nil {
 				return err
 			}
 		}
-		if len(cleared) == 0 {
-			return nil
-		}
-		return t.putMailbox(accountID, mbox)
+		return nil
 	})
 	return cleared, err
 }

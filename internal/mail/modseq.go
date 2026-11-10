@@ -19,7 +19,7 @@ func (ib *Inbox) HighestModSeq(ctx context.Context, accountID, mailboxID uint32)
 
 // SetFlagsIfUnchanged updates flags/keywords when UNCHANGEDSINCE allows it and bumps MODSEQ on change.
 func (ib *Inbox) SetFlagsIfUnchanged(ctx context.Context, accountID, emailID uint32, set, clear uint32, kwAdd, kwRemove []string, unchangedSince uint64) (applied bool, meta storage.EmailMeta, err error) {
-	err = ib.update(ctx, func(t *txn) error {
+	err = ib.update(ctx, accountID, func(t *txn) error {
 		meta, err = t.meta(accountID, emailID)
 		if err != nil {
 			return err

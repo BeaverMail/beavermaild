@@ -7,7 +7,7 @@ import (
 
 // setMailboxMessageCount stores an exact count (index backfill).
 func (ib *Inbox) setMailboxMessageCount(ctx context.Context, accountID, mailboxID uint32, count uint32) error {
-	return ib.update(ctx, func(t *txn) error {
+	return ib.update(ctx, accountID, func(t *txn) error {
 		mbox, err := t.mailbox(accountID, mailboxID)
 		if err != nil {
 			return err

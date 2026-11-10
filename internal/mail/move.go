@@ -4,6 +4,7 @@ package mail
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 
 	"github.com/BeaverMail/beavermaild/internal/storage"
@@ -24,7 +25,7 @@ func (ib *Inbox) MoveMessages(ctx context.Context, accountID uint32, emailIDs []
 		return nil, nil
 	}
 	var destUIDs []uint32
-	err := ib.update(ctx, func(t *txn) error {
+	err := ib.update(ctx, accountID, func(t *txn) error {
 		destUIDs = make([]uint32, 0, len(emailIDs))
 		boxes := newTxnMailboxes(t, accountID)
 		dest, err := boxes.get(destMailboxID)
@@ -48,7 +49,7 @@ func (ib *Inbox) MoveMessages(ctx context.Context, accountID uint32, emailIDs []
 			}
 			meta.MailboxID = destMailboxID
 			meta.IMAPUID = uid
-			meta.Flags &^= FlagRecent
+			meta.Flags |= FlagRecent // new in the destination (RFC 3501 6.4.7, RFC 6851)
 			meta.ModSeq = nextModSeq(dest)
 			if err := t.putMeta(accountID, id, meta); err != nil {
 				return err
@@ -84,7 +85,7 @@ func (ib *Inbox) CopyMessages(ctx context.Context, accountID uint32, emailIDs []
 		return nil, nil, err
 	}
 	var newIDs, newIMAPUIDs []uint32
-	err := ib.update(ctx, func(t *txn) error {
+	err := ib.update(ctx, accountID, func(t *txn) error {
 		newIDs = make([]uint32, 0, len(emailIDs))
 		newIMAPUIDs = make([]uint32, 0, len(emailIDs))
 		dest, err := t.mailbox(accountID, destMailboxID)
@@ -108,7 +109,7 @@ func (ib *Inbox) CopyMessages(ctx context.Context, accountID uint32, emailIDs []
 			}
 			meta.MailboxID = destMailboxID
 			meta.IMAPUID = uid
-			meta.Flags &^= FlagRecent
+			meta.Flags |= FlagRecent // new in the destination (RFC 3501 6.4.7, RFC 6851)
 			meta.ModSeq = nextModSeq(&dest)
 			if err := t.putMeta(accountID, newID, meta); err != nil {
 				return err
@@ -182,20 +183,23 @@ func (ib *Inbox) mailboxRecord(ctx context.Context, accountID, mailboxID uint32)
 }
 
 // CreateMailbox adds a user folder, plus any missing parent folders, and returns its record.
-func (ib *Inbox) CreateMailbox(ctx context.Context, accountID uint32, name string) (Mailbox, error) {
+// subscribe sets their subscription; IMAP CREATE passes false (RFC 3501 does not subscribe), but a
+// name still subscribed from a deleted folder gets its subscription back.
+func (ib *Inbox) CreateMailbox(ctx context.Context, accountID uint32, name string, subscribe bool) (Mailbox, error) {
 	// RFC 3501 §6.3.3: a trailing delimiter only declares the intent to create children.
 	name = strings.TrimRight(stringsTrimMailboxName(name), "/")
 	if err := ValidateMailboxName(name); err != nil {
 		return Mailbox{}, err
 	}
-	var id uint32
-	err := ib.update(ctx, func(t *txn) error {
-		if _, err := ib.ResolveMailbox(ctx, accountID, name); err == nil {
+	var id, uidValidity uint32
+	var subscribed bool
+	err := ib.update(ctx, accountID, func(t *txn) error {
+		if _, err := ib.ResolveMailbox(t.ctx, accountID, name); err == nil {
 			return ErrMailboxExists
 		} else if !errors.Is(err, storage.ErrNotFound) {
 			return err
 		}
-		records, err := ib.listMailboxRecords(ctx, accountID)
+		records, err := ib.listMailboxRecords(t.ctx, accountID)
 		if err != nil {
 			return err
 		}
@@ -215,7 +219,11 @@ func (ib *Inbox) CreateMailbox(ctx context.Context, accountID uint32, name strin
 			}
 		}
 		names = append(names, name)
-		first, err := ib.nextCustomMailboxID(ctx, accountID)
+		first, err := ib.nextCustomMailboxID(t.ctx, accountID)
+		if err != nil {
+			return err
+		}
+		orphans, err := t.orphanSubscriptions(accountID)
 		if err != nil {
 			return err
 		}
@@ -228,16 +236,22 @@ func (ib *Inbox) CreateMailbox(ctx context.Context, accountID uint32, name strin
 				}
 				return err
 			}
-			if err := t.putMailbox(accountID, storage.Mailbox{ID: id, Name: n, UIDNext: 1, UIDValidity: 1}); err != nil {
+			if uidValidity, err = t.nextUIDValidity(accountID); err != nil {
+				return err
+			}
+			subscribed = subscribe || slices.Contains(orphans, n)
+			orphans = slices.DeleteFunc(orphans, func(o string) bool { return o == n })
+			rec := storage.Mailbox{ID: id, Name: n, UIDNext: 1, UIDValidity: uidValidity, Subscribed: subscribed, SubSet: true}
+			if err := t.putMailbox(accountID, rec); err != nil {
 				return err
 			}
 		}
-		return nil
+		return t.putOrphanSubscriptions(accountID, orphans)
 	})
 	if err != nil {
 		return Mailbox{}, err
 	}
-	return Mailbox{ID: id, Name: name, UIDValidity: 1, Subscribed: true}, nil
+	return Mailbox{ID: id, Name: name, UIDValidity: uidValidity, Subscribed: subscribed}, nil
 }
 
 // DeleteMailbox removes a non-system folder and its messages (RFC 3501 DELETE).
@@ -256,14 +270,14 @@ func (ib *Inbox) DeleteMailbox(ctx context.Context, accountID, mailboxID uint32)
 			return err
 		}
 	}
-	return ib.update(ctx, func(t *txn) error {
+	return ib.update(ctx, accountID, func(t *txn) error {
 		mbox, err := t.mailbox(accountID, mailboxID)
 		if err != nil {
 			return err
 		}
 		n := mbox.MessageCount
 		if n == 0 {
-			if n, err = ib.indexMessageCount(ctx, accountID, mailboxID); err != nil {
+			if n, err = ib.indexMessageCount(t.ctx, accountID, mailboxID); err != nil {
 				return err
 			}
 		}
@@ -271,7 +285,15 @@ func (ib *Inbox) DeleteMailbox(ctx context.Context, accountID, mailboxID uint32)
 			return ErrMailboxNotEmpty
 		}
 		t.del(mailboxKey(accountID, mailboxID))
-		return nil
+		// An explicit subscription outlives the folder (RFC 3501 6.3.4).
+		if !mbox.SubSet || !mbox.Subscribed {
+			return nil
+		}
+		subs, err := t.orphanSubscriptions(accountID)
+		if err != nil || slices.Contains(subs, mbox.Name) {
+			return err
+		}
+		return t.putOrphanSubscriptions(accountID, append(subs, mbox.Name))
 	})
 }
 
@@ -301,13 +323,15 @@ func (ib *Inbox) RenameMailbox(ctx context.Context, accountID uint32, oldName, n
 		return Mailbox{}, err
 	}
 	var rec storage.Mailbox
-	err = ib.update(ctx, func(t *txn) error {
+	err = ib.update(ctx, accountID, func(t *txn) error {
 		var err error
 		if rec, err = t.mailbox(accountID, old.ID); err != nil {
 			return err
 		}
 		rec.Name = newName
-		rec.UIDValidity++
+		if rec.UIDValidity, err = t.nextUIDValidity(accountID); err != nil {
+			return err
+		}
 		return t.putMailbox(accountID, rec)
 	})
 	if err != nil {

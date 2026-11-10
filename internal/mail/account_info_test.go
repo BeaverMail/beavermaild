@@ -33,11 +33,11 @@ func TestListMailboxSummariesAndTree(t *testing.T) {
 	if _, err := inbox.Deliver(ctx, acc.ID, []byte("From: a@b\r\n\r\ntwo")); err != nil {
 		t.Fatal(err)
 	}
-	work, err := inbox.CreateMailbox(ctx, acc.ID, "Work")
+	work, err := inbox.CreateMailbox(ctx, acc.ID, "Work", true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	projects, err := inbox.CreateMailbox(ctx, acc.ID, "Work/Projects")
+	projects, err := inbox.CreateMailbox(ctx, acc.ID, "Work/Projects", true)
 	if err != nil {
 		t.Fatal(err)
 	}

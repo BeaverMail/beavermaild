@@ -158,42 +158,47 @@ func TestDeleteMessageBumpsHighestModSeq(t *testing.T) {
 	}
 }
 
-func TestAppendMailboxMessagesLoadsOnlyNewUIDs(t *testing.T) {
+// TestExpungeMessageChecksCurrentState checks EXPUNGE only removes a message still flagged
+// \Deleted in the expected mailbox, as stored now (another session may have changed it).
+func TestExpungeMessageChecksCurrentState(t *testing.T) {
 	t.Parallel()
+
 	ctx := context.Background()
 	store, err := sqlite.Open(ctx, "file:"+t.TempDir()+"/store.sqlite")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-
-	dir := directory.NewLocal(store)
-	acc, err := directory.SeedDev(ctx, dir)
+	acc, err := directory.SeedDev(ctx, directory.NewLocal(store))
 	if err != nil {
 		t.Fatal(err)
 	}
 	inbox := mail.NewInbox(store, blob.NewFS(t.TempDir()+"/blobs"))
-	if err := inbox.EnsureMailboxes(ctx, acc.ID); err != nil {
-		t.Fatal(err)
-	}
-
-	if _, err := inbox.Deliver(ctx, acc.ID, []byte("a")); err != nil {
-		t.Fatal(err)
-	}
-	cached, err := inbox.List(ctx, acc.ID, mail.InboxMailboxID)
+	id, err := inbox.Deliver(ctx, acc.ID, []byte("From: a@b\r\n\r\nx\r\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	id2, err := inbox.Deliver(ctx, acc.ID, []byte("b"))
-	if err != nil {
+	expunge := func(mailboxID uint32) bool {
+		t.Helper()
+		ok, err := inbox.ExpungeMessage(ctx, acc.ID, mailboxID, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ok
+	}
+	if expunge(mail.InboxMailboxID) {
+		t.Fatal("expunged without \\Deleted")
+	}
+	if err := inbox.SetFlags(ctx, acc.ID, id, mail.FlagDeleted, 0); err != nil {
 		t.Fatal(err)
 	}
-
-	merged, err := inbox.AppendMailboxMessages(ctx, acc.ID, mail.InboxMailboxID, cached, []uint32{id2})
-	if err != nil {
-		t.Fatal(err)
+	if expunge(mail.DraftsMailboxID) {
+		t.Fatal("expunged from another mailbox")
 	}
-	if len(merged) != 2 || merged[0].UID != 1 || merged[1].UID != 2 {
-		t.Fatalf("merged %+v", merged)
+	if !expunge(mail.InboxMailboxID) {
+		t.Fatal("not expunged")
+	}
+	if expunge(mail.InboxMailboxID) {
+		t.Fatal("expunged twice")
 	}
 }

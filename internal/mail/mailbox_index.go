@@ -74,11 +74,9 @@ func (ib *Inbox) listFromMailboxIndex(ctx context.Context, accountID, mailboxID 
 	}
 	out := make([]Message, 0, len(emailIDs))
 	for _, emailID := range emailIDs {
+		// The index and the metadata are read apart: a message deleted or moved in between is skipped.
 		meta, ok := metas[emailID]
-		if !ok {
-			return nil, storage.ErrNotFound
-		}
-		if meta.MailboxID != mailboxID {
+		if !ok || meta.MailboxID != mailboxID {
 			continue
 		}
 		out = append(out, messageFromMeta(emailID, meta))
@@ -100,30 +98,6 @@ func (ib *Inbox) ListMailboxIndexEmailIDs(ctx context.Context, accountID, mailbo
 // ListMailboxIndexUIDs returns sorted email document ids indexed for mailboxID.
 func (ib *Inbox) ListMailboxIndexUIDs(ctx context.Context, accountID, mailboxID uint32) ([]uint32, error) {
 	return ib.ListMailboxIndexEmailIDs(ctx, accountID, mailboxID)
-}
-
-// AppendMailboxMessages merges cached messages with batch-loaded new email ids.
-func (ib *Inbox) AppendMailboxMessages(ctx context.Context, accountID, mailboxID uint32, cached []Message, newEmailIDs []uint32) ([]Message, error) {
-	if len(newEmailIDs) == 0 {
-		return append([]Message(nil), cached...), nil
-	}
-	metas, err := ib.loadEmailMetaBatch(ctx, accountID, newEmailIDs)
-	if err != nil {
-		return nil, err
-	}
-	out := append([]Message(nil), cached...)
-	for _, emailID := range newEmailIDs {
-		meta, ok := metas[emailID]
-		if !ok {
-			return nil, storage.ErrNotFound
-		}
-		if meta.MailboxID != mailboxID {
-			continue
-		}
-		out = append(out, messageFromMeta(emailID, meta))
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].UID < out[j].UID })
-	return out, nil
 }
 
 func (ib *Inbox) collectMailboxIndexUIDs(ctx context.Context, accountID, mailboxID uint32) ([]uint32, error) {
@@ -168,7 +142,7 @@ func (ib *Inbox) loadEmailMetaBatch(ctx context.Context, accountID uint32, email
 	for i, emailID := range emailIDs {
 		wire, ok := values[string(keys[i])]
 		if !ok {
-			return nil, storage.ErrNotFound
+			continue // deleted since the index was read; callers skip absent ids
 		}
 		var meta storage.EmailMeta
 		if err := storage.UnmarshalPersist(wire, &meta); err != nil {

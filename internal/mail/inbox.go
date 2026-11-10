@@ -48,7 +48,7 @@ func (ib *Inbox) storeMessage(ctx context.Context, accountID, mailboxID uint32, 
 		return 0, err
 	}
 	var emailID uint32
-	err = ib.update(ctx, func(t *txn) error {
+	err = ib.update(ctx, accountID, func(t *txn) error {
 		mbox, err := t.mailbox(accountID, mailboxID)
 		if err != nil {
 			return err
@@ -83,6 +83,8 @@ func (ib *Inbox) storeMessage(ctx context.Context, accountID, mailboxID uint32, 
 		return t.addQuota(accountID, int64(len(raw)), 1)
 	})
 	if err != nil {
+		// shortcut: the blob stays on disk unreferenced; removing it here could race a concurrent
+		// APPEND of the same content (blobs are deduplicated). Needs a blob GC.
 		return 0, err
 	}
 	return emailID, nil

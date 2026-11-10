@@ -91,12 +91,12 @@ func (ib *Inbox) QuotaStatus(ctx context.Context, accountID uint32) (QuotaStatus
 
 // SetQuotaLimits overrides the stored limits for accountID (0 = unlimited); nil keeps the current value.
 func (ib *Inbox) SetQuotaLimits(ctx context.Context, accountID uint32, storageBytes *uint64, messages *uint32) error {
-	return ib.update(ctx, func(t *txn) error {
+	return ib.update(ctx, accountID, func(t *txn) error {
 		key := ib.quotaLookupKey(accountID)
 		var rec quotaRecord
 		err := t.getPersist(key, &rec)
 		if errors.Is(err, storage.ErrNotFound) {
-			rec, err = ib.newQuotaRecord(ctx, accountID)
+			rec, err = ib.newQuotaRecord(t.ctx, accountID)
 		}
 		if err != nil {
 			return err
@@ -159,12 +159,12 @@ func (ib *Inbox) loadQuotaRecord(ctx context.Context, accountID uint32) (quotaRe
 	}
 	// Materialize once; addQuota on a missing record keeps the winner of a concurrent create.
 	var rec quotaRecord
-	err = ib.update(ctx, func(t *txn) error {
+	err = ib.update(ctx, accountID, func(t *txn) error {
 		err := t.getPersist(key, &rec)
 		if !errors.Is(err, storage.ErrNotFound) {
 			return err
 		}
-		if rec, err = ib.newQuotaRecord(ctx, accountID); err != nil {
+		if rec, err = ib.newQuotaRecord(t.ctx, accountID); err != nil {
 			return err
 		}
 		return t.setPersist(key, rec)

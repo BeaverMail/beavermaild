@@ -29,7 +29,7 @@ func (ib *Inbox) ensureIMAPUIDBackfill(ctx context.Context, accountID, mailboxID
 	if err != nil || mbox.UIDSeqInit {
 		return err
 	}
-	return ib.update(ctx, func(t *txn) error {
+	return ib.update(ctx, accountID, func(t *txn) error {
 		mbox, err := t.mailbox(accountID, mailboxID)
 		if err != nil || mbox.UIDSeqInit {
 			return err

@@ -91,7 +91,16 @@ func (ib *Inbox) ResolveMailbox(ctx context.Context, accountID uint32, imapName 
 
 // EnsureMailboxes creates INBOX, Sent, Trash, and Drafts when missing (e.g. after seed upgrade).
 func (ib *Inbox) EnsureMailboxes(ctx context.Context, accountID uint32) error {
-	return ib.update(ctx, func(t *txn) error {
+	// Fast path without the account write lock: every mailbox lookup comes through here, and the
+	// system folders almost always exist.
+	keys := make([][]byte, len(defaultMailboxDefs))
+	for i, def := range defaultMailboxDefs {
+		keys[i] = mailboxKey(accountID, def.id)
+	}
+	if got, err := ib.store.GetMany(ctx, keys); err == nil && len(got) == len(keys) {
+		return nil
+	}
+	return ib.update(ctx, accountID, func(t *txn) error {
 		for _, def := range defaultMailboxDefs {
 			// Reading the key asserts it stays absent until this commit.
 			if _, err := t.get(mailboxKey(accountID, def.id)); !errors.Is(err, storage.ErrNotFound) {

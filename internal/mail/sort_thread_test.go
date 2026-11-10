@@ -111,7 +111,7 @@ func TestSortAddressAndSubjectKeys(t *testing.T) {
 	raws := []string{
 		"From: Zed <b-user@example.org>\r\nSubject: Re: [list] beta\r\n\r\n",
 		"From: a-user@example.org\r\nSubject: alpha (fwd)\r\nDate: Mon, 1 Jan 2007 00:00:00 +0000\r\n\r\n",
-		"From: Aaron <c-user@example.org>\r\nSubject: Fwd: gamma\r\nDate: bogus\r\n\r\n",
+		"From: 0-group: z@example.org;\r\nSubject: Fwd: gamma\r\nDate: bogus\r\n\r\n",
 	}
 	msgs := []mail.Message{
 		{UID: 1, Meta: storage.EmailMeta{ReceivedAt: time.Date(2006, 1, 1, 0, 0, 0, 0, time.UTC).Unix()}},
@@ -121,7 +121,7 @@ func TestSortAddressAndSubjectKeys(t *testing.T) {
 	load := mail.RawLoader(func(m mail.Message) ([]byte, error) { return []byte(raws[m.UID-1]), nil })
 	expr := mail.SearchExpr{Kind: mail.SearchExprCrit, Crit: mail.SearchCriteria{All: true}}
 	for key, want := range map[mail.SortKey][]uint32{
-		mail.SortFrom:    {2, 1, 3},
+		mail.SortFrom:    {3, 2, 1}, // the group name "0-group" is the key, not "z"
 		mail.SortSubject: {2, 1, 3},
 		mail.SortDate:    {1, 2, 3},
 	} {
