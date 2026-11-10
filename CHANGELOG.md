@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- IMAP `STORE` updates all the messages of a range in one storage transaction (per 256) instead of
+  one per message, so under load it waits for the account write lock once.
+- IMAP: claiming the `\Recent` of new messages no longer queues on the account write lock; the
+  storage CAS picks the one session that gets it. Every session seeing a new message queued for the
+  lock though only the first could claim it, which slowed every command that syncs (LIST, STATUS...).
+- MySQL: `interpolateParams=true` is added to the DSN unless set (one round trip per query instead of
+  prepare, execute and close), and the pool keeps up to 25 idle connections instead of 5, so busy
+  periods no longer reopen connections.
+- `BEAVER_PPROF=127.0.0.1:6060` serves Go's profiler (CPU, block, mutex, goroutines) on a loopback
+  address while `serve` runs; off by default. Write locks held over 250 ms or waited on past their
+  timeout are logged at WARN.
+- IMAP `EXPUNGE`/`CLOSE` delete all the `\Deleted` messages in one storage transaction (per 256
+  messages) instead of one per message, so under load they wait for the account write lock once.
+- Mail storage: deleting a message no longer scans every message on the server to decide whether its
+  blob file is still used (17 ms per deleted message at 10k messages, growing with the whole server).
+  A background GC removes unreferenced blob files once an hour, after a one-hour grace period, so
+  disk space comes back with that delay. It also removes the files of sent queue entries and failed
+  APPENDs, which were never deleted, and it cannot race an APPEND of the same content.
 - Mail storage: writes of one account run one at a time inside the process, so a large transaction
   (APPEND touches the mailbox, the email counter and the quota) no longer loses every retry to smaller
   ones under load and fails with "too much write contention". The optimistic CAS check still guards

@@ -90,6 +90,9 @@ rsync -a /var/lib/beavermail/blobs/ /backup/beavermail/blobs/
 
 Restore blobs to the same path configured under `data_dir` before starting `serve`.
 
+Deleting a message removes only its metadata. `serve` removes unreferenced blob files once an hour,
+when they are older than one hour, so disk space comes back up to two hours after a delete.
+
 ### When to use what
 
 | Goal | Tool |
@@ -160,4 +163,15 @@ messages; one large mailbox), so `serve` can then be measured with any IMAP/SMTP
 ```bash
 beaver init -c .data/load/config.json -data-dir .data/load
 go run ./tests/load/populate -c .data/load/config.json -tenants 100 -accounts 3 -per 6400 -big 100000
+```
+
+### Profiling under load
+
+Set `BEAVER_PPROF` to a loopback address to serve Go's profiler while `serve` runs; it also turns
+on block and mutex profiling. Off by default: profiles expose stacks and memory.
+
+```bash
+BEAVER_PPROF=127.0.0.1:6060 beaver serve
+go tool pprof -top http://127.0.0.1:6060/debug/pprof/block      # where goroutines wait
+go tool pprof -top http://127.0.0.1:6060/debug/pprof/profile?seconds=30   # CPU
 ```

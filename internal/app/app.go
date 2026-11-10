@@ -171,6 +171,7 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 		}
 		log = beaverlog.WithFile(log, logFile)
 	}
+	inbox.SetLogger(log)
 
 	fallback, err := cfg.NewDKIMSigner()
 	if err != nil {
@@ -344,6 +345,9 @@ func (a *App) Run(ctx context.Context) error {
 		KeepCompleted:  qt.KeepCompleted,
 	}
 
+	if err := startPprof(ctx, a.log); err != nil {
+		return err
+	}
 	errCh := make(chan error, 3)
 
 	dm := daemon.NewManager(a.log, daemon.Config{
@@ -401,6 +405,7 @@ func (a *App) Run(ctx context.Context) error {
 		a.status.Set(servicestatus.Entry{ID: "queue_worker", Name: "Queue worker", State: servicestatus.StateUp})
 	}
 	go a.domainTLS.Run(ctx)
+	go blob.RunGC(ctx, a.log, a.store, a.blobs)
 	go mail.NewWorker(a.log, a.queue, a.inbox, a.dir, newRemoteDeliverer(a.cfg, a.dir), signer, policy).Run(ctx)
 
 	_, _, tlsOn := a.cfg.TLSPair()
