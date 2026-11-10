@@ -97,6 +97,7 @@ func TestIMAPCopyUIDAndClose(t *testing.T) {
 	expectSelectOK(t, read)
 	expectPrefix(t, read, "c7 OK")
 	send(t, conn, "c8 SELECT DestUID")
+	expectPrefix(t, read, "* OK [CLOSED]") // reselecting closes the previous mailbox (RFC 7162 3.2.11)
 	expectPrefix(t, read, "* FLAGS")
 	expectPrefix(t, read, "* 1 EXISTS")
 	expectPrefix(t, read, "* 1 RECENT") // moved/copied in: \Recent in the destination

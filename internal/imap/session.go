@@ -46,7 +46,11 @@ type session struct {
 	// recent holds the messages this session saw as \Recent when it selected the mailbox. SELECT
 	// clears the flag in storage so no other session sees it, but this session keeps reporting it.
 	recent   map[uint32]struct{} // EmailID set
+	qresync  bool                // ENABLE QRESYNC: expunges are reported as VANISHED
 	keywords map[string]struct{} // keywords announced in the last FLAGS response
+	// keywordsMbox is the mailbox s.keywords belongs to: reselecting it keeps them, so a QRESYNC
+	// client's cached messages never carry a keyword the new FLAGS dropped.
+	keywordsMbox uint32
 	// syncCtx/syncPending: the running command reports other sessions' changes before its tagged reply.
 	syncCtx         context.Context
 	syncPending     bool
@@ -204,26 +208,15 @@ func (s *session) serveCommands(ctx context.Context) error {
 			if err := s.cmdUnsubscribe(ctx, tag, arg); err != nil {
 				return err
 			}
-		case "SELECT":
-			name, err := selectMailboxArg(arg)
+		case "SELECT", "EXAMINE":
+			name, qr, err := selectMailboxArg(arg, s.qresync)
 			if err != nil {
 				if err := s.tagged(tag, selectNameError(err)); err != nil {
 					return err
 				}
 				continue
 			}
-			if err := s.openMailbox(ctx, tag, name, false); err != nil {
-				return err
-			}
-		case "EXAMINE":
-			name, err := selectMailboxArg(arg)
-			if err != nil {
-				if err := s.tagged(tag, selectNameError(err)); err != nil {
-					return err
-				}
-				continue
-			}
-			if err := s.openMailbox(ctx, tag, name, true); err != nil {
+			if err := s.openMailbox(ctx, tag, name, cmd == "EXAMINE", qr); err != nil {
 				return err
 			}
 		case "STATUS":
@@ -367,7 +360,7 @@ func (s *session) serveCommands(ctx context.Context) error {
 }
 
 func (s *session) capabilityLine() string {
-	caps := []string{"IMAP4rev1", "MOVE", "LITERAL+", "SASL-IR", "AUTH=PLAIN"}
+	caps := []string{"IMAP4rev1", "MOVE", "LITERAL+", "SASL-IR", "AUTH=PLAIN", "QRESYNC"}
 	if s.tls != nil && !s.secure {
 		caps = append(caps, "STARTTLS")
 	}
@@ -499,9 +492,17 @@ func (s *session) cmdStartTLS(tag string) error {
 	return nil
 }
 
-func (s *session) openMailbox(ctx context.Context, tag, name string, examine bool) error {
+func (s *session) openMailbox(ctx context.Context, tag, name string, examine bool, qr *qresyncParams) error {
 	if s.principal.AccountID == 0 {
 		return s.tagged(tag, "NO LOGIN required")
+	}
+	// SELECT/EXAMINE closes the selected mailbox even when it fails (RFC 3501 6.3.1); CLOSED marks
+	// where its responses end (RFC 7162 3.2.11, required with CONDSTORE advertised).
+	if s.selected {
+		s.unselect()
+		if err := s.untagged("OK [CLOSED] Previous mailbox closed"); err != nil {
+			return err
+		}
 	}
 	mbox, err := s.inbox.ResolveMailbox(ctx, s.principal.AccountID, name)
 	if err != nil {
@@ -521,7 +522,9 @@ func (s *session) openMailbox(ctx context.Context, tag, name string, examine boo
 		return err
 	}
 	s.keepRecent(msgs)
-	s.keywords = nil
+	if s.keywordsMbox != mbox.ID {
+		s.keywords, s.keywordsMbox = nil, mbox.ID
+	}
 	s.trackKeywords(msgs)
 	recent := countRecentFlags(msgs)
 	highest, err := s.inbox.HighestModSeq(ctx, s.principal.AccountID, mbox.ID)
@@ -562,9 +565,14 @@ func (s *session) openMailbox(ctx context.Context, tag, name string, examine boo
 	if s.condstore {
 		okLines = append(okLines, fmt.Sprintf("OK [HIGHESTMODSEQ %d] Highest", highestMod))
 	}
-	okLines = append(okLines, fmt.Sprintf("OK [PERMANENTFLAGS %s] Limited", mail.IMAPPermanentFlags))
+	okLines = append(okLines, "OK [PERMANENTFLAGS "+s.permanentFlags()+"] Limited")
 	for _, line := range okLines {
 		if err := s.untagged(line); err != nil {
+			return err
+		}
+	}
+	if qr != nil {
+		if err := s.qresyncSelect(qr, uidNext); err != nil {
 			return err
 		}
 	}
@@ -585,6 +593,21 @@ func (s *session) cmdFetch(ctx context.Context, tag, arg string, byUID bool) err
 	set, err := parseSeqSet(setStr)
 	if err != nil {
 		return s.tagged(tag, "BAD FETCH syntax")
+	}
+	if items.vanished {
+		// Only UID FETCH, and only once QRESYNC is enabled (RFC 7162 3.2.6).
+		if !byUID || !s.qresync {
+			return s.tagged(tag, "BAD VANISHED needs UID FETCH and ENABLE QRESYNC")
+		}
+		uidNext, err := s.inbox.MailboxUIDNext(ctx, s.principal.AccountID, s.mbox.ID)
+		if err != nil {
+			return err
+		}
+		if v := vanishedSet(&set, max(uidNext, 1)-1, s.messages); v != "" {
+			if err := s.untagged("VANISHED (EARLIER) " + v); err != nil {
+				return err
+			}
+		}
 	}
 	indices := s.resolveIndices(set, byUID)
 	gone := false
@@ -629,6 +652,9 @@ func (s *session) markSeenOnFetch(ctx context.Context, idx int, items fetchItems
 	s.messages[idx].Meta = meta
 	s.keepRecent(s.messages[idx : idx+1])
 	items.flags = true
+	if s.condstore { // RFC 7162 3.2.4
+		items.uid, items.modseq = true, true
+	}
 	return items, nil
 }
 
@@ -679,7 +705,7 @@ func (s *session) cmdStore(ctx context.Context, tag, arg string, byUID bool) err
 		meta = s.messages[idx].Meta
 		if !silent {
 			line := fmt.Sprintf("%d FETCH (FLAGS %s", idx+1, mail.FormatMessageFlags(meta))
-			if byUID {
+			if byUID || s.condstore { // RFC 7162 3.2.4: UID and MODSEQ once CONDSTORE is enabled
 				line = fmt.Sprintf("%d FETCH (UID %d FLAGS %s", idx+1, msg.UID, mail.FormatMessageFlags(meta))
 			}
 			if s.condstore {
@@ -909,7 +935,7 @@ func (s *session) cmdMove(ctx context.Context, tag, arg string, byUID bool) erro
 	}
 	slices.SortFunc(indices, func(a, b int) int { return b - a })
 	for _, idx := range slices.Compact(indices) {
-		if err := s.untagged(fmt.Sprintf("%d EXPUNGE", idx+1)); err != nil {
+		if err := s.sendExpunge(idx+1, s.messages[idx].UID); err != nil {
 			return err
 		}
 		s.messages = slices.Delete(s.messages, idx, idx+1)
@@ -995,7 +1021,7 @@ func (s *session) announceKeywords(msgs []mail.Message) error {
 	if err := s.untagged(s.flagsLine()); err != nil {
 		return err
 	}
-	return s.untagged(fmt.Sprintf("OK [PERMANENTFLAGS %s] Limited", mail.IMAPPermanentFlags))
+	return s.untagged("OK [PERMANENTFLAGS "+s.permanentFlags()+"] Limited")
 }
 
 // flagsLine is the FLAGS response: the system flags plus the keywords in use in the mailbox.
@@ -1005,6 +1031,16 @@ func (s *session) flagsLine() string {
 		return mail.IMAPCapabilityFlags
 	}
 	return strings.TrimSuffix(mail.IMAPCapabilityFlags, ")") + " " + strings.Join(kws, " ") + ")"
+}
+
+// permanentFlags lists the announced keywords too: clients (and imaptest) take a keyword missing
+// from PERMANENTFLAGS for a session-only one, despite \*.
+func (s *session) permanentFlags() string {
+	kws := slices.Sorted(maps.Keys(s.keywords))
+	if len(kws) == 0 {
+		return mail.IMAPPermanentFlags
+	}
+	return strings.TrimSuffix(mail.IMAPPermanentFlags, `\*)`) + strings.Join(kws, " ") + ` \*)`
 }
 
 func (s *session) emailIDsFromIndices(indices []int) []uint32 {
@@ -1309,6 +1345,7 @@ type fetchItems struct {
 	uid, flags, size, envelope, bodystructure, body, internalDate, modseq bool
 	bodySections                                                          []bodySectionFetch
 	changedSince                                                          uint64
+	vanished                                                              bool // UID FETCH (... VANISHED): report expunged UIDs first
 	hasChangedSince                                                       bool
 }
 
@@ -1322,7 +1359,7 @@ func parseFetchArg(arg string) (setStr string, items fetchItems, ok bool) {
 		return arg, fetchItems{bodySections: []bodySectionFetch{{itemName: "BODY[]", section: ""}}}, true
 	}
 	setStr = strings.TrimSpace(arg[:i])
-	rest, since, found, ok := parseChangedSince(arg[i+1:])
+	rest, since, vanished, found, ok := parseChangedSince(arg[i+1:])
 	if !ok {
 		return "", items, false
 	}
@@ -1330,6 +1367,7 @@ func parseFetchArg(arg string) (setStr string, items fetchItems, ok bool) {
 	if found {
 		// CHANGEDSINCE implies MODSEQ in every response (RFC 7162 3.1.4.1).
 		items.changedSince, items.hasChangedSince, items.modseq = since, true, true
+		items.vanished = vanished
 	}
 	return setStr, items, ok
 }

@@ -22,6 +22,9 @@ func (s *session) cmdEnable(tag, arg string) error {
 		case "CONDSTORE":
 			s.condstore = true
 			enabled = append(enabled, "CONDSTORE")
+		case "QRESYNC":
+			s.condstore, s.qresync = true, true // QRESYNC implies CONDSTORE (RFC 7162 3.2.3)
+			enabled = append(enabled, "QRESYNC")
 		}
 	}
 	if len(enabled) == 0 {
@@ -88,38 +91,111 @@ func formatModSeq(modSeq uint64) string {
 	return "MODSEQ (" + strconv.FormatUint(modSeq, 10) + ")"
 }
 
-// parseChangedSince strips a trailing FETCH modifier "(CHANGEDSINCE n)" (RFC 7162 3.1.4).
-// found reports the modifier; ok is false when it is present but malformed.
-func parseChangedSince(rest string) (items string, since uint64, found, ok bool) {
+// parseChangedSince strips a trailing FETCH modifier list "(CHANGEDSINCE n [VANISHED])" (RFC 7162
+// 3.1.4, 3.2.6), in any order. found reports the modifiers; ok is false when they are malformed
+// (VANISHED needs CHANGEDSINCE).
+func parseChangedSince(rest string) (items string, since uint64, vanished, found, ok bool) {
 	rest = strings.TrimSpace(rest)
-	const paren = "(CHANGEDSINCE "
-	idx := strings.LastIndex(strings.ToUpper(rest), paren)
-	if idx < 0 {
-		return rest, 0, false, true
+	open := matchingOpenParen(rest)
+	if open < 0 {
+		return rest, 0, false, false, true
 	}
-	num, closed := strings.CutSuffix(rest[idx+len(paren):], ")")
-	n, err := strconv.ParseUint(strings.TrimSpace(num), 10, 63)
-	if !closed || err != nil {
-		return rest, 0, true, false
+	mods := strings.Fields(strings.ToUpper(rest[open+1 : len(rest)-1]))
+	if len(mods) == 0 || (mods[0] != "CHANGEDSINCE" && mods[0] != "VANISHED") {
+		return rest, 0, false, false, true // the item list itself
 	}
-	return strings.TrimSpace(rest[:idx]), n, true, true
+	hasSince := false
+	for i := 0; i < len(mods); i++ {
+		switch {
+		case mods[i] == "VANISHED" && !vanished:
+			vanished = true
+		case mods[i] == "CHANGEDSINCE" && !hasSince && i+1 < len(mods):
+			n, err := strconv.ParseUint(mods[i+1], 10, 63)
+			if err != nil {
+				return rest, 0, false, true, false
+			}
+			since, hasSince = n, true
+			i++
+		default:
+			return rest, 0, false, true, false
+		}
+	}
+	if !hasSince {
+		return rest, 0, false, true, false
+	}
+	return strings.TrimSpace(rest[:open]), since, vanished, true, true
 }
 
 // selectMailboxArg parses the SELECT/EXAMINE argument: a mailbox name optionally followed by
-// RFC 4466 select parameters, of which only CONDSTORE is known (it is always enabled anyway).
-func selectMailboxArg(arg string) (string, error) {
+// RFC 4466 select parameters: CONDSTORE (always enabled anyway) and QRESYNC (...), which needs
+// ENABLE QRESYNC first (qresync).
+func selectMailboxArg(arg string, qresync bool) (string, *qresyncParams, error) {
 	arg = strings.TrimSpace(arg)
-	if strings.HasSuffix(arg, ")") {
-		if i := strings.LastIndex(arg, " ("); i >= 0 {
-			for _, p := range strings.Fields(arg[i+2 : len(arg)-1]) {
-				if !strings.EqualFold(p, "CONDSTORE") {
-					return "", errUnknownSelectParam
+	var qr *qresyncParams
+	if open := matchingOpenParen(arg); open > 0 && arg[open-1] == ' ' {
+		params := strings.TrimSpace(arg[open+1 : len(arg)-1])
+		arg = arg[:open-1]
+		for params != "" {
+			upper := strings.ToUpper(params)
+			switch {
+			case strings.HasPrefix(upper, "CONDSTORE"):
+				params = strings.TrimSpace(params[len("CONDSTORE"):])
+			case strings.HasPrefix(upper, "QRESYNC") && qresync && qr == nil:
+				rest := strings.TrimSpace(params[len("QRESYNC"):])
+				end := closingParen(rest)
+				if end < 0 {
+					return "", nil, errUnknownSelectParam
 				}
+				p, ok := parseQResyncParams(rest[1:end])
+				if !ok {
+					return "", nil, errUnknownSelectParam
+				}
+				qr, params = p, strings.TrimSpace(rest[end+1:])
+			default:
+				return "", nil, errUnknownSelectParam
 			}
-			arg = arg[:i]
 		}
 	}
-	return mailboxNameFromArg(arg)
+	name, err := mailboxNameFromArg(arg)
+	return name, qr, err
+}
+
+// matchingOpenParen returns the index of the "(" that the final ")" of s closes, or -1.
+func matchingOpenParen(s string) int {
+	if !strings.HasSuffix(s, ")") {
+		return -1
+	}
+	depth := 0
+	for i := len(s) - 1; i >= 0; i-- {
+		switch s[i] {
+		case ')':
+			depth++
+		case '(':
+			if depth--; depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+// closingParen returns the index of the ")" closing the "(" that starts s, or -1.
+func closingParen(s string) int {
+	if !strings.HasPrefix(s, "(") {
+		return -1
+	}
+	depth := 0
+	for i := range len(s) {
+		switch s[i] {
+		case '(':
+			depth++
+		case ')':
+			if depth--; depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
 }
 
 var errUnknownSelectParam = errors.New("imap: unknown SELECT parameter")

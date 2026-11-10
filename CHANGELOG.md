@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- IMAP `SELECT`/`EXAMINE` close the selected mailbox first, even when they fail, and say so with
+  `* OK [CLOSED]` (RFC 7162, required with CONDSTORE advertised); a failed `SELECT` left the previous
+  mailbox selected.
+- IMAP QRESYNC (RFC 7162): `ENABLE QRESYNC`, `SELECT`/`EXAMINE ... (QRESYNC (uidvalidity modseq
+  [known-uids]))` answers `VANISHED (EARLIER)` and the messages changed since, `UID FETCH ...
+  (CHANGEDSINCE n VANISHED)`, and `VANISHED` instead of `EXPUNGE` once enabled. Without an expunge
+  history, `VANISHED (EARLIER)` lists every missing UID of the known range below `UIDNEXT`, as the
+  RFC allows.
+- IMAP flag-change `FETCH` responses (from `STORE`, an implicit `\Seen` or another session) carry
+  `UID` and `MODSEQ` once CONDSTORE is enabled (RFC 7162 3.2.4); reselecting a mailbox keeps
+  announcing in `FLAGS` the keywords the session has already seen there. `PERMANENTFLAGS` lists
+  those keywords as well as `\*`.
 - IMAP `STORE` updates all the messages of a range in one storage transaction (per 256) instead of
   one per message, so under load it waits for the account write lock once.
 - IMAP: claiming the `\Recent` of new messages no longer queues on the account write lock; the

@@ -3,7 +3,6 @@ package imap
 
 import (
 	"context"
-	"fmt"
 	"slices"
 	"strings"
 
@@ -83,7 +82,7 @@ func (s *session) expungeMarkedDeleted(ctx context.Context, uidFilter map[uint32
 			i++
 			continue
 		}
-		if err := s.untagged(fmt.Sprintf("%d EXPUNGE", i+1)); err != nil {
+		if err := s.sendExpunge(i+1, s.messages[i].UID); err != nil {
 			return err
 		}
 		s.messages = slices.Delete(s.messages, i, i+1)

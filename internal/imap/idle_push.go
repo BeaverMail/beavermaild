@@ -48,7 +48,7 @@ func (s *session) applyIdleMailboxDiff(fresh []mail.Message, highestMod uint64) 
 
 	for i := 0; i < len(s.messages); {
 		if _, ok := freshByUID[s.messages[i].UID]; !ok {
-			if err := s.untagged(fmt.Sprintf("%d EXPUNGE", i+1)); err != nil {
+			if err := s.sendExpunge(i+1, s.messages[i].UID); err != nil {
 				return err
 			}
 			s.messages = append(s.messages[:i], s.messages[i+1:]...)
@@ -89,7 +89,8 @@ func (s *session) applyIdleMailboxDiff(fresh []mail.Message, highestMod uint64) 
 // emitIdleFetch sends an unsolicited FLAGS (and optional MODSEQ) FETCH during IDLE.
 func (s *session) emitIdleFetch(seq int, msg mail.Message) error {
 	line := fmt.Sprintf("%d FETCH (FLAGS %s", seq, mail.FormatMessageFlags(msg.Meta))
-	if s.condstore {
+	if s.condstore { // RFC 7162 3.2.4: UID and MODSEQ once CONDSTORE is enabled
+		line = fmt.Sprintf("%d FETCH (UID %d FLAGS %s", seq, msg.UID, mail.FormatMessageFlags(msg.Meta))
 		modSeq := msg.Meta.ModSeq
 		if modSeq == 0 {
 			modSeq = 1

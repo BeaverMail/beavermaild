@@ -48,6 +48,7 @@ func TestIMAPAppendInternalDate(t *testing.T) {
 	expectPrefix(t, read, "d3 OK")
 
 	send(t, conn, "d4 SELECT Drafts")
+	expectPrefix(t, read, "* OK [CLOSED]") // reselecting closes the previous mailbox (RFC 7162 3.2.11)
 	expectPrefix(t, read, "* FLAGS")
 	expectPrefix(t, read, "* 1 EXISTS")
 	expectPrefix(t, read, "* ")
