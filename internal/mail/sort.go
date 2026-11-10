@@ -21,6 +21,8 @@ const (
 	SortSize
 	SortSubject
 	SortTo
+	SortDisplayFrom // RFC 5957
+	SortDisplayTo
 )
 
 // SortCriterion is one sort key; Reverse applies to that key only (RFC 5256 "REVERSE key").
@@ -35,13 +37,14 @@ type sortRow struct {
 }
 
 type sortFields struct {
-	arrival int64
-	date    time.Time
-	from    string
-	to      string
-	cc      string
-	subject string
-	size    uint32
+	arrival                int64
+	date                   time.Time
+	from                   string
+	to                     string
+	cc                     string
+	subject                string
+	size                   uint32
+	displayFrom, displayTo string // RFC 5957 display values
 }
 
 // SortMessages returns 1-based sequence numbers matching expr, sorted by crits.
@@ -55,20 +58,9 @@ func SortMessagesContext(ctx context.Context, msgs []Message, crits []SortCriter
 	if len(crits) == 0 {
 		return nil, nil
 	}
-	var rows []sortRow
-	pos := newSearchPos(msgs)
-	for i, m := range msgs {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		pos.seq = uint32(i + 1)
-		if !matchSearchExprOne(m, pos, &expr, load) {
-			continue
-		}
-		rows = append(rows, sortRow{
-			seq:    uint32(i + 1),
-			fields: loadSortFields(m, load),
-		})
+	rows, err := matchSortRows(ctx, msgs, expr, load)
+	if err != nil {
+		return nil, err
 	}
 	// Rows start in sequence order and the sort is stable: exact ties keep mailbox order, even
 	// under REVERSE (RFC 5256 section 3).
@@ -91,6 +83,23 @@ func SortMessagesContext(ctx context.Context, msgs []Message, crits []SortCriter
 	return out, nil
 }
 
+// matchSortRows returns the sort fields of the messages matching expr, in sequence order.
+func matchSortRows(ctx context.Context, msgs []Message, expr SearchExpr, load RawLoader) ([]sortRow, error) {
+	var rows []sortRow
+	pos := newSearchPos(msgs)
+	for i, m := range msgs {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		pos.seq = uint32(i + 1)
+		if !matchSearchExprOne(m, pos, &expr, load) {
+			continue
+		}
+		rows = append(rows, sortRow{seq: uint32(i + 1), fields: loadSortFields(m, load)})
+	}
+	return rows, nil
+}
+
 func loadSortFields(m Message, load RawLoader) sortFields {
 	f := sortFields{
 		arrival: m.Meta.ReceivedAt,
@@ -109,6 +118,8 @@ func loadSortFields(m Message, load RawLoader) sortFields {
 	f.from = strings.ToUpper(firstAddrMailbox(h.From))
 	f.to = strings.ToUpper(firstAddrMailbox(h.To))
 	f.cc = strings.ToUpper(firstAddrMailbox(h.Cc))
+	f.displayFrom = strings.ToUpper(firstAddrDisplay(h.From))
+	f.displayTo = strings.ToUpper(firstAddrDisplay(h.To))
 	base, _ := BaseSubject(h.Subject)
 	f.subject = strings.ToUpper(base)
 	// DATE is the sent date; without a valid Date header it is the internal date (RFC 5256).
@@ -135,6 +146,22 @@ func firstAddrMailbox(value string) string {
 	return ""
 }
 
+// firstAddrDisplay is the RFC 5957 sort value of the first address: its decoded display name,
+// else mailbox@host, else the mailbox alone (a group name, or a bare local part).
+func firstAddrDisplay(value string) string {
+	plain := strings.TrimSpace(stripAddressComments(value))
+	if i := strings.IndexByte(plain, ':'); i > 0 && !strings.ContainsAny(plain[:i], "@<\",") {
+		return strings.TrimSpace(plain[:i])
+	}
+	if addrs, err := mail.ParseAddressList(value); err == nil && len(addrs) > 0 {
+		if addrs[0].Name != "" {
+			return addrs[0].Name
+		}
+		return addrs[0].Address
+	}
+	return plain // unparsable, e.g. a bare "d": the whole value is the mailbox
+}
+
 func compareSortFields(a, b sortFields, key SortKey) int {
 	switch key {
 	case SortArrival:
@@ -151,6 +178,10 @@ func compareSortFields(a, b sortFields, key SortKey) int {
 		return strings.Compare(a.cc, b.cc)
 	case SortSubject:
 		return strings.Compare(a.subject, b.subject)
+	case SortDisplayFrom:
+		return strings.Compare(a.displayFrom, b.displayFrom)
+	case SortDisplayTo:
+		return strings.Compare(a.displayTo, b.displayTo)
 	default:
 		return 0
 	}
