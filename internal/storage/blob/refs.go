@@ -3,7 +3,6 @@ package blob
 
 import (
 	"context"
-	"errors"
 
 	"github.com/BeaverMail/beavermaild/internal/storage"
 )
@@ -12,52 +11,6 @@ const (
 	queueAccountID     uint32 = 0
 	queueMsgCollection byte   = 1
 )
-
-var errBlobReferenced = errors.New("blob: referenced")
-
-// StillReferenced reports whether hash is used by any mail message or queue entry.
-func StillReferenced(ctx context.Context, store storage.Store, hash [storage.Blake3DigestLen]byte) (bool, error) {
-	if hash == ([storage.Blake3DigestLen]byte{}) {
-		return false, nil
-	}
-	err := scanMailHashes(ctx, store, func(h [storage.Blake3DigestLen]byte) error {
-		if h == hash {
-			return errBlobReferenced
-		}
-		return nil
-	})
-	if errors.Is(err, errBlobReferenced) {
-		return true, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	err = scanQueueHashes(ctx, store, func(h [storage.Blake3DigestLen]byte) error {
-		if h == hash {
-			return errBlobReferenced
-		}
-		return nil
-	})
-	if errors.Is(err, errBlobReferenced) {
-		return true, nil
-	}
-	return false, err
-}
-
-// RemoveIfUnreferenced deletes the blob file when no mail or queue row references hash.
-func RemoveIfUnreferenced(ctx context.Context, store storage.Store, fs *FS, hash [storage.Blake3DigestLen]byte) error {
-	if hash == ([storage.Blake3DigestLen]byte{}) {
-		return nil
-	}
-	ref, err := StillReferenced(ctx, store, hash)
-	if err != nil {
-		return err
-	}
-	if ref {
-		return nil
-	}
-	return fs.Remove(hash)
-}
 
 // ReferencedHashes returns every blob hash still pointed at by mail or queue rows.
 func ReferencedHashes(ctx context.Context, store storage.Store) (map[[storage.Blake3DigestLen]byte]struct{}, error) {

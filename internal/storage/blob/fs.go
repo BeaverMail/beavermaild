@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/BeaverMail/beavermaild/internal/storage"
 	"github.com/zeebo/blake3"
@@ -29,7 +30,8 @@ func NewFS(root string) *FS {
 	return &FS{root: root}
 }
 
-// Put writes data to disk and returns its Blake3 digest. Existing identical blobs are not rewritten.
+// Put writes data to disk and returns its Blake3 digest. Existing identical blobs are not rewritten,
+// only touched (see GC).
 func (f *FS) Put(ctx context.Context, data []byte) ([storage.Blake3DigestLen]byte, error) {
 	var zero [storage.Blake3DigestLen]byte
 	if err := ctx.Err(); err != nil {
@@ -40,6 +42,11 @@ func (f *FS) Put(ctx context.Context, data []byte) ([storage.Blake3DigestLen]byt
 	path := f.path(hash)
 
 	if _, err := os.Stat(path); err == nil {
+		// Reused: a fresh mtime keeps GC from removing it before the new row commits.
+		now := time.Now()
+		if err := os.Chtimes(path, now, now); err != nil {
+			return zero, err
+		}
 		return hash, nil
 	} else if !os.IsNotExist(err) {
 		return zero, err

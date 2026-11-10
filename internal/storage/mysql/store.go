@@ -34,12 +34,17 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 	if strings.TrimSpace(dsn) == "" {
 		return nil, errors.New("mysql: empty dsn")
 	}
+	dsn, err := withInterpolateParams(dsn)
+	if err != nil {
+		return nil, err
+	}
 	db, err := sql.Open(DriverName, dsn)
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(25)
-	db.SetMaxIdleConns(5)
+	db.SetMaxOpenConns(maxConns)
+	// As many idle as open: fewer closed every busy query past the idle cap and reopened (TCP + auth).
+	db.SetMaxIdleConns(maxConns)
 	db.SetConnMaxLifetime(time.Hour)
 
 	if err := db.PingContext(ctx); err != nil {
@@ -51,6 +56,24 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 		return nil, err
 	}
 	return &Store{db: db}, nil
+}
+
+// maxConns bounds the pool, idle connections included.
+const maxConns = 25
+
+// withInterpolateParams turns on client-side parameter interpolation unless the DSN sets it: the
+// driver then sends one query instead of PREPARE, EXECUTE and CLOSE, three round trips for every
+// key read. The driver refuses it for charsets where escaping is unsafe.
+func withInterpolateParams(dsn string) (string, error) {
+	if strings.Contains(dsn, "interpolateParams=") {
+		return dsn, nil
+	}
+	cfg, err := mysql.ParseDSN(dsn)
+	if err != nil {
+		return "", fmt.Errorf("mysql dsn: %w", err)
+	}
+	cfg.InterpolateParams = true
+	return cfg.FormatDSN(), nil
 }
 
 // Get returns the raw envelope value for key.
