@@ -4,6 +4,7 @@ package mail
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/BeaverMail/beavermaild/internal/storage"
@@ -17,6 +18,17 @@ type Inbox struct {
 	quotaDefault   QuotaDefaults
 	accountQuotaFn AccountQuotaDefaultsFunc
 	tenantCapFn    TenantStorageCapFunc
+	log            *slog.Logger
+}
+
+// SetLogger sets where storage diagnostics (slow or timed-out write locks) go.
+func (ib *Inbox) SetLogger(log *slog.Logger) { ib.log = log }
+
+func (ib *Inbox) logger() *slog.Logger {
+	if ib.log == nil {
+		return slog.Default()
+	}
+	return ib.log
 }
 
 // NewInbox returns a delivery helper over store and blobs.
@@ -83,9 +95,7 @@ func (ib *Inbox) storeMessage(ctx context.Context, accountID, mailboxID uint32, 
 		return t.addQuota(accountID, int64(len(raw)), 1)
 	})
 	if err != nil {
-		// shortcut: the blob stays on disk unreferenced; removing it here could race a concurrent
-		// APPEND of the same content (blobs are deduplicated). Needs a blob GC.
-		return 0, err
+		return 0, err // the blob stays unreferenced until blob.GC removes it
 	}
 	return emailID, nil
 }

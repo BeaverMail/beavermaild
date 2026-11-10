@@ -93,3 +93,44 @@ func TestNestedUpdatesDoNotWait(t *testing.T) {
 		t.Fatalf("create+delete took %v: a nested update waited for the account lock", d)
 	}
 }
+
+// TestRecentClaimedOnce checks that sessions racing to claim a new message's \Recent (without the
+// account lock) leave exactly one winner.
+func TestRecentClaimedOnce(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, "file:"+t.TempDir()+"/store.sqlite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	acc, err := directory.SeedDev(ctx, directory.NewLocal(store))
+	if err != nil {
+		t.Fatal(err)
+	}
+	inbox := mail.NewInbox(store, blob.NewFS(t.TempDir()+"/blobs"))
+	id, err := inbox.Deliver(ctx, acc.ID, []byte("From: a@b\r\n\r\nnew\r\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	winners := 0
+	var wg sync.WaitGroup
+	for range 32 {
+		wg.Go(func() {
+			got, err := inbox.ClearRecentFlagsOf(ctx, acc.ID, mail.InboxMailboxID, []uint32{id})
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			mu.Lock()
+			winners += len(got)
+			mu.Unlock()
+		})
+	}
+	wg.Wait()
+	if winners != 1 {
+		t.Fatalf("%d sessions claimed \\Recent, want 1", winners)
+	}
+}

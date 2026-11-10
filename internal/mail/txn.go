@@ -6,6 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"runtime"
+	"runtime/debug"
+	"strings"
 	"sync"
 	"time"
 
@@ -34,6 +37,25 @@ type accountLockKey struct {
 
 type heldLockKey struct{}
 
+// slowLockHold is the lock hold time past which an update is logged.
+const slowLockHold = 250 * time.Millisecond
+
+// lockCaller names the function that started the update (the caller of Inbox.update).
+func lockCaller() string {
+	pcs := make([]uintptr, 8)
+	n := runtime.Callers(4, pcs)
+	frames := runtime.CallersFrames(pcs[:n])
+	for {
+		f, more := frames.Next()
+		if !strings.HasSuffix(f.Function, ".update") && !strings.Contains(f.Function, "lockAccount") {
+			return fmt.Sprintf("%s:%d", f.Function, f.Line)
+		}
+		if !more {
+			return ""
+		}
+	}
+}
+
 // lockAccount takes the account's write lock unless ctx already holds it (a nested update). It
 // returns the context to pass to nested calls and the release function.
 func (ib *Inbox) lockAccount(ctx context.Context, accountID uint32) (context.Context, func()) {
@@ -45,10 +67,19 @@ func (ib *Inbox) lockAccount(ctx context.Context, accountID uint32) (context.Con
 	ch := v.(chan struct{})
 	timer := time.NewTimer(accountLockWait)
 	defer timer.Stop()
+	start := time.Now()
 	select {
 	case ch <- struct{}{}:
-		return context.WithValue(ctx, heldLockKey{}, key), func() { <-ch }
+		taken := time.Now()
+		return context.WithValue(ctx, heldLockKey{}, key), func() {
+			<-ch
+			if held := time.Since(taken); held > slowLockHold {
+				ib.logger().Warn("mail write lock held long", "account", accountID, "held", held, "waited", taken.Sub(start), "caller", lockCaller())
+			}
+		}
 	case <-timer.C:
+		// A nested update called without the outer t.ctx waits for itself until here.
+		ib.logger().Warn("mail write lock wait timed out, running unlocked", "account", accountID, "stack", string(debug.Stack()))
 		return ctx, func() {}
 	case <-ctx.Done():
 		return ctx, func() {}
@@ -73,6 +104,13 @@ type txn struct {
 func (ib *Inbox) update(ctx context.Context, accountID uint32, fn func(t *txn) error) error {
 	ctx, unlock := ib.lockAccount(ctx, accountID)
 	defer unlock()
+	return ib.updateOptimistic(ctx, fn)
+}
+
+// updateOptimistic is update without the account write lock, CAS only. For small transactions
+// many sessions run at once where only one can change anything (claiming \Recent): queueing them
+// on the lock made all wait for the one; here the losers rerun, see nothing left, and stop.
+func (ib *Inbox) updateOptimistic(ctx context.Context, fn func(t *txn) error) error {
 	for attempt := range txnAttempts {
 		t := &txn{ctx: ctx, ib: ib, read: map[string][]byte{}, write: map[string][]byte{}}
 		if err := fn(t); err != nil {

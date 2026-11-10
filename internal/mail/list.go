@@ -4,6 +4,7 @@ package mail
 import (
 	"context"
 	"errors"
+	"slices"
 
 	"github.com/BeaverMail/beavermaild/internal/storage"
 )
@@ -78,11 +79,21 @@ func (ib *Inbox) ClearRecentFlags(ctx context.Context, accountID, mailboxID uint
 // ClearRecentFlagsOf clears \Recent on the given messages of mailboxID and returns the IDs it
 // cleared: the caller is the one session that reports them as recent (RFC 3501 2.3.2).
 func (ib *Inbox) ClearRecentFlagsOf(ctx context.Context, accountID, mailboxID uint32, ids []uint32) ([]uint32, error) {
+	// Every session that sees a new message tries to claim it at about the same time; only the first
+	// can. Neither the check nor the claim queues on the account write lock: CAS picks the winner.
+	metas, err := ib.loadEmailMetaBatch(ctx, accountID, ids)
+	if err != nil {
+		return nil, err
+	}
+	ids = slices.DeleteFunc(slices.Clone(ids), func(id uint32) bool {
+		m, ok := metas[id]
+		return !ok || m.Flags&FlagRecent == 0 || m.MailboxID != mailboxID
+	})
 	if len(ids) == 0 {
 		return nil, nil
 	}
 	var cleared []uint32
-	err := ib.update(ctx, accountID, func(t *txn) error {
+	err = ib.updateOptimistic(ctx, func(t *txn) error {
 		cleared = cleared[:0]
 		for _, id := range ids {
 			meta, err := t.meta(accountID, id)
