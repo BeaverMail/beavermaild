@@ -85,8 +85,9 @@ func TestIMAPSyncAcrossSessions(t *testing.T) {
 		t.Fatalf("store on expunged message: %q %q", lines, tagged)
 	}
 	send(t, a, "a4 FETCH 1 BODY.PEEK[]")
-	if lines, tagged := until(ra, "a4"); len(lines) != 0 || !strings.HasPrefix(tagged, "a4 NO") {
-		t.Fatalf("fetch of expunged message: %q %q", lines, tagged)
+	// RFC 2180 4.1: the body (still on disk until blob GC) or NO; never a dropped connection.
+	if _, tagged := until(ra, "a4"); !strings.HasPrefix(tagged, "a4 OK") && !strings.HasPrefix(tagged, "a4 NO") {
+		t.Fatalf("fetch of expunged message: %q", tagged)
 	}
 	send(t, a, "a5 CHECK")
 	// Message 1 was \Recent for A, so the recent count drops too.

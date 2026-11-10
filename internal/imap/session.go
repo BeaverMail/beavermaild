@@ -648,24 +648,29 @@ func (s *session) cmdStore(ctx context.Context, tag, arg string, byUID bool) err
 		return s.tagged(tag, "BAD STORE syntax")
 	}
 	indices := s.resolveIndices(setParsed, byUID)
+	var unchanged uint64
+	if hasUnchanged {
+		unchanged = unchangedSince
+	}
+	ids := make([]uint32, len(indices))
+	for i, idx := range indices {
+		ids[i] = s.messages[idx].StorageID()
+	}
+	results, err := s.inbox.SetFlagsMany(ctx, s.principal.AccountID, ids, set, clear, kwAdd, kwRemove, unchanged)
+	if err != nil {
+		return err
+	}
 	var failed []uint32
-	for _, idx := range indices {
-		msg := s.messages[idx]
-		var unchanged uint64
-		if hasUnchanged {
-			unchanged = unchangedSince
-		}
-		applied, meta, err := s.inbox.SetFlagsIfUnchanged(ctx, s.principal.AccountID, msg.StorageID(), set, clear, kwAdd, kwRemove, unchanged)
-		if errors.Is(err, storage.ErrNotFound) {
+	for i, idx := range indices {
+		msg, res := s.messages[idx], results[i]
+		if res.Gone {
 			continue // expunged by another session: its EXPUNGE comes with the next sync (RFC 2180 4.2)
 		}
-		if err != nil {
-			return err
-		}
-		if !applied {
+		if !res.Applied {
 			failed = append(failed, s.seqsOrUIDs([]uint32{uint32(idx + 1)}, byUID)...)
 			continue
 		}
+		meta := res.Meta
 		s.messages[idx].Meta = meta
 		s.keepRecent(s.messages[idx : idx+1])
 		if err := s.announceKeywords(s.messages[idx : idx+1]); err != nil {

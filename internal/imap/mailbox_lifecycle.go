@@ -54,13 +54,14 @@ func (s *session) purgeDeleted(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	var ids []uint32
 	for _, m := range msgs {
-		if m.Meta.Flags&mail.FlagDeleted == 0 {
-			continue
+		if m.Meta.Flags&mail.FlagDeleted != 0 {
+			ids = append(ids, m.StorageID())
 		}
-		if _, err := s.inbox.ExpungeMessage(ctx, s.principal.AccountID, s.mbox.ID, m.StorageID()); err != nil {
-			return err
-		}
+	}
+	if _, err := s.inbox.ExpungeMessages(ctx, s.principal.AccountID, s.mbox.ID, ids); err != nil {
+		return err
 	}
 	s.messages = nil
 	return nil

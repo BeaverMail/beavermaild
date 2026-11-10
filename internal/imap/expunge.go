@@ -59,19 +59,28 @@ func (s *session) expungeMarkedDeleted(ctx context.Context, uidFilter map[uint32
 	if err := s.pushIdleMailboxChanges(ctx); err != nil {
 		return err
 	}
-	for i := 0; i < len(s.messages); {
-		m := s.messages[i]
+	var ids []uint32
+	for _, m := range s.messages {
 		_, picked := uidFilter[m.UID]
-		if m.Meta.Flags&mail.FlagDeleted == 0 || !(allUIDs || picked) {
+		if m.Meta.Flags&mail.FlagDeleted != 0 && (allUIDs || picked) {
+			ids = append(ids, m.StorageID())
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	done, err := s.inbox.ExpungeMessages(ctx, s.principal.AccountID, s.mbox.ID, ids)
+	if err != nil {
+		return err
+	}
+	// Messages not expunged changed meanwhile in another session: the next sync reports them.
+	gone := make(map[uint32]struct{}, len(done))
+	for _, id := range done {
+		gone[id] = struct{}{}
+	}
+	for i := 0; i < len(s.messages); {
+		if _, ok := gone[s.messages[i].StorageID()]; !ok {
 			i++
-			continue
-		}
-		expunged, err := s.inbox.ExpungeMessage(ctx, s.principal.AccountID, s.mbox.ID, m.StorageID())
-		if err != nil {
-			return err
-		}
-		if !expunged {
-			i++ // changed meanwhile by another session: the next sync reports it
 			continue
 		}
 		if err := s.untagged(fmt.Sprintf("%d EXPUNGE", i+1)); err != nil {
