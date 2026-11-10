@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- IMAP CONDSTORE is on only after a CONDSTORE enabling command (RFC 7162 3.1: `ENABLE`,
+  `SELECT ... (CONDSTORE)`, `FETCH`/`SEARCH` with `MODSEQ`, `CHANGEDSINCE`, `UNCHANGEDSINCE`,
+  `STATUS (HIGHESTMODSEQ)`), not from login: until then no `MODSEQ` in FETCH and no
+  `HIGHESTMODSEQ` on SELECT. The first such command with a mailbox selected sends
+  `* OK [HIGHESTMODSEQ n]`.
+- IMAP ESEARCH (RFC 4731) and ESORT (RFC 5267): `SEARCH`/`SORT RETURN (MIN MAX ALL COUNT)` answer
+  `* ESEARCH (TAG ...)`, with `MODSEQ` when the program uses it.
+- IMAP `SORT=DISPLAY` (RFC 5957: `DISPLAYFROM`, `DISPLAYTO`) and `THREAD=ORDEREDSUBJECT` (RFC 5256).
+- IMAP `ID` (RFC 2971) in every state. Command lines may be up to 64 KiB (was 8 KiB),
+  and a longer one closes the connection once past the limit instead of being read whole first.
+- IMAP oversized literals (RFC 7888 4): a synchronizing `APPEND` over the size limit gets
+  `NO [TOOBIG]` before upload; a non-synchronizing one (`APPEND` or a search literal) gets
+  `* BYE [TOOBIG]` and the connection closes, instead of its bytes being read as commands.
 - IMAP `SELECT`/`EXAMINE` close the selected mailbox first, even when they fail, and say so with
   `* OK [CLOSED]` (RFC 7162, required with CONDSTORE advertised); a failed `SELECT` left the previous
   mailbox selected.

@@ -101,7 +101,7 @@ func TestIMAPBetterbirdFlagsFetch(t *testing.T) {
 	expectPrefix(t, read, "* OK")
 	send(t, conn, "b1 LOGIN alice@localhost beaver")
 	expectPrefix(t, read, "b1 OK")
-	send(t, conn, "b2 SELECT INBOX")
+	send(t, conn, "b2 SELECT INBOX (CONDSTORE)")
 	expectPrefix(t, read, "* FLAGS")
 	expectPrefix(t, read, "* 3 EXISTS")
 	expectPrefix(t, read, "* ")

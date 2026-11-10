@@ -61,24 +61,24 @@ func TestParseChangedSinceVanished(t *testing.T) {
 }
 
 func TestSelectMailboxArgQResync(t *testing.T) {
-	name, qr, err := selectMailboxArg(`"My Box" (QRESYNC (67890007 20050715194045000 41,43:211,214:541) CONDSTORE)`, true)
-	if err != nil || name != "My Box" || qr == nil || qr.uidValidity != 67890007 || qr.modSeq != 20050715194045000 || qr.knownUIDs == nil {
+	name, qr, cs, err := selectMailboxArg(`"My Box" (QRESYNC (67890007 20050715194045000 41,43:211,214:541) CONDSTORE)`, true)
+	if err != nil || name != "My Box" || qr == nil || qr.uidValidity != 67890007 || qr.modSeq != 20050715194045000 || qr.knownUIDs == nil || !cs {
 		t.Fatalf("got %q %+v %v", name, qr, err)
 	}
 	// seq-match-data is accepted and ignored.
-	if _, qr, err := selectMailboxArg(`INBOX (QRESYNC (1 5 1:9 (1:3 4:6)))`, true); err != nil || qr == nil || qr.modSeq != 5 {
+	if _, qr, _, err := selectMailboxArg(`INBOX (QRESYNC (1 5 1:9 (1:3 4:6)))`, true); err != nil || qr == nil || qr.modSeq != 5 {
 		t.Fatalf("seq-match-data: %+v %v", qr, err)
 	}
-	if _, qr, err := selectMailboxArg(`INBOX (CONDSTORE)`, true); err != nil || qr != nil {
+	if _, qr, cs, err := selectMailboxArg(`INBOX (CONDSTORE)`, true); err != nil || qr != nil || !cs {
 		t.Fatalf("condstore: %+v %v", qr, err)
 	}
 	// QRESYNC before ENABLE QRESYNC, or malformed, is a syntax error.
 	for _, bad := range []string{`INBOX (QRESYNC (1 5))`, `INBOX (BOGUS)`} {
-		if _, _, err := selectMailboxArg(bad, false); err == nil {
+		if _, _, _, err := selectMailboxArg(bad, false); err == nil {
 			t.Errorf("%q accepted without QRESYNC enabled", bad)
 		}
 	}
-	if _, _, err := selectMailboxArg(`INBOX (QRESYNC (0 5))`, true); err == nil {
+	if _, _, _, err := selectMailboxArg(`INBOX (QRESYNC (0 5))`, true); err == nil {
 		t.Error("uidvalidity 0 accepted")
 	}
 }

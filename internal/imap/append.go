@@ -19,8 +19,17 @@ func (s *session) cmdAppend(ctx context.Context, tag, arg string) error {
 		return s.tagged(tag, "NO LOGIN required")
 	}
 	mboxName, flags, internalDate, size, nonsync, ok := parseAppendArg(arg)
-	if !ok || size <= 0 || size > mail.MaxAppendBytes {
+	if !ok || size <= 0 {
 		return s.tagged(tag, "BAD APPEND syntax")
+	}
+	if size > mail.MaxAppendBytes {
+		if nonsync {
+			// The client is already sending the bytes, which would otherwise be read as commands
+			// (RFC 7888 4): say why and hang up rather than read megabytes to throw away.
+			_ = s.untagged("BYE [TOOBIG] APPEND literal too large")
+			return errLiteralTooLarge
+		}
+		return s.tagged(tag, "NO [TOOBIG] message too large")
 	}
 	// Check the mailbox before the literal: a client must not create folders by APPENDing (RFC 3501
 	// says NO [TRYCREATE]), and a sync literal is then never uploaded.

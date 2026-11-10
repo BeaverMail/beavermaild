@@ -2,13 +2,17 @@
 package imap
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/BeaverMail/beavermaild/internal/mail"
 )
 
 // cmdEnable activates optional IMAP extensions requested by the client (RFC 5162).
-func (s *session) cmdEnable(tag, arg string) error {
+func (s *session) cmdEnable(ctx context.Context, tag, arg string) error {
 	if s.principal.AccountID == 0 {
 		return s.tagged(tag, "NO LOGIN required")
 	}
@@ -20,11 +24,15 @@ func (s *session) cmdEnable(tag, arg string) error {
 	for _, tok := range strings.Fields(strings.ToUpper(arg)) {
 		switch tok {
 		case "CONDSTORE":
-			s.condstore = true
 			enabled = append(enabled, "CONDSTORE")
 		case "QRESYNC":
-			s.condstore, s.qresync = true, true // QRESYNC implies CONDSTORE (RFC 7162 3.2.3)
+			s.qresync = true // QRESYNC implies CONDSTORE (RFC 7162 3.2.3)
 			enabled = append(enabled, "QRESYNC")
+		}
+	}
+	if len(enabled) > 0 {
+		if err := s.enableCondstore(ctx); err != nil {
+			return err
 		}
 	}
 	if len(enabled) == 0 {
@@ -34,6 +42,24 @@ func (s *session) cmdEnable(tag, arg string) error {
 		return err
 	}
 	return s.tagged(tag, "OK ENABLE completed")
+}
+
+// enableCondstore runs on a CONDSTORE enabling command (RFC 7162 3.1): from then on FETCH
+// responses carry MODSEQ, and the first one with a mailbox selected reports its HIGHESTMODSEQ.
+func (s *session) enableCondstore(ctx context.Context) error {
+	if s.condstore {
+		return nil
+	}
+	s.condstore = true
+	if !s.selected {
+		return nil
+	}
+	highest, err := s.inbox.HighestModSeq(ctx, s.principal.AccountID, s.mbox.ID)
+	if err != nil {
+		return err
+	}
+	_, _, highest = mail.MailboxSelectState(s.messages, highest)
+	return s.untagged(fmt.Sprintf("OK [HIGHESTMODSEQ %d] Highest", highest))
 }
 
 // parseUnchangedSince extracts a leading (UNCHANGEDSINCE n) or UNCHANGEDSINCE n clause.
@@ -127,11 +153,10 @@ func parseChangedSince(rest string) (items string, since uint64, vanished, found
 }
 
 // selectMailboxArg parses the SELECT/EXAMINE argument: a mailbox name optionally followed by
-// RFC 4466 select parameters: CONDSTORE (always enabled anyway) and QRESYNC (...), which needs
+// RFC 4466 select parameters: CONDSTORE (condstore reports it) and QRESYNC (...), which needs
 // ENABLE QRESYNC first (qresync).
-func selectMailboxArg(arg string, qresync bool) (string, *qresyncParams, error) {
+func selectMailboxArg(arg string, qresync bool) (name string, qr *qresyncParams, condstore bool, err error) {
 	arg = strings.TrimSpace(arg)
-	var qr *qresyncParams
 	if open := matchingOpenParen(arg); open > 0 && arg[open-1] == ' ' {
 		params := strings.TrimSpace(arg[open+1 : len(arg)-1])
 		arg = arg[:open-1]
@@ -139,25 +164,25 @@ func selectMailboxArg(arg string, qresync bool) (string, *qresyncParams, error) 
 			upper := strings.ToUpper(params)
 			switch {
 			case strings.HasPrefix(upper, "CONDSTORE"):
-				params = strings.TrimSpace(params[len("CONDSTORE"):])
+				params, condstore = strings.TrimSpace(params[len("CONDSTORE"):]), true
 			case strings.HasPrefix(upper, "QRESYNC") && qresync && qr == nil:
 				rest := strings.TrimSpace(params[len("QRESYNC"):])
 				end := closingParen(rest)
 				if end < 0 {
-					return "", nil, errUnknownSelectParam
+					return "", nil, false, errUnknownSelectParam
 				}
 				p, ok := parseQResyncParams(rest[1:end])
 				if !ok {
-					return "", nil, errUnknownSelectParam
+					return "", nil, false, errUnknownSelectParam
 				}
 				qr, params = p, strings.TrimSpace(rest[end+1:])
 			default:
-				return "", nil, errUnknownSelectParam
+				return "", nil, false, errUnknownSelectParam
 			}
 		}
 	}
-	name, err := mailboxNameFromArg(arg)
-	return name, qr, err
+	name, err = mailboxNameFromArg(arg)
+	return name, qr, condstore, err
 }
 
 // matchingOpenParen returns the index of the "(" that the final ")" of s closes, or -1.

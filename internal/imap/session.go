@@ -143,6 +143,10 @@ func (s *session) serveCommands(ctx context.Context) error {
 			if err := s.tagged(tag, "OK CAPABILITY completed"); err != nil {
 				return err
 			}
+		case "ID":
+			if err := s.cmdID(tag, arg); err != nil {
+				return err
+			}
 		case "NOOP":
 			if err := s.tagged(tag, "OK NOOP completed"); err != nil {
 				return err
@@ -209,13 +213,15 @@ func (s *session) serveCommands(ctx context.Context) error {
 				return err
 			}
 		case "SELECT", "EXAMINE":
-			name, qr, err := selectMailboxArg(arg, s.qresync)
+			name, qr, condstore, err := selectMailboxArg(arg, s.qresync)
 			if err != nil {
 				if err := s.tagged(tag, selectNameError(err)); err != nil {
 					return err
 				}
 				continue
 			}
+			// A CONDSTORE enabling command (RFC 7162 3.1): its HIGHESTMODSEQ is in the SELECT reply.
+			s.condstore = s.condstore || condstore || qr != nil
 			if err := s.openMailbox(ctx, tag, name, cmd == "EXAMINE", qr); err != nil {
 				return err
 			}
@@ -240,7 +246,7 @@ func (s *session) serveCommands(ctx context.Context) error {
 				return err
 			}
 		case "ENABLE":
-			if err := s.cmdEnable(tag, arg); err != nil {
+			if err := s.cmdEnable(ctx, tag, arg); err != nil {
 				return err
 			}
 		case "COPY":
@@ -360,7 +366,7 @@ func (s *session) serveCommands(ctx context.Context) error {
 }
 
 func (s *session) capabilityLine() string {
-	caps := []string{"IMAP4rev1", "MOVE", "LITERAL+", "SASL-IR", "AUTH=PLAIN", "QRESYNC"}
+	caps := []string{"IMAP4rev1", "MOVE", "LITERAL+", "SASL-IR", "AUTH=PLAIN", "QRESYNC", "ID"}
 	if s.tls != nil && !s.secure {
 		caps = append(caps, "STARTTLS")
 	}
@@ -368,7 +374,7 @@ func (s *session) capabilityLine() string {
 		caps = append(caps, "LOGINDISABLED")
 	}
 	if s.principal.AccountID != 0 {
-		caps = append(caps, "ENABLE", "IDLE", "NAMESPACE", "UIDPLUS", "UNSELECT", "SPECIAL-USE", "LIST-EXTENDED", "CONDSTORE", "SORT", "THREAD=REFERENCES", "QUOTA")
+		caps = append(caps, "ENABLE", "IDLE", "NAMESPACE", "UIDPLUS", "UNSELECT", "SPECIAL-USE", "LIST-EXTENDED", "CONDSTORE", "SORT", "SORT=DISPLAY", "THREAD=REFERENCES", "THREAD=ORDEREDSUBJECT", "ESEARCH", "ESORT", "QUOTA")
 	}
 	return "CAPABILITY " + strings.Join(caps, " ")
 }
@@ -396,7 +402,6 @@ func (s *session) finishAuth(ctx context.Context, tag, user, pass, resp string) 
 	s.selected = false
 	s.messages = nil
 	s.idleWatchModSeq = 0
-	s.condstore = true
 	return s.tagged(tag, resp)
 }
 
@@ -590,6 +595,11 @@ func (s *session) cmdFetch(ctx context.Context, tag, arg string, byUID bool) err
 	if !ok {
 		return s.tagged(tag, "BAD FETCH syntax")
 	}
+	if items.modseq { // MODSEQ or CHANGEDSINCE
+		if err := s.enableCondstore(ctx); err != nil {
+			return err
+		}
+	}
 	set, err := parseSeqSet(setStr)
 	if err != nil {
 		return s.tagged(tag, "BAD FETCH syntax")
@@ -677,6 +687,9 @@ func (s *session) cmdStore(ctx context.Context, tag, arg string, byUID bool) err
 	var unchanged uint64
 	if hasUnchanged {
 		unchanged = unchangedSince
+		if err := s.enableCondstore(ctx); err != nil {
+			return err
+		}
 	}
 	ids := make([]uint32, len(indices))
 	for i, idx := range indices {
@@ -731,12 +744,21 @@ func (s *session) cmdSearch(ctx context.Context, tag, arg string, byUID bool) er
 	if !s.selected {
 		return s.tagged(tag, "NO not selected")
 	}
+	ret, arg, extended, ok := cutReturnOpts(arg)
+	if !ok {
+		return s.tagged(tag, "BAD SEARCH RETURN syntax")
+	}
 	expr, st := parseSearchCommand(arg)
 	switch st {
 	case searchBadCharset:
 		return s.tagged(tag, "NO [BADCHARSET ("+searchCharsets+")] charset not supported")
 	case searchSyntaxError:
 		return s.tagged(tag, "BAD SEARCH syntax")
+	}
+	if expr.UsesModSeq() {
+		if err := s.enableCondstore(ctx); err != nil {
+			return err
+		}
 	}
 	w := s.watchCommand(ctx)
 	load := mail.RawLoader(func(m mail.Message) ([]byte, error) {
@@ -747,6 +769,9 @@ func (s *session) cmdSearch(ctx context.Context, tag, arg string, byUID bool) er
 		return s.abortCommand(tag, cause)
 	}
 	resp := formatSearch(s.seqsOrUIDs(seqs, byUID)) + s.searchModSeqSuffix(&expr, seqs)
+	if extended {
+		resp = s.esearchLine(tag, byUID, seqs, ret, expr.UsesModSeq())
+	}
 	if err := s.untagged(resp); err != nil {
 		return err
 	}
@@ -781,6 +806,11 @@ func (s *session) cmdStatus(ctx context.Context, tag, arg string) error {
 	name, fields, ok := parseStatusArg(arg)
 	if !ok {
 		return s.tagged(tag, "BAD STATUS syntax")
+	}
+	if slices.Contains(fields, "HIGHESTMODSEQ") {
+		if err := s.enableCondstore(ctx); err != nil {
+			return err
+		}
 	}
 	if err := mail.ValidateMailboxName(name); err != nil {
 		return s.tagged(tag, "BAD mailbox name syntax")
@@ -1021,7 +1051,7 @@ func (s *session) announceKeywords(msgs []mail.Message) error {
 	if err := s.untagged(s.flagsLine()); err != nil {
 		return err
 	}
-	return s.untagged("OK [PERMANENTFLAGS "+s.permanentFlags()+"] Limited")
+	return s.untagged("OK [PERMANENTFLAGS " + s.permanentFlags() + "] Limited")
 }
 
 // flagsLine is the FLAGS response: the system flags plus the keywords in use in the mailbox.
@@ -1246,17 +1276,30 @@ func (s *session) readLine() (string, error) {
 	return s.readLineNoDeadline()
 }
 
-// readLineNoDeadline reads one line under whatever read deadline the caller set.
+// maxLineBytes bounds one command line. RFC 7162 4 asks for at least 8192; ID (RFC 2971) alone
+// can send 30 pairs of up to 1024 octets.
+const maxLineBytes = 64 << 10
+
+// errLineTooLong ends the connection: the rest of the line cannot be told apart from new commands.
+var errLineTooLong = errors.New("imap: line too long")
+
+// readLineNoDeadline reads one line under whatever read deadline the caller set. It stops at
+// maxLineBytes instead of buffering whatever a client sends before its newline.
 func (s *session) readLineNoDeadline() (string, error) {
-	line, err := s.r.ReadString('\n')
-	if err != nil {
-		return "", err
+	var buf []byte
+	for {
+		chunk, err := s.r.ReadSlice('\n')
+		if len(buf)+len(chunk) > maxLineBytes+2 { // +2: the CRLF
+			return "", errLineTooLong
+		}
+		buf = append(buf, chunk...)
+		if err == nil {
+			return strings.TrimRight(string(buf), "\r\n"), nil
+		}
+		if !errors.Is(err, bufio.ErrBufferFull) {
+			return "", err
+		}
 	}
-	line = strings.TrimRight(line, "\r\n")
-	if len(line) > 8192 {
-		return "", fmt.Errorf("imap: line too long")
-	}
-	return line, nil
 }
 
 func parseTagged(line string) (tag, cmd, arg string) {

@@ -14,6 +14,10 @@ func (s *session) cmdSort(ctx context.Context, tag, arg string, byUID bool) erro
 	if !s.selected {
 		return s.tagged(tag, "NO not selected")
 	}
+	ret, arg, extended, ok := cutReturnOpts(arg)
+	if !ok {
+		return s.tagged(tag, "BAD SORT RETURN syntax")
+	}
 	crits, searchArg, ok := parseSortArg(arg)
 	if !ok {
 		return s.tagged(tag, "BAD SORT syntax")
@@ -25,6 +29,11 @@ func (s *session) cmdSort(ctx context.Context, tag, arg string, byUID bool) erro
 	case searchSyntaxError:
 		return s.tagged(tag, "BAD SORT syntax")
 	}
+	if expr.UsesModSeq() {
+		if err := s.enableCondstore(ctx); err != nil {
+			return err
+		}
+	}
 	w := s.watchCommand(ctx)
 	load := mail.RawLoader(func(m mail.Message) ([]byte, error) {
 		return s.inbox.LoadRaw(w.ctx, m.Meta)
@@ -34,13 +43,16 @@ func (s *session) cmdSort(ctx context.Context, tag, arg string, byUID bool) erro
 		return s.abortCommand(tag, cause)
 	}
 	resp := formatSort(s.seqsOrUIDs(seqs, byUID)) + s.searchModSeqSuffix(&expr, seqs)
+	if extended {
+		resp = s.esearchLine(tag, byUID, seqs, ret, expr.UsesModSeq())
+	}
 	if err := s.untagged(resp); err != nil {
 		return err
 	}
 	return s.tagged(tag, "OK SORT completed")
 }
 
-// cmdThread returns THREAD REFERENCES groups for the selected mailbox.
+// cmdThread returns the REFERENCES or ORDEREDSUBJECT threads of the selected mailbox.
 func (s *session) cmdThread(ctx context.Context, tag, arg string, byUID bool) error {
 	if !s.selected {
 		return s.tagged(tag, "NO not selected")
@@ -49,7 +61,12 @@ func (s *session) cmdThread(ctx context.Context, tag, arg string, byUID bool) er
 	if !ok {
 		return s.tagged(tag, "BAD THREAD syntax")
 	}
-	if algo != "REFERENCES" {
+	thread := mail.ThreadReferencesContext
+	switch algo {
+	case "REFERENCES":
+	case "ORDEREDSUBJECT":
+		thread = mail.ThreadOrderedSubjectContext
+	default:
 		return s.tagged(tag, "BAD THREAD algorithm not supported")
 	}
 	expr, st := parseSortSearch(searchArg)
@@ -63,7 +80,7 @@ func (s *session) cmdThread(ctx context.Context, tag, arg string, byUID bool) er
 	load := mail.RawLoader(func(m mail.Message) ([]byte, error) {
 		return s.inbox.LoadRaw(w.ctx, m.Meta)
 	})
-	threads, _ := mail.ThreadReferencesContext(w.ctx, s.messages, expr, load)
+	threads, _ := thread(w.ctx, s.messages, expr, load)
 	if cause := w.end(); cause != nil {
 		return s.abortCommand(tag, cause)
 	}
@@ -154,6 +171,10 @@ func parseSortKey(tok string) (mail.SortKey, bool) {
 		return mail.SortSubject, true
 	case "TO":
 		return mail.SortTo, true
+	case "DISPLAYFROM":
+		return mail.SortDisplayFrom, true
+	case "DISPLAYTO":
+		return mail.SortDisplayTo, true
 	default:
 		return 0, false
 	}

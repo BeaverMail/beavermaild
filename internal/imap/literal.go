@@ -2,13 +2,16 @@
 package imap
 
 import (
-	"fmt"
+	"errors"
 	"strconv"
 	"strings"
 )
 
 // maxCommandLiteralBytes caps the literal bytes one search command may carry.
 const maxCommandLiteralBytes = 64 << 10
+
+// errLiteralTooLarge ends a connection whose non-synchronizing literal is refused.
+var errLiteralTooLarge = errors.New("imap: literal too large")
 
 // takesSearchLiterals reports whether cmd (with arg) is a search command whose strings may be literals.
 func takesSearchLiterals(cmd, arg string) bool {
@@ -38,7 +41,8 @@ func (s *session) readCommandLiterals(tag, arg string) (out string, ok bool, err
 		if total > maxCommandLiteralBytes {
 			if nonSync {
 				// The client is already sending the bytes: there is no way to resync.
-				return "", false, fmt.Errorf("imap: command literal too large")
+				_ = s.untagged("BYE [TOOBIG] command literal too large")
+				return "", false, errLiteralTooLarge
 			}
 			return "", false, s.tagged(tag, "BAD literal too large")
 		}

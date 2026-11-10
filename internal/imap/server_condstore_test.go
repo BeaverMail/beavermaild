@@ -5,6 +5,7 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestIMAPCondstoreSelectAndStore(t *testing.T) {
@@ -35,7 +36,7 @@ func TestIMAPCondstoreSelectAndStore(t *testing.T) {
 	}
 	expectPrefix(t, read, "c2 OK")
 
-	send(t, conn, "c3 SELECT INBOX")
+	send(t, conn, "c3 SELECT INBOX (CONDSTORE)")
 	expectPrefix(t, read, "* FLAGS")
 	expectPrefix(t, read, "* 1 EXISTS")
 	expectPrefix(t, read, "* 1 RECENT")
@@ -159,7 +160,7 @@ func TestIMAPFetchChangedSince(t *testing.T) {
 	expectPrefix(t, read, "* OK")
 	send(t, conn, "k1 LOGIN alice@localhost beaver")
 	expectPrefix(t, read, "k1 OK")
-	send(t, conn, "k2 SELECT INBOX")
+	send(t, conn, "k2 SELECT INBOX (CONDSTORE)")
 	var line, highest string
 	for !strings.HasPrefix(line, "k2 OK") {
 		line, _ = read.ReadString('\n')
@@ -259,7 +260,7 @@ func TestIMAPStoreUnchangedSinceModified(t *testing.T) {
 	expectPrefix(t, read, "* OK")
 	send(t, conn, "m1 LOGIN alice@localhost beaver")
 	expectPrefix(t, read, "m1 OK")
-	send(t, conn, "m2 SELECT INBOX")
+	send(t, conn, "m2 SELECT INBOX (CONDSTORE)")
 	for line := ""; !strings.HasPrefix(line, "m2 OK"); {
 		line, _ = read.ReadString('\n')
 	}
@@ -284,4 +285,48 @@ func TestIMAPStoreUnchangedSinceModified(t *testing.T) {
 	if !strings.HasPrefix(line, "m6 OK [MODIFIED 1:2]") {
 		t.Fatalf("uid store %q", line)
 	}
+}
+
+// TestIMAPCondstoreEnablingCommand checks RFC 7162 3.1: no mod-sequences before a CONDSTORE
+// enabling command; the first one with a mailbox selected reports HIGHESTMODSEQ, later ones don't,
+// and flag changes then carry UID and MODSEQ.
+func TestIMAPCondstoreEnablingCommand(t *testing.T) {
+	t.Parallel()
+
+	ctx, accID, inbox, ln, cleanup := startIMAPTestServer(t)
+	defer cleanup()
+	if _, err := inbox.Deliver(ctx, accID, []byte("From: a@b\r\n\r\nenable\r\n")); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	read := bufio.NewReader(conn)
+	expectPrefix(t, read, "* OK")
+	send(t, conn, "e1 LOGIN alice@localhost beaver")
+	expectPrefix(t, read, "e1 OK")
+	send(t, conn, "e2 SELECT INBOX")
+	for line := ""; !strings.HasPrefix(line, "e2 OK"); {
+		line, _ = read.ReadString('\n')
+		if strings.Contains(line, "HIGHESTMODSEQ") {
+			t.Fatalf("HIGHESTMODSEQ before CONDSTORE was enabled: %q", line)
+		}
+	}
+	send(t, conn, `e3 STORE 1 +FLAGS (\Flagged)`)
+	expectPrefix(t, read, `* 1 FETCH (FLAGS (\Flagged \Recent))`)
+	expectPrefix(t, read, "e3 OK")
+
+	send(t, conn, "e4 FETCH 1 (MODSEQ)")
+	expectPrefix(t, read, "* OK [HIGHESTMODSEQ ")
+	expectPrefix(t, read, "* 1 FETCH (MODSEQ (")
+	expectPrefix(t, read, "e4 OK")
+	send(t, conn, "e5 FETCH 1 (MODSEQ)")
+	expectPrefix(t, read, "* 1 FETCH (MODSEQ (")
+	expectPrefix(t, read, "e5 OK")
+	send(t, conn, `e6 STORE 1 -FLAGS (\Flagged)`)
+	expectPrefix(t, read, `* 1 FETCH (UID 1 FLAGS (\Recent) MODSEQ (`)
+	expectPrefix(t, read, "e6 OK")
 }

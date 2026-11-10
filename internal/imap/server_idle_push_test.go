@@ -72,7 +72,7 @@ func TestIMAPIdleFlagsCrossSession(t *testing.T) {
 			t.Fatal(err)
 		}
 		// The IDLE session selected first, so the message is \Recent for it as well.
-		if strings.Contains(line, "FETCH (UID 1 FLAGS (") && strings.Contains(line, `\Seen`) {
+		if strings.Contains(line, "FETCH (FLAGS (") && strings.Contains(line, `\Seen`) {
 			gotFlags = true
 			break
 		}

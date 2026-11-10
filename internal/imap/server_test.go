@@ -102,7 +102,8 @@ func TestIMAPFetchInbox(t *testing.T) {
 	expectPrefix(t, read, "a5 OK")
 	send(t, conn, "a6 FETCH 1 (FLAGS)")
 	line, err = read.ReadString('\n')
-	if err != nil || !strings.Contains(line, `FLAGS (\Seen \Recent)`) || !strings.Contains(line, "MODSEQ (") {
+	// No MODSEQ: the client never sent a CONDSTORE enabling command (RFC 7162 3.1).
+	if err != nil || !strings.Contains(line, `FLAGS (\Seen \Recent)`) || strings.Contains(line, "MODSEQ") {
 		t.Fatalf("fetch flags %q err %v", line, err)
 	}
 	expectPrefix(t, read, "a6 OK")
@@ -114,7 +115,7 @@ func TestIMAPFetchInbox(t *testing.T) {
 	expectPrefix(t, read, "a8 OK")
 	send(t, conn, "a9 UID FETCH 1 (UID FLAGS)")
 	line, err = read.ReadString('\n')
-	if err != nil || !strings.Contains(line, "UID 1") || !strings.Contains(line, `FLAGS (\Seen \Recent)`) || !strings.Contains(line, "MODSEQ (") {
+	if err != nil || !strings.Contains(line, "UID 1") || !strings.Contains(line, `FLAGS (\Seen \Recent)`) || strings.Contains(line, "MODSEQ") {
 		t.Fatalf("uid fetch %q err %v", line, err)
 	}
 	expectPrefix(t, read, "a9 OK")

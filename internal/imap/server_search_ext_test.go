@@ -73,6 +73,8 @@ func TestIMAPSearchCharsetSeqSetModSeq(t *testing.T) {
 	expectPrefix(t, read, "c8 OK")
 
 	send(t, conn, "c9 SEARCH MODSEQ 1")
+	// The first CONDSTORE enabling command reports the mailbox's HIGHESTMODSEQ (RFC 7162 3.1).
+	expectPrefix(t, read, "* OK [HIGHESTMODSEQ ")
 	expectPrefix(t, read, "* SEARCH 1 2 3 (MODSEQ ")
 	expectPrefix(t, read, "c9 OK")
 
