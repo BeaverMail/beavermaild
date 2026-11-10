@@ -213,8 +213,9 @@ func specialUseAttr(mb mail.Mailbox) string {
 
 // listCandidate is a folder LIST can return; virtual ones are missing parents of existing folders.
 type listCandidate struct {
-	mb      mail.Mailbox
-	virtual bool
+	mb          mail.Mailbox
+	virtual     bool
+	nonexistent bool // a subscription left by a deleted folder
 }
 
 // listCandidates returns existing folders plus their missing ancestors, each parent before its children.

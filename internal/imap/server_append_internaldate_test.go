@@ -44,6 +44,7 @@ func TestIMAPAppendInternalDate(t *testing.T) {
 		t.Fatal(err)
 	}
 	expectPrefix(t, read, "* 1 EXISTS")
+	expectPrefix(t, read, "* 1 RECENT") // the appending session takes the new message's \Recent
 	expectPrefix(t, read, "d3 OK")
 
 	send(t, conn, "d4 SELECT Drafts")

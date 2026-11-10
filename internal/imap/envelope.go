@@ -18,18 +18,18 @@ func formatEnvelope(raw []byte) string {
 	h := msg.Header
 	date := nstring(h.Get("Date"))
 	subject := nstring(h.Get("Subject"))
-	from := formatAddressList(parseEnvelopeAddresses(h.Get("From")))
-	sender := formatAddressList(parseEnvelopeAddresses(h.Get("Sender")))
+	from := formatAddressField(h.Get("From"))
+	sender := formatAddressField(h.Get("Sender"))
 	if sender == "NIL" {
 		sender = from
 	}
-	replyTo := formatAddressList(parseEnvelopeAddresses(h.Get("Reply-To")))
+	replyTo := formatAddressField(h.Get("Reply-To"))
 	if replyTo == "NIL" {
 		replyTo = from
 	}
-	to := formatAddressList(parseEnvelopeAddresses(h.Get("To")))
-	cc := formatAddressList(parseEnvelopeAddresses(h.Get("Cc")))
-	bcc := formatAddressList(parseEnvelopeAddresses(h.Get("Bcc")))
+	to := formatAddressField(h.Get("To"))
+	cc := formatAddressField(h.Get("Cc"))
+	bcc := formatAddressField(h.Get("Bcc"))
 	inReplyTo := nstring(strings.TrimSpace(h.Get("In-Reply-To")))
 	messageID := nstring(strings.TrimSpace(h.Get("Message-ID")))
 	return fmt.Sprintf("(%s %s %s %s %s %s %s %s %s %s)",
@@ -107,24 +107,85 @@ func parseEnvelopeAddressesFallback(s string) []*mail.Address {
 	return out
 }
 
-func formatAddressList(addrs []*mail.Address) string {
-	if len(addrs) == 0 {
-		return "NIL"
+// formatAddressField renders an address header for ENVELOPE. RFC 822 group syntax
+// ("name: a@b, c@d;") becomes a group start (NIL NIL "name" NIL), the members, and a group end
+// (NIL NIL NIL NIL), as RFC 3501 requires; groups are not expanded away.
+func formatAddressField(value string) string {
+	var parts []string
+	var cur strings.Builder
+	flush := func() {
+		for _, a := range parseEnvelopeAddresses(cur.String()) {
+			parts = append(parts, formatMailbox(a))
+		}
+		cur.Reset()
 	}
-	parts := make([]string, len(addrs))
-	for i, a := range addrs {
-		parts[i] = formatMailbox(a)
+	inQuote, inGroup := false, false
+	angle, comment := 0, 0
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		switch {
+		case c == '\\' && i+1 < len(value):
+			cur.WriteByte(c)
+			i++
+			c = value[i]
+		case comment > 0:
+			if c == '(' {
+				comment++
+			} else if c == ')' {
+				comment--
+			}
+		case inQuote:
+			inQuote = c != '"'
+		case c == '"':
+			inQuote = true
+		case c == '(':
+			comment++
+		case c == '<':
+			angle++
+		case c == '>' && angle > 0:
+			angle--
+		case angle == 0 && c == ':' && !inGroup:
+			name := strings.Trim(strings.TrimSpace(cur.String()), `"`)
+			cur.Reset()
+			parts = append(parts, "(NIL NIL "+nstring(name)+" NIL)")
+			inGroup = true
+			continue
+		case angle == 0 && c == ';' && inGroup:
+			flush()
+			parts = append(parts, "(NIL NIL NIL NIL)")
+			inGroup = false
+			continue
+		case angle == 0 && c == ',':
+			flush()
+			continue
+		}
+		cur.WriteByte(c)
+	}
+	flush()
+	if inGroup {
+		parts = append(parts, "(NIL NIL NIL NIL)")
+	}
+	if len(parts) == 0 {
+		return "NIL"
 	}
 	return "(" + strings.Join(parts, " ") + ")"
 }
 
 // formatMailbox renders one RFC 3501 address (name adl mailbox host).
 func formatMailbox(a *mail.Address) string {
-	mailbox, host, ok := strings.Cut(strings.TrimSpace(a.Address), "@")
+	addr := strings.TrimSpace(a.Address)
+	// An obsolete source route ("<@route:user@domain>", RFC 822) goes in the adl slot.
+	var route string
+	if strings.HasPrefix(addr, "@") {
+		if r, rest, ok := strings.Cut(addr, ":"); ok {
+			route, addr = r, rest
+		}
+	}
+	mailbox, host, ok := strings.Cut(addr, "@")
 	if !ok || mailbox == "" || host == "" {
 		return "(NIL NIL NIL NIL)"
 	}
-	return fmt.Sprintf("(%s NIL %s %s)", nstring(a.Name), nstring(mailbox), nstring(host))
+	return fmt.Sprintf("(%s %s %s %s)", nstring(a.Name), nstring(route), nstring(mailbox), nstring(host))
 }
 
 // nstring returns NIL or a quoted IMAP string for envelope slots.

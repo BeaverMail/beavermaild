@@ -2,8 +2,53 @@
 
 ## Unreleased
 
+- Mail storage: writes of one account run one at a time inside the process, so a large transaction
+  (APPEND touches the mailbox, the email counter and the quota) no longer loses every retry to smaller
+  ones under load and fails with "too much write contention". The optimistic CAS check still guards
+  writers in other processes.
+- IMAP: a command that still fails on write contention answers `NO [INUSE] Mailbox busy, try again`
+  (RFC 5530) and the session goes on; the connection was dropped.
+- IMAP logs: a session dropped by a server-side error is logged at WARN as `imap command failed` with the
+  command name, account, selected mailbox and client address (never the arguments); a client that
+  disconnects stays at DEBUG. Both were a bare DEBUG `imap session` line.
+- IMAP: listing a mailbox while another session expunges from it skips the deleted messages; it
+  failed with "not found" and dropped the connection (thousands of times in the imaptest stress test).
+  `COPY`/`MOVE` of a message expunged by another session answer `NO` instead of disconnecting.
+- IMAP `\Recent` under concurrency: a session reports `\Recent` only for messages it took, after
+  loading them, so a message arriving between the two steps is no longer `\Recent` in two sessions
+  (found by the imaptest stress test). Taking `\Recent` no longer bumps `MODSEQ`.
+- IMAP `CREATE` no longer subscribes the new folder (RFC 3501; clients such as Thunderbird subscribe
+  themselves). Existing folders and folders created by plugins stay subscribed. An explicit subscription
+  outlives `DELETE`: `LIST (SUBSCRIBED)` returns it as `\NonExistent`, `LSUB` as `\Noselect`, `CREATE`
+  of the same name takes it back and `UNSUBSCRIBE` drops it.
+- IMAP `COPY`/`MOVE` set `\Recent` on the new messages (RFC 3501); it was cleared.
+- IMAP `EXPUNGE`/`CLOSE` act on the stored flags, so `\Deleted` set by another session counts, and only
+  delete a message still in the mailbox and still `\Deleted`: a message moved away meanwhile was
+  deleted from its new folder, and one already expunged dropped the connection.
+- IMAP: changes reported to a session always come from a full reload; flag changes made together with
+  new or expunged messages were lost.
+- IMAP: every command except `FETCH`, `STORE`, `SEARCH`, `SORT` and `THREAD` reports changes made by other
+  sessions to the selected mailbox (`EXISTS`, `EXPUNGE`, `FETCH FLAGS`, `RECENT`) before its tagged reply,
+  as RFC 3501 requires; only `IDLE` did, so `NOOP`/`CHECK` showed a stale mailbox. A new message is
+  `\Recent` only for the first `SELECT` session that sees it (an `APPEND` into the selected mailbox
+  included), so `STATUS` no longer counts it as recent.
+- IMAP: `STORE` on a message expunged by another session skips it and `FETCH` of its body answers `NO`
+  (RFC 2180); both dropped the connection.
+- IMAP ENVELOPE puts an obsolete source route (`<@route:user@domain>`) in the route slot; the address
+  came out empty.
+- IMAP: a mailbox deleted and created again gets a new `UIDVALIDITY`; it was always 1, and the reused
+  mailbox id restarted UIDs from 1, so clients kept stale caches. `RENAME` takes its new value from the
+  same per-account counter.
+- IMAP: a keyword new to the selected mailbox is announced with `* FLAGS` and `PERMANENTFLAGS` before
+  the `FETCH` that carries it, and `SELECT` lists the keywords in use; clients could reject the unknown
+  keyword.
+- IMAP MOVE sends `* OK [COPYUID ...]` and an `EXPUNGE` per moved message before the tagged `OK`, as
+  RFC 6851 requires; it sent COPYUID in the tagged reply and no EXPUNGE, so clients kept the moved
+  messages in view.
+- IMAP ENVELOPE keeps RFC 822 groups (`name: a@b;`, `undisclosed-recipients:;`) as group start and end
+  markers; group members were flattened and empty groups dropped.
 - IMAP SORT follows RFC 5256: `REVERSE` applies to the key after it, exact ties keep mailbox order, `FROM`/
-  `TO`/`CC` sort on the first address's local part, `SUBJECT` on the base subject (without `Re:`, `Fwd:`,
+  `TO`/`CC` sort on the first address's local part (a group's name for group syntax), `SUBJECT` on the base subject (without `Re:`, `Fwd:`,
   `[list]`...), and `DATE` falls back to the internal date when the `Date` header is missing or invalid.
 - IMAP THREAD REFERENCES implements the RFC 5256 algorithm and answers with thread trees
   (`(1 (2 4)(3))`): missing parents become grouping nodes, and threads with the same base subject are

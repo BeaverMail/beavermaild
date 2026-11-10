@@ -324,7 +324,7 @@ func TestIMAPListExtended(t *testing.T) {
 	// RFC 3501 §6.3.9: LSUB "%" returns an unsubscribed parent of a subscribed child as \Noselect.
 	send(t, conn, "sy CREATE Tools/Hammer")
 	expectPrefix(t, read, "sy OK")
-	send(t, conn, "sx UNSUBSCRIBE Tools")
+	send(t, conn, "sx SUBSCRIBE Tools/Hammer") // CREATE does not subscribe
 	expectPrefix(t, read, "sx OK")
 	got = list("x6c", `LSUB "" "%"`)
 	if l := got["Tools"]; !strings.Contains(l, `\Noselect`) || strings.Contains(l, `\Subscribed`) {

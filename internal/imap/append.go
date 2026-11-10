@@ -67,13 +67,7 @@ func (s *session) cmdAppend(ctx context.Context, tag, arg string) error {
 	}
 	imapUID := mail.IMAPUID(emailID, meta)
 
-	if s.selected && s.mbox.ID == mbox.ID {
-		s.messages = append(s.messages, mail.Message{EmailID: emailID, UID: imapUID, Meta: meta})
-		if err := s.untagged(fmt.Sprintf("%d EXISTS", len(s.messages))); err != nil {
-			return err
-		}
-	}
-
+	// Into the selected mailbox: EXISTS and \Recent come from the sync before the tagged reply.
 	return s.tagged(tag, fmt.Sprintf("OK [%s] APPEND completed", formatAppendUID(mbox.UIDValidity, imapUID)))
 }
 

@@ -5,8 +5,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
+	"github.com/BeaverMail/beavermaild/internal/mail"
 	"github.com/BeaverMail/beavermaild/internal/storage"
 )
 
@@ -101,6 +103,17 @@ func (s *session) cmdMailboxList(ctx context.Context, tag, arg, cmd string, subs
 		names[i] = mb.Name
 	}
 	cands := listCandidates(mboxes)
+	if filterSubscribed {
+		orphans, err := s.inbox.ListOrphanSubscriptions(ctx, s.principal.AccountID)
+		if err != nil {
+			return err
+		}
+		for _, name := range orphans {
+			if !slices.ContainsFunc(cands, func(c listCandidate) bool { return strings.EqualFold(c.mb.Name, name) }) {
+				cands = append(cands, listCandidate{mb: mail.Mailbox{Name: name, Subscribed: true}, nonexistent: true})
+			}
+		}
+	}
 	for _, c := range cands {
 		if !match(c.mb.Name) {
 			continue
@@ -122,6 +135,11 @@ func (s *session) cmdMailboxList(ctx context.Context, tag, arg, cmd string, subs
 		}
 		attrs := listMailboxAttrs(c.mb, names, filterSubscribed || opt.markSubscribed)
 		switch {
+		case c.nonexistent && cmd == "LSUB":
+			attrs = `\Noselect`
+		case c.nonexistent:
+			// RFC 5258: \NonExistent implies \Noselect.
+			attrs = `\NonExistent \Subscribed`
 		case c.virtual && opt.extended:
 			// RFC 5258: \NonExistent implies \Noselect.
 			attrs = `\HasChildren \NonExistent`

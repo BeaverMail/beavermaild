@@ -4,6 +4,7 @@ package imap
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/BeaverMail/beavermaild/internal/mail"
@@ -52,32 +53,31 @@ func (s *session) cmdUIDExpunge(ctx context.Context, tag, arg string) error {
 	return s.tagged(tag, "OK UID EXPUNGE completed")
 }
 
-// expungeMarkedDeleted deletes matching \Deleted messages and emits untagged EXPUNGE lines.
+// expungeMarkedDeleted deletes matching \Deleted messages and emits untagged EXPUNGE lines. It syncs
+// first, so flags set and expunges done by other sessions count.
 func (s *session) expungeMarkedDeleted(ctx context.Context, uidFilter map[uint32]struct{}, allUIDs bool) error {
-	for {
-		var found bool
-		for i, m := range s.messages {
-			if m.Meta.Flags&mail.FlagDeleted == 0 {
-				continue
-			}
-			if !allUIDs {
-				if _, ok := uidFilter[m.UID]; !ok {
-					continue
-				}
-			}
-			if err := s.inbox.DeleteMessage(ctx, s.principal.AccountID, m.StorageID()); err != nil {
-				return err
-			}
-			if err := s.untagged(fmt.Sprintf("%d EXPUNGE", i+1)); err != nil {
-				return err
-			}
-			s.messages = append(s.messages[:i], s.messages[i+1:]...)
-			found = true
-			break
+	if err := s.pushIdleMailboxChanges(ctx); err != nil {
+		return err
+	}
+	for i := 0; i < len(s.messages); {
+		m := s.messages[i]
+		_, picked := uidFilter[m.UID]
+		if m.Meta.Flags&mail.FlagDeleted == 0 || !(allUIDs || picked) {
+			i++
+			continue
 		}
-		if !found {
-			break
+		expunged, err := s.inbox.ExpungeMessage(ctx, s.principal.AccountID, s.mbox.ID, m.StorageID())
+		if err != nil {
+			return err
 		}
+		if !expunged {
+			i++ // changed meanwhile by another session: the next sync reports it
+			continue
+		}
+		if err := s.untagged(fmt.Sprintf("%d EXPUNGE", i+1)); err != nil {
+			return err
+		}
+		s.messages = slices.Delete(s.messages, i, i+1)
 	}
 	return nil
 }

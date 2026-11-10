@@ -4,8 +4,10 @@ package imap
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"net"
+	"os"
 	"runtime/debug"
 	"time"
 
@@ -167,12 +169,38 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn, secure bool, lim 
 	// A bug on one message must not take down the whole server (and every other session).
 	defer func() {
 		if r := recover(); r != nil {
-			s.log.Error("imap session panic", "panic", r, "stack", string(debug.Stack()))
+			s.log.Error("imap session panic", append(sess.logAttrs(), "panic", r, "stack", string(debug.Stack()))...)
 		}
 	}()
 	// Commands in flight during shutdown must finish (and say BYE): the stopping flag, not
 	// ctx cancellation, ends the session.
-	if err := sess.run(context.WithoutCancel(ctx)); err != nil && ctx.Err() == nil {
-		s.log.Debug("imap session", slog.Any("err", err))
+	err := sess.run(context.WithoutCancel(ctx))
+	switch {
+	case err == nil || ctx.Err() != nil:
+	case clientGone(err):
+		s.log.Debug("imap session closed", slog.Any("err", err))
+	default:
+		// A server-side failure (storage, contention...) that dropped the connection.
+		s.log.Warn("imap command failed", append(sess.logAttrs(), slog.Any("err", err))...)
 	}
+}
+
+// logAttrs describes the session for logs: the failing command, account, mailbox and client.
+func (s *session) logAttrs() []any {
+	attrs := []any{"cmd", s.lastCmd, "remote", s.conn.RemoteAddr().String()}
+	if s.principal.AccountID != 0 {
+		attrs = append(attrs, "account", s.principal.AccountID)
+	}
+	if s.selected {
+		attrs = append(attrs, "mailbox", s.mbox.Name)
+	}
+	return attrs
+}
+
+// clientGone reports errors that mean the client went away or the connection broke, not a
+// server fault: EOF, resets, timeouts and other network or TLS errors.
+func clientGone(err error) bool {
+	var opErr *net.OpError
+	return errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) ||
+		errors.Is(err, os.ErrDeadlineExceeded) || errors.As(err, &opErr)
 }

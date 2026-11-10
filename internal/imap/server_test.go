@@ -78,7 +78,7 @@ func TestIMAPFetchInbox(t *testing.T) {
 	}
 	// One FETCH response: plain items then the literal (RFC 3501; as Dovecot/Gmail). BODY[] without
 	// PEEK sets \Seen, so FLAGS is reported too.
-	if !strings.HasPrefix(line, `* 1 FETCH (UID 1 FLAGS (\Seen) RFC822.SIZE `) || !strings.Contains(line, " BODY[] {") {
+	if !strings.HasPrefix(line, `* 1 FETCH (UID 1 FLAGS (\Seen \Recent) RFC822.SIZE `) || !strings.Contains(line, " BODY[] {") {
 		t.Fatalf("fetch %q", line)
 	}
 	n, err := literalSize(line)
@@ -96,13 +96,13 @@ func TestIMAPFetchInbox(t *testing.T) {
 	expectPrefix(t, read, "a4 OK")
 	send(t, conn, "a5 STORE 1 +FLAGS (\\Seen)")
 	line, err = read.ReadString('\n')
-	if err != nil || !strings.Contains(line, `FLAGS (\Seen)`) {
+	if err != nil || !strings.Contains(line, `FLAGS (\Seen \Recent)`) {
 		t.Fatalf("store response %q err %v", line, err)
 	}
 	expectPrefix(t, read, "a5 OK")
 	send(t, conn, "a6 FETCH 1 (FLAGS)")
 	line, err = read.ReadString('\n')
-	if err != nil || !strings.Contains(line, `FLAGS (\Seen)`) || !strings.Contains(line, "MODSEQ (") {
+	if err != nil || !strings.Contains(line, `FLAGS (\Seen \Recent)`) || !strings.Contains(line, "MODSEQ (") {
 		t.Fatalf("fetch flags %q err %v", line, err)
 	}
 	expectPrefix(t, read, "a6 OK")
@@ -114,7 +114,7 @@ func TestIMAPFetchInbox(t *testing.T) {
 	expectPrefix(t, read, "a8 OK")
 	send(t, conn, "a9 UID FETCH 1 (UID FLAGS)")
 	line, err = read.ReadString('\n')
-	if err != nil || !strings.Contains(line, "UID 1") || !strings.Contains(line, `FLAGS (\Seen)`) || !strings.Contains(line, "MODSEQ (") {
+	if err != nil || !strings.Contains(line, "UID 1") || !strings.Contains(line, `FLAGS (\Seen \Recent)`) || !strings.Contains(line, "MODSEQ (") {
 		t.Fatalf("uid fetch %q err %v", line, err)
 	}
 	expectPrefix(t, read, "a9 OK")
@@ -141,7 +141,10 @@ func TestIMAPFetchInbox(t *testing.T) {
 	expectPrefix(t, read, "* 0 RECENT")
 	expectSelectOK(t, read)
 	expectPrefix(t, read, "ae OK")
+	// RFC 6851: untagged COPYUID, then EXPUNGE for the moved message, then the tagged OK.
 	send(t, conn, "af MOVE 1 Trash")
+	expectPrefix(t, read, "* OK [COPYUID ")
+	expectPrefix(t, read, "* 1 EXPUNGE")
 	expectPrefix(t, read, "af OK")
 	send(t, conn, "ag SELECT INBOX")
 	expectPrefix(t, read, "* FLAGS")
@@ -152,7 +155,7 @@ func TestIMAPFetchInbox(t *testing.T) {
 	send(t, conn, "ah SELECT Trash")
 	expectPrefix(t, read, "* FLAGS")
 	expectPrefix(t, read, "* 1 EXISTS")
-	expectPrefix(t, read, "* 0 RECENT")
+	expectPrefix(t, read, "* 1 RECENT") // moved/copied in: \Recent in the destination
 	expectSelectOK(t, read)
 	expectPrefix(t, read, "ah OK")
 	send(t, conn, "ai EXAMINE Trash")
@@ -286,7 +289,8 @@ func TestIMAPExpungeDeleted(t *testing.T) {
 	expectPrefix(t, read, "b2 OK")
 	send(t, conn, "b3 STORE 1 +FLAGS (\\Deleted)")
 	line, err := read.ReadString('\n')
-	if err != nil || !strings.Contains(line, `FLAGS (\Deleted)`) {
+	// The selecting session sees the delivered message as \Recent.
+	if err != nil || !strings.Contains(line, `FLAGS (\Deleted \Recent)`) {
 		t.Fatalf("store response %q err %v", line, err)
 	}
 	expectPrefix(t, read, "b3 OK")

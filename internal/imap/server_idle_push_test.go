@@ -64,13 +64,15 @@ func TestIMAPIdleFlagsCrossSession(t *testing.T) {
 	expectPrefix(t, storeRead, "l4 OK")
 
 	deadline := time.Now().Add(2 * time.Second)
+	_ = idleConn.SetReadDeadline(deadline)
 	gotFlags := false
 	for time.Now().Before(deadline) {
 		line, err := idleRead.ReadString('\n')
 		if err != nil {
 			t.Fatal(err)
 		}
-		if strings.Contains(line, `FETCH (FLAGS (\Seen)`) {
+		// The IDLE session selected first, so the message is \Recent for it as well.
+		if strings.Contains(line, "FETCH (FLAGS (") && strings.Contains(line, `\Seen`) {
 			gotFlags = true
 			break
 		}
@@ -78,6 +80,7 @@ func TestIMAPIdleFlagsCrossSession(t *testing.T) {
 	if !gotFlags {
 		t.Fatal("timeout waiting for FLAGS during IDLE")
 	}
+	_ = idleConn.SetReadDeadline(time.Time{})
 	send(t, idleConn, "DONE")
 	expectPrefix(t, idleRead, "l3 OK IDLE terminated")
 }
@@ -155,6 +158,18 @@ func TestIMAPIdleExpungeCrossSession(t *testing.T) {
 	if !gotExpunge {
 		t.Fatal("timeout waiting for EXPUNGE during IDLE")
 	}
+	// The expunged message was \Recent for the IDLE session, so "* 0 RECENT" may follow.
 	send(t, idleConn, "DONE")
-	expectPrefix(t, idleRead, "e3 OK IDLE terminated")
+	for {
+		line, err := idleRead.ReadString('\n')
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.HasPrefix(line, "e3 ") {
+			if !strings.HasPrefix(line, "e3 OK IDLE terminated") {
+				t.Fatalf("idle end %q", line)
+			}
+			break
+		}
+	}
 }

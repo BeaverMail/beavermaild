@@ -13,7 +13,7 @@ func TestIMAPSubscribeLsub(t *testing.T) {
 	ctx, accID, inbox, ln, cleanup := startIMAPTestServer(t)
 	defer cleanup()
 
-	created, err := inbox.CreateMailbox(ctx, accID, "Work")
+	created, err := inbox.CreateMailbox(ctx, accID, "Work", true)
 	if err != nil {
 		t.Fatal(err)
 	}

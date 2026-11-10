@@ -14,10 +14,10 @@ func TestIMAPListHasChildren(t *testing.T) {
 	ctx, accID, inbox, ln, cleanup := startIMAPTestServer(t)
 	defer cleanup()
 
-	if _, err := inbox.CreateMailbox(ctx, accID, "Work"); err != nil {
+	if _, err := inbox.CreateMailbox(ctx, accID, "Work", true); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := inbox.CreateMailbox(ctx, accID, "Work/Projects"); err != nil {
+	if _, err := inbox.CreateMailbox(ctx, accID, "Work/Projects", true); err != nil {
 		t.Fatal(err)
 	}
 

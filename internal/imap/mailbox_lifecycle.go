@@ -47,18 +47,21 @@ func (s *session) unselect() {
 	s.mbox = mail.Mailbox{}
 }
 
-// purgeDeleted permanently removes \Deleted messages without EXPUNGE untagged lines.
+// purgeDeleted permanently removes the mailbox's \Deleted messages without EXPUNGE untagged lines.
+// It reads the flags from storage: another session may have set \Deleted since the last sync.
 func (s *session) purgeDeleted(ctx context.Context) error {
-	for i := 0; i < len(s.messages); {
-		m := s.messages[i]
+	msgs, err := s.inbox.List(ctx, s.principal.AccountID, s.mbox.ID)
+	if err != nil {
+		return err
+	}
+	for _, m := range msgs {
 		if m.Meta.Flags&mail.FlagDeleted == 0 {
-			i++
 			continue
 		}
-		if err := s.inbox.DeleteMessage(ctx, s.principal.AccountID, m.StorageID()); err != nil {
+		if _, err := s.inbox.ExpungeMessage(ctx, s.principal.AccountID, s.mbox.ID, m.StorageID()); err != nil {
 			return err
 		}
-		s.messages = append(s.messages[:i], s.messages[i+1:]...)
 	}
+	s.messages = nil
 	return nil
 }

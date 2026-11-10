@@ -99,7 +99,7 @@ func TestIMAPCopyUIDAndClose(t *testing.T) {
 	send(t, conn, "c8 SELECT DestUID")
 	expectPrefix(t, read, "* FLAGS")
 	expectPrefix(t, read, "* 1 EXISTS")
-	expectPrefix(t, read, "* 0 RECENT")
+	expectPrefix(t, read, "* 1 RECENT") // moved/copied in: \Recent in the destination
 	expectSelectOK(t, read)
 	expectPrefix(t, read, "c8 OK")
 }

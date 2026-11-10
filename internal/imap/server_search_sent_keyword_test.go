@@ -40,6 +40,8 @@ func TestIMAPSearchSentKeyword(t *testing.T) {
 	expectPrefix(t, read, "k3 OK")
 
 	send(t, conn, "k4 STORE 1 +FLAGS (Flag_007)")
+	expectPrefix(t, read, "* FLAGS (")
+	expectPrefix(t, read, "* OK [PERMANENTFLAGS")
 	expectPrefix(t, read, "* 1 FETCH")
 	expectPrefix(t, read, "k4 OK")
 

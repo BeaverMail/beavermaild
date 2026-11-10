@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"slices"
 	"strconv"
@@ -18,6 +19,7 @@ import (
 	"github.com/BeaverMail/beavermaild/internal/mail"
 	"github.com/BeaverMail/beavermaild/internal/security"
 	"github.com/BeaverMail/beavermaild/internal/storage"
+	"github.com/BeaverMail/beavermaild/internal/storage/blob"
 	"github.com/BeaverMail/beavermaild/internal/tlsload"
 )
 
@@ -43,9 +45,15 @@ type session struct {
 	messages    []mail.Message
 	// recent holds the messages this session saw as \Recent when it selected the mailbox. SELECT
 	// clears the flag in storage so no other session sees it, but this session keeps reporting it.
-	recent          map[uint32]struct{} // EmailID set
-	idleWatchModSeq uint64              // mailbox HighestModSeq at last IDLE sync
-	stopping        *atomic.Bool        // server shutdown flag (nil when not served by a Server)
+	recent   map[uint32]struct{} // EmailID set
+	keywords map[string]struct{} // keywords announced in the last FLAGS response
+	// syncCtx/syncPending: the running command reports other sessions' changes before its tagged reply.
+	syncCtx         context.Context
+	syncPending     bool
+	lastCmd         string // command being run, for logs; never its arguments (LOGIN carries a password)
+	lastTag         string
+	idleWatchModSeq uint64       // mailbox HighestModSeq at last IDLE sync
+	stopping        *atomic.Bool // server shutdown flag (nil when not served by a Server)
 }
 
 func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *mail.Inbox, certs *tlsload.Certs, secure, tlsRequired bool, gate security.AuthGate, readTimeout time.Duration) *session {
@@ -70,6 +78,22 @@ func (s *session) run(ctx context.Context) error {
 	if err := s.untagged("OK BeaverMail IMAP4rev1 ready"); err != nil {
 		return err
 	}
+	for {
+		err := s.serveCommands(ctx)
+		if !errors.Is(err, mail.ErrContention) {
+			return err
+		}
+		// Too many concurrent writers on the account: the command failed, the session goes on.
+		s.syncPending = false
+		s.log.Warn("imap command failed", append(s.logAttrs(), slog.Any("err", err))...)
+		if err := s.tagged(s.lastTag, "NO [INUSE] Mailbox busy, try again"); err != nil {
+			return err
+		}
+	}
+}
+
+// serveCommands reads and runs commands until the session ends or a command fails.
+func (s *session) serveCommands(ctx context.Context) error {
 	for {
 		line, err := s.readLine()
 		if err != nil {
@@ -98,6 +122,13 @@ func (s *session) run(ctx context.Context) error {
 				return err
 			} else if !ok {
 				continue
+			}
+		}
+		s.syncCtx, s.syncPending = ctx, syncsBeforeReply(cmd)
+		s.lastCmd, s.lastTag = cmd, tag
+		if cmd == "UID" {
+			if sub, _, _ := strings.Cut(arg, " "); sub != "" {
+				s.lastCmd += " " + strings.ToUpper(sub)
 			}
 		}
 		switch cmd {
@@ -479,23 +510,19 @@ func (s *session) openMailbox(ctx context.Context, tag, name string, examine boo
 		}
 		return err
 	}
-	// EXAMINE leaves \Recent alone; SELECT takes the recent messages for this session (RFC 3501).
-	s.recent = nil
-	if !examine {
-		ids, err := s.inbox.ClearRecentFlags(ctx, s.principal.AccountID, mbox.ID)
-		if err != nil {
-			return err
-		}
-		s.recent = make(map[uint32]struct{}, len(ids))
-		for _, id := range ids {
-			s.recent[id] = struct{}{}
-		}
-	}
 	msgs, err := s.inbox.List(ctx, s.principal.AccountID, mbox.ID)
 	if err != nil {
 		return err
 	}
+	// EXAMINE leaves \Recent alone; SELECT takes the recent messages for this session (RFC 3501).
+	s.readOnly = examine
+	s.recent = map[uint32]struct{}{}
+	if err := s.claimRecent(ctx, mbox.ID, msgs); err != nil {
+		return err
+	}
 	s.keepRecent(msgs)
+	s.keywords = nil
+	s.trackKeywords(msgs)
 	recent := countRecentFlags(msgs)
 	highest, err := s.inbox.HighestModSeq(ctx, s.principal.AccountID, mbox.ID)
 	if err != nil {
@@ -510,9 +537,8 @@ func (s *session) openMailbox(ctx context.Context, tag, name string, examine boo
 	s.messages = msgs
 	s.mbox = mbox
 	s.selected = true
-	s.readOnly = examine
 	s.idleWatchModSeq = highestMod
-	if err := s.untagged(mail.IMAPCapabilityFlags); err != nil {
+	if err := s.untagged(s.flagsLine()); err != nil {
 		return err
 	}
 	if err := s.untagged(fmt.Sprintf("%d EXISTS", len(msgs))); err != nil {
@@ -561,6 +587,7 @@ func (s *session) cmdFetch(ctx context.Context, tag, arg string, byUID bool) err
 		return s.tagged(tag, "BAD FETCH syntax")
 	}
 	indices := s.resolveIndices(set, byUID)
+	gone := false
 	for _, idx := range indices {
 		if items.hasChangedSince && max(s.messages[idx].Meta.ModSeq, 1) <= items.changedSince {
 			continue
@@ -569,9 +596,17 @@ func (s *session) cmdFetch(ctx context.Context, tag, arg string, byUID bool) err
 		if err != nil {
 			return err
 		}
-		if err := s.writeFetch(ctx, idx+1, s.messages[idx], msgItems, byUID); err != nil {
+		err = s.writeFetch(ctx, idx+1, s.messages[idx], msgItems, byUID)
+		if errors.Is(err, storage.ErrNotFound) || errors.Is(err, blob.ErrNotFound) {
+			gone = true // expunged by another session, body already removed
+			continue
+		}
+		if err != nil {
 			return err
 		}
+	}
+	if gone {
+		return s.tagged(tag, "NO Some of the requested messages no longer exist") // RFC 2180 4.1.2
 	}
 	return s.tagged(tag, "OK FETCH completed")
 }
@@ -585,6 +620,9 @@ func (s *session) markSeenOnFetch(ctx context.Context, idx int, items fetchItems
 		return items, nil
 	}
 	_, meta, err := s.inbox.SetFlagsIfUnchanged(ctx, s.principal.AccountID, msg.StorageID(), mail.FlagSeen, 0, nil, nil, 0)
+	if errors.Is(err, storage.ErrNotFound) {
+		return items, nil // expunged by another session
+	}
 	if err != nil {
 		return items, err
 	}
@@ -618,6 +656,9 @@ func (s *session) cmdStore(ctx context.Context, tag, arg string, byUID bool) err
 			unchanged = unchangedSince
 		}
 		applied, meta, err := s.inbox.SetFlagsIfUnchanged(ctx, s.principal.AccountID, msg.StorageID(), set, clear, kwAdd, kwRemove, unchanged)
+		if errors.Is(err, storage.ErrNotFound) {
+			continue // expunged by another session: its EXPUNGE comes with the next sync (RFC 2180 4.2)
+		}
 		if err != nil {
 			return err
 		}
@@ -627,6 +668,9 @@ func (s *session) cmdStore(ctx context.Context, tag, arg string, byUID bool) err
 		}
 		s.messages[idx].Meta = meta
 		s.keepRecent(s.messages[idx : idx+1])
+		if err := s.announceKeywords(s.messages[idx : idx+1]); err != nil {
+			return err
+		}
 		meta = s.messages[idx].Meta
 		if !silent {
 			line := fmt.Sprintf("%d FETCH (FLAGS %s", idx+1, mail.FormatMessageFlags(meta))
@@ -735,7 +779,7 @@ func (s *session) cmdCreate(ctx context.Context, tag, arg string) error {
 	if err != nil {
 		return s.tagged(tag, "BAD mailbox name syntax")
 	}
-	_, err = s.inbox.CreateMailbox(ctx, s.principal.AccountID, name)
+	_, err = s.inbox.CreateMailbox(ctx, s.principal.AccountID, name, false)
 	if err != nil {
 		if errors.Is(err, mail.ErrMailboxExists) {
 			return s.tagged(tag, "NO mailbox already exists")
@@ -805,6 +849,10 @@ func (s *session) cmdCopy(ctx context.Context, tag, arg string, byUID bool) erro
 	ids := s.emailIDsFromIndices(s.resolveIndices(set, byUID))
 	srcUIDs := s.imapUIDsFromIndices(s.resolveIndices(set, byUID))
 	_, destUIDs, err := s.inbox.CopyMessages(ctx, s.principal.AccountID, ids, dest.ID)
+	if errors.Is(err, storage.ErrNotFound) {
+		// Expunged by another session: nothing was copied (RFC 2180 4.4.1).
+		return s.tagged(tag, "NO Some of the requested messages no longer exist")
+	}
 	if err != nil {
 		return err
 	}
@@ -836,29 +884,122 @@ func (s *session) cmdMove(ctx context.Context, tag, arg string, byUID bool) erro
 	if err != nil {
 		return s.tagged(tag, "BAD MOVE syntax")
 	}
-	ids := s.emailIDsFromIndices(s.resolveIndices(set, byUID))
-	srcUIDs := s.imapUIDsFromIndices(s.resolveIndices(set, byUID))
+	indices := s.resolveIndices(set, byUID)
+	ids := s.emailIDsFromIndices(indices)
+	srcUIDs := s.imapUIDsFromIndices(indices)
 	destUIDs, err := s.inbox.MoveMessages(ctx, s.principal.AccountID, ids, dest.ID)
+	if errors.Is(err, storage.ErrNotFound) {
+		// Expunged by another session: nothing was copied (RFC 2180 4.4.1).
+		return s.tagged(tag, "NO Some of the requested messages no longer exist")
+	}
 	if err != nil {
 		return err
 	}
-	msgs, err := s.inbox.List(ctx, s.principal.AccountID, s.mbox.ID)
-	if err != nil {
-		return err
+	// RFC 6851: COPYUID in an untagged OK, then an EXPUNGE per moved message. Highest sequence
+	// number first, so the numbers still to send stay valid.
+	if len(destUIDs) > 0 {
+		if err := s.untagged(fmt.Sprintf("OK [%s] Moved UIDs", formatCopyUID(dest.UIDValidity, srcUIDs, destUIDs))); err != nil {
+			return err
+		}
 	}
-	s.keepRecent(msgs)
-	s.messages = msgs
-	return s.tagged(tag, fmt.Sprintf("OK [%s] MOVE completed", formatCopyUID(dest.UIDValidity, srcUIDs, destUIDs)))
+	slices.SortFunc(indices, func(a, b int) int { return b - a })
+	for _, idx := range slices.Compact(indices) {
+		if err := s.untagged(fmt.Sprintf("%d EXPUNGE", idx+1)); err != nil {
+			return err
+		}
+		s.messages = slices.Delete(s.messages, idx, idx+1)
+	}
+	if dest.ID == s.mbox.ID {
+		// Moved within the mailbox: the messages come back with new UIDs.
+		msgs, err := s.inbox.List(ctx, s.principal.AccountID, s.mbox.ID)
+		if err != nil {
+			return err
+		}
+		if err := s.claimRecent(ctx, s.mbox.ID, msgs); err != nil {
+			return err
+		}
+		s.keepRecent(msgs)
+		if err := s.announceKeywords(msgs); err != nil {
+			return err
+		}
+		s.messages = msgs
+		if err := s.untagged(fmt.Sprintf("%d EXISTS", len(msgs))); err != nil {
+			return err
+		}
+	}
+	return s.tagged(tag, "OK MOVE completed")
 }
 
-// keepRecent sets \Recent on the messages this session took as recent at SELECT, after their
-// metadata was reloaded from storage (where SELECT cleared it).
+// claimRecent takes for this session the messages of msgs still \Recent in storage. Only the
+// session whose clear succeeds reports them, so a message is \Recent in one session at most.
+func (s *session) claimRecent(ctx context.Context, mailboxID uint32, msgs []mail.Message) error {
+	if s.readOnly {
+		return nil
+	}
+	var ids []uint32
+	for _, m := range msgs {
+		if m.Meta.Flags&mail.FlagRecent != 0 {
+			ids = append(ids, m.EmailID)
+		}
+	}
+	claimed, err := s.inbox.ClearRecentFlagsOf(ctx, s.principal.AccountID, mailboxID, ids)
+	for _, id := range claimed {
+		s.recent[id] = struct{}{}
+	}
+	return err
+}
+
+// keepRecent makes \Recent on msgs, freshly loaded from storage, mean "taken by this session":
+// the stored flag only says nobody took it yet. EXAMINE shows the stored flag.
 func (s *session) keepRecent(msgs []mail.Message) {
+	if s.readOnly {
+		return
+	}
 	for i := range msgs {
 		if _, ok := s.recent[msgs[i].EmailID]; ok {
 			msgs[i].Meta.Flags |= mail.FlagRecent
+		} else {
+			msgs[i].Meta.Flags &^= mail.FlagRecent
 		}
 	}
+}
+
+// trackKeywords adds the keywords of msgs to the announced set and reports whether any was new.
+func (s *session) trackKeywords(msgs []mail.Message) bool {
+	if s.keywords == nil {
+		s.keywords = map[string]struct{}{}
+	}
+	added := false
+	for _, m := range msgs {
+		for _, kw := range m.Meta.Keywords {
+			if _, ok := s.keywords[kw]; !ok {
+				s.keywords[kw] = struct{}{}
+				added = true
+			}
+		}
+	}
+	return added
+}
+
+// announceKeywords sends FLAGS again when msgs carry a keyword the client was not told about:
+// a client may reject a FETCH FLAGS with a keyword missing from the last FLAGS (RFC 3501 7.2.6).
+func (s *session) announceKeywords(msgs []mail.Message) error {
+	if !s.trackKeywords(msgs) {
+		return nil
+	}
+	if err := s.untagged(s.flagsLine()); err != nil {
+		return err
+	}
+	return s.untagged(fmt.Sprintf("OK [PERMANENTFLAGS %s] Limited", mail.IMAPPermanentFlags))
+}
+
+// flagsLine is the FLAGS response: the system flags plus the keywords in use in the mailbox.
+func (s *session) flagsLine() string {
+	kws := slices.Sorted(maps.Keys(s.keywords))
+	if len(kws) == 0 {
+		return mail.IMAPCapabilityFlags
+	}
+	return strings.TrimSuffix(mail.IMAPCapabilityFlags, ")") + " " + strings.Join(kws, " ") + ")"
 }
 
 func (s *session) emailIDsFromIndices(indices []int) []uint32 {
@@ -1023,8 +1164,27 @@ func (s *session) untagged(line string) error {
 }
 
 func (s *session) tagged(tag, resp string) error {
+	if s.syncPending {
+		s.syncPending = false
+		if s.selected {
+			if err := s.pushIdleMailboxChanges(s.syncCtx); err != nil {
+				return err
+			}
+		}
+	}
 	_, err := fmt.Fprintf(s.conn, "%s %s\r\n", tag, resp)
 	return err
+}
+
+// syncsBeforeReply reports whether cmd reports the selected mailbox's changes (EXISTS, EXPUNGE,
+// FLAGS) before its tagged reply. RFC 3501 7.4.1 forbids EXPUNGE during FETCH, STORE and SEARCH
+// (not their UID forms); SELECT/EXAMINE load a fresh view and IDLE pushes its own updates.
+func syncsBeforeReply(cmd string) bool {
+	switch cmd {
+	case "FETCH", "STORE", "SEARCH", "SORT", "THREAD", "SELECT", "EXAMINE", "IDLE", "LOGOUT", "CLOSE", "UNSELECT":
+		return false
+	}
+	return true
 }
 
 func (s *session) isStopping() bool { return s.stopping != nil && s.stopping.Load() }

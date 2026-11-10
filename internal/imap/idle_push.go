@@ -10,7 +10,8 @@ import (
 	"github.com/BeaverMail/beavermaild/internal/storage"
 )
 
-// pushIdleMailboxChanges compares storage to the session cache and emits untagged updates.
+// pushIdleMailboxChanges compares storage to the session cache and emits untagged updates. IDLE
+// calls it on each change, and every other command before its tagged reply (see tagged).
 func (s *session) pushIdleMailboxChanges(ctx context.Context) error {
 	highest, err := s.inbox.HighestModSeq(ctx, s.principal.AccountID, s.mbox.ID)
 	if err != nil {
@@ -20,36 +21,20 @@ func (s *session) pushIdleMailboxChanges(ctx context.Context) error {
 		return nil
 	}
 
-	freshEmailIDs, err := s.inbox.ListMailboxIndexEmailIDs(ctx, s.principal.AccountID, s.mbox.ID)
+	// Always a full reload: reusing cached metadata would drop flag changes made together with
+	// new or expunged messages.
+	fresh, err := s.inbox.List(ctx, s.principal.AccountID, s.mbox.ID)
 	if err != nil {
 		return err
 	}
-	freshSet := make(map[uint32]struct{}, len(freshEmailIDs))
-	for _, id := range freshEmailIDs {
-		freshSet[id] = struct{}{}
-	}
-
-	var newEmailIDs []uint32
-	for _, id := range freshEmailIDs {
-		if !sessionHasEmailID(s.messages, id) {
-			newEmailIDs = append(newEmailIDs, id)
-		}
-	}
-	expunged := sessionHasMissingEmailID(s.messages, freshSet)
-
-	var fresh []mail.Message
-	switch {
-	case len(newEmailIDs) > 0 && !expunged:
-		fresh, err = s.inbox.AppendMailboxMessages(ctx, s.principal.AccountID, s.mbox.ID, s.messages, newEmailIDs)
-	case expunged && len(newEmailIDs) == 0:
-		fresh = filterMessagesByEmailIDSet(s.messages, freshSet)
-	default:
-		fresh, err = s.inbox.List(ctx, s.principal.AccountID, s.mbox.ID)
-	}
-	if err != nil {
+	// The first SELECT session to see a new message takes its \Recent; EXAMINE never does.
+	if err := s.claimRecent(ctx, s.mbox.ID, fresh); err != nil {
 		return err
 	}
 	s.keepRecent(fresh)
+	if err := s.announceKeywords(fresh); err != nil {
+		return err
+	}
 	return s.applyIdleMailboxDiff(fresh, highest)
 }
 
@@ -99,34 +84,6 @@ func (s *session) applyIdleMailboxDiff(fresh []mail.Message, highestMod uint64) 
 	s.messages = fresh
 	s.idleWatchModSeq = highestMod
 	return nil
-}
-
-func sessionHasEmailID(msgs []mail.Message, emailID uint32) bool {
-	for _, m := range msgs {
-		if m.StorageID() == emailID {
-			return true
-		}
-	}
-	return false
-}
-
-func sessionHasMissingEmailID(msgs []mail.Message, freshSet map[uint32]struct{}) bool {
-	for _, m := range msgs {
-		if _, ok := freshSet[m.StorageID()]; !ok {
-			return true
-		}
-	}
-	return false
-}
-
-func filterMessagesByEmailIDSet(msgs []mail.Message, ids map[uint32]struct{}) []mail.Message {
-	out := make([]mail.Message, 0, len(ids))
-	for _, m := range msgs {
-		if _, ok := ids[m.StorageID()]; ok {
-			out = append(out, m)
-		}
-	}
-	return out
 }
 
 // emitIdleFetch sends an unsolicited FLAGS (and optional MODSEQ) FETCH during IDLE.

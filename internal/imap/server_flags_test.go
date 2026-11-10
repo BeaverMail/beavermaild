@@ -51,7 +51,8 @@ func TestIMAPFlagsCaseAndStoreReplace(t *testing.T) {
 	expectPrefix(t, read, "f5 OK")
 
 	send(t, conn, `f6 STORE 1 FLAGS \deleted`)
-	if line := readLine(); !strings.HasPrefix(line, `* 1 FETCH (FLAGS (\Deleted)`) {
+	// APPENDed before SELECT, so \Recent for this session.
+	if line := readLine(); !strings.HasPrefix(line, `* 1 FETCH (FLAGS (\Deleted \Recent)`) {
 		t.Fatalf("store replace %q", line)
 	}
 	expectPrefix(t, read, "f6 OK")
@@ -61,10 +62,15 @@ func TestIMAPFlagsCaseAndStoreReplace(t *testing.T) {
 
 	// Replace also replaces keywords.
 	send(t, conn, `f8 STORE 1 +FLAGS ($old)`)
+	// A keyword new to the mailbox is announced before the FETCH that uses it.
+	expectPrefix(t, read, `* FLAGS (\Answered \Flagged \Deleted \Seen \Draft $old)`)
+	expectPrefix(t, read, "* OK [PERMANENTFLAGS")
 	readLine()
 	expectPrefix(t, read, "f8 OK")
 	send(t, conn, `f9 STORE 1 FLAGS ($new)`)
-	if line := readLine(); !strings.HasPrefix(line, `* 1 FETCH (FLAGS ($new)`) {
+	expectPrefix(t, read, `* FLAGS (\Answered \Flagged \Deleted \Seen \Draft $new $old)`)
+	expectPrefix(t, read, "* OK [PERMANENTFLAGS")
+	if line := readLine(); !strings.HasPrefix(line, `* 1 FETCH (FLAGS (\Recent $new)`) {
 		t.Fatalf("store replace keywords %q", line)
 	}
 	expectPrefix(t, read, "f9 OK")
