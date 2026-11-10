@@ -37,7 +37,7 @@ func TestIMAPFlagsCaseAndStoreReplace(t *testing.T) {
 	send(t, conn, "f2 CREATE Flags")
 	expectPrefix(t, read, "f2 OK")
 	msg := "Subject: x\r\n\r\nx\r\n"
-	send(t, conn, `f3 APPEND Flags (\seen \FLAGGED) {`+strconv.Itoa(len(msg))+"+}\r\n"+msg[:len(msg)-2])
+	send(t, conn, `f3 APPEND Flags (\seen \FLAGGED) {`+strconv.Itoa(len(msg))+"+}\r\n"+msg) // send adds the command's final CRLF
 	expectPrefix(t, read, "f3 OK")
 	send(t, conn, "f4 SELECT Flags")
 	for line := ""; !strings.HasPrefix(line, "f4 OK"); {

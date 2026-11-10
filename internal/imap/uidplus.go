@@ -8,9 +8,9 @@ import (
 	"strings"
 )
 
-// formatAppendUID builds APPENDUID validity uid for a tagged OK response.
-func formatAppendUID(uidValidity, uid uint32) string {
-	return fmt.Sprintf("APPENDUID %d %d", uidValidity, uid)
+// formatAppendUID builds APPENDUID validity uid-set for a tagged OK response (a set for MULTIAPPEND).
+func formatAppendUID(uidValidity uint32, uids []uint32) string {
+	return fmt.Sprintf("APPENDUID %d %s", uidValidity, formatUIDSet(uids))
 }
 
 // formatCopyUID builds COPYUID validity src-set dest-set for a tagged OK response.

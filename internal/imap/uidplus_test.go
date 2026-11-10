@@ -11,7 +11,7 @@ func TestFormatUIDSet(t *testing.T) {
 	if got := formatUIDSet([]uint32{1, 3, 5}); got != "1,3,5" {
 		t.Fatalf("list %q", got)
 	}
-	if formatAppendUID(42, 7) != "APPENDUID 42 7" {
+	if formatAppendUID(42, []uint32{7}) != "APPENDUID 42 7" {
 		t.Fatal("appenduid")
 	}
 	if formatCopyUID(9, []uint32{1}, []uint32{2}) != "COPYUID 9 1 2" {

@@ -3,6 +3,7 @@ package imap
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -374,7 +375,7 @@ func (s *session) capabilityLine() string {
 		caps = append(caps, "LOGINDISABLED")
 	}
 	if s.principal.AccountID != 0 {
-		caps = append(caps, "ENABLE", "IDLE", "NAMESPACE", "UIDPLUS", "UNSELECT", "SPECIAL-USE", "LIST-EXTENDED", "CONDSTORE", "SORT", "SORT=DISPLAY", "THREAD=REFERENCES", "THREAD=ORDEREDSUBJECT", "ESEARCH", "ESORT", "QUOTA")
+		caps = append(caps, "ENABLE", "IDLE", "NAMESPACE", "UIDPLUS", "UNSELECT", "SPECIAL-USE", "LIST-EXTENDED", "CONDSTORE", "SORT", "SORT=DISPLAY", "THREAD=REFERENCES", "THREAD=ORDEREDSUBJECT", "ESEARCH", "ESORT", "BINARY", "MULTIAPPEND", "QUOTA")
 	}
 	return "CAPABILITY " + strings.Join(caps, " ")
 }
@@ -633,6 +634,9 @@ func (s *session) cmdFetch(ctx context.Context, tag, arg string, byUID bool) err
 		if errors.Is(err, storage.ErrNotFound) || errors.Is(err, blob.ErrNotFound) {
 			gone = true // expunged by another session, body already removed
 			continue
+		}
+		if errors.Is(err, errUnknownCTE) {
+			return s.tagged(tag, "NO [UNKNOWN-CTE] cannot decode the part's transfer encoding")
 		}
 		if err != nil {
 			return err
@@ -1166,6 +1170,20 @@ func (s *session) writeFetch(ctx context.Context, seq int, msg mail.Message, ite
 
 // writeFetchWithLiterals emits one FETCH response: the plain items, then BODY section literals (PEEK omitted per RFC 3501).
 func (s *session) writeFetchWithLiterals(seq int, parts []string, sections []bodySectionFetch, raw []byte) error {
+	// Extract every section first: a BINARY part that cannot be decoded fails the FETCH with
+	// UNKNOWN-CTE (RFC 3516) before any of this response is sent.
+	datas := make([][]byte, len(sections))
+	for i, bs := range sections {
+		if !bs.binary {
+			datas[i] = bs.partialData(extractBodySection(raw, bs.section, bs.hdrFields))
+			continue
+		}
+		data, err := binarySection(raw, bs.section)
+		if err != nil {
+			return err
+		}
+		datas[i] = bs.partialData(data)
+	}
 	prefix := ""
 	if len(parts) > 0 {
 		prefix = strings.Join(parts, " ") + " "
@@ -1174,12 +1192,19 @@ func (s *session) writeFetchWithLiterals(seq int, parts []string, sections []bod
 		return err
 	}
 	sep := ""
-	for _, bs := range sections {
-		data := bs.partialData(extractBodySection(raw, bs.section, bs.hdrFields))
-		if _, err := fmt.Fprintf(s.conn, "%s%s {%d}\r\n", sep, bs.responseName(), len(data)); err != nil {
-			return err
+	for i, bs := range sections {
+		data := datas[i]
+		var err error
+		switch {
+		case bs.sizeOnly:
+			_, err = fmt.Fprintf(s.conn, "%s%s %d", sep, bs.itemName, len(data))
+		case bs.binary && bytes.IndexByte(data, 0) >= 0:
+			// NUL fits only a literal8 (RFC 3516 4.3).
+			_, err = fmt.Fprintf(s.conn, "%s%s ~{%d}\r\n%s", sep, bs.responseName(), len(data), data)
+		default:
+			_, err = fmt.Fprintf(s.conn, "%s%s {%d}\r\n%s", sep, bs.responseName(), len(data), data)
 		}
-		if _, err := s.conn.Write(data); err != nil {
+		if err != nil {
 			return err
 		}
 		sep = " "

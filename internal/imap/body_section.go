@@ -15,6 +15,8 @@ type bodySectionFetch struct {
 	section   string
 	hdrFields []string // set for HEADER.FIELDS[.NOT] sections
 	setsSeen  bool     // BODY[...] without PEEK, RFC822, RFC822.TEXT: fetching sets \Seen
+	binary    bool     // BINARY[...]: the part decoded from its transfer encoding (RFC 3516)
+	sizeOnly  bool     // BINARY.SIZE[...]: only the decoded size
 
 	// partial is set for BODY[...]<origin.count>: only count bytes from origin are sent.
 	partial bool
@@ -73,26 +75,32 @@ func parseAllBodyFetches(rest string) []bodySectionFetch {
 	upper := strings.ToUpper(rest)
 	for pos := 0; pos < len(rest); {
 		tail := strings.ToUpper(rest[pos:])
-		peekAt := strings.Index(tail, "BODY.PEEK[")
-		bodyAt := strings.Index(tail, "BODY[")
-		pick := -1
-		switch {
-		case peekAt >= 0 && (bodyAt < 0 || peekAt <= bodyAt):
-			pick = pos + peekAt
-		case bodyAt >= 0:
-			pick = pos + bodyAt
-		default:
-			pos = len(rest)
-			continue
+		pick, kind := -1, bracketItem{}
+		for _, k := range bracketItems {
+			if at := strings.Index(tail, k.prefix); at >= 0 && (pick < 0 || pos+at < pick) {
+				pick, kind = pos+at, k
+			}
 		}
-		_, peek, item, spec, next, ok := scanBodyBracketItem(rest, pick)
-		if !ok {
+		if pick < 0 {
+			break
+		}
+		end := strings.IndexByte(rest[pick:], ']')
+		if end < 0 {
 			pos = pick + 1
 			continue
 		}
-		spec = strings.TrimSpace(spec)
+		item := rest[pick : pick+end+1]
+		spec := strings.TrimSpace(item[len(kind.prefix) : len(item)-1])
+		next, peek := pick+end+1, kind.peek
 		var bs bodySectionFetch
-		if spec == "" {
+		if kind.binary {
+			// BINARY takes a part number only, no HEADER/TEXT/MIME (RFC 3516).
+			if _, ok := parseSectionPath(spec); !ok {
+				pos = next
+				continue
+			}
+			bs = bodySectionFetch{itemName: item, section: spec, binary: true, sizeOnly: kind.size}
+		} else if spec == "" {
 			bs = bodySectionFetch{itemName: item, section: ""}
 		} else if section, fields, ok := parseHeaderFieldsSection(spec); ok {
 			bs = bodySectionFetch{itemName: item, section: section, hdrFields: fields}
@@ -100,7 +108,7 @@ func parseAllBodyFetches(rest string) []bodySectionFetch {
 			bs = bodySectionFetch{itemName: item, section: spec}
 		}
 		bs.setsSeen = !peek
-		if origin, count, n, ok := parsePartial(rest, next); ok {
+		if origin, count, n, ok := parsePartial(rest, next); ok && !bs.sizeOnly {
 			bs.partial, bs.origin, bs.count = true, origin, count
 			next += n
 		}
@@ -127,27 +135,18 @@ func parseAllBodyFetches(rest string) []bodySectionFetch {
 	return out
 }
 
-func scanBodyBracketItem(s string, from int) (start int, peek bool, itemName, spec string, next int, ok bool) {
-	rem := strings.ToUpper(s[from:])
-	switch {
-	case strings.HasPrefix(rem, "BODY.PEEK["):
-		start = from
-		peek = true
-		from += len("BODY.PEEK[")
-	case strings.HasPrefix(rem, "BODY["):
-		start = from
-		from += len("BODY[")
-	default:
-		return 0, false, "", "", from, false
-	}
-	end := strings.IndexByte(s[from:], ']')
-	if end < 0 {
-		return 0, false, "", "", from, false
-	}
-	end += from
-	itemName = s[start : end+1]
-	spec = itemName[strings.IndexByte(itemName, '[')+1 : len(itemName)-1]
-	return start, peek, itemName, spec, end + 1, true
+// bracketItem is a FETCH item with a [section]: BODY, BINARY (RFC 3516), and their variants.
+type bracketItem struct {
+	prefix             string
+	peek, binary, size bool
+}
+
+var bracketItems = []bracketItem{
+	{prefix: "BODY.PEEK[", peek: true},
+	{prefix: "BODY["},
+	{prefix: "BINARY.PEEK[", peek: true, binary: true},
+	{prefix: "BINARY.SIZE[", peek: true, binary: true, size: true},
+	{prefix: "BINARY[", binary: true},
 }
 
 // parseHeaderFieldsSection parses "[path.]HEADER.FIELDS[.NOT] (f1 f2)" and returns the section
@@ -174,10 +173,11 @@ func parseHeaderFieldsSection(spec string) (section string, fields []string, ok 
 	return section, strings.Fields(rest[1 : len(rest)-1]), true
 }
 
-// bodyFetchResponseName maps BODY.PEEK[...] request items to BODY[...] in FETCH responses (RFC 3501).
+// bodyFetchResponseName drops PEEK in FETCH responses: BODY.PEEK[...] is answered as BODY[...],
+// BINARY.PEEK[...] as BINARY[...] (RFC 3501, RFC 3516).
 func bodyFetchResponseName(itemName string) string {
-	if len(itemName) >= 10 && strings.EqualFold(itemName[:10], "BODY.PEEK[") {
-		return "BODY[" + itemName[10:]
+	if i := strings.Index(strings.ToUpper(itemName), ".PEEK["); i >= 0 {
+		return itemName[:i] + itemName[i+len(".PEEK"):]
 	}
 	return itemName
 }

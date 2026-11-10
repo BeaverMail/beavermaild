@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- IMAP BINARY (RFC 3516): `FETCH BINARY[part]`, `BINARY.PEEK[part]` (also partial) and
+  `BINARY.SIZE[part]` return the part decoded from base64 or quoted-printable, as a literal8 when
+  it holds NUL; an undecodable encoding answers `NO [UNKNOWN-CTE]`. `APPEND` takes literal8 (`~{n}`); parts
+  holding NUL are stored base64-encoded, so `BODY[...]` stays a valid literal and `BINARY[...]`
+  still returns the original bytes.
+- IMAP MULTIAPPEND (RFC 3502): one `APPEND` stores several messages, all or none, with one
+  `APPENDUID` set. The size cap applies to the messages of a command together.
 - IMAP CONDSTORE is on only after a CONDSTORE enabling command (RFC 7162 3.1: `ENABLE`,
   `SELECT ... (CONDSTORE)`, `FETCH`/`SEARCH` with `MODSEQ`, `CHANGEDSINCE`, `UNCHANGEDSINCE`,
   `STATUS (HIGHESTMODSEQ)`), not from login: until then no `MODSEQ` in FETCH and no

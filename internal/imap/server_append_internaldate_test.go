@@ -40,7 +40,7 @@ func TestIMAPAppendInternalDate(t *testing.T) {
 		t.Fatal(err)
 	}
 	expectPrefix(t, read, "+")
-	if _, err := conn.Write(raw); err != nil {
+	if _, err := conn.Write(append(raw, "\r\n"...)); err != nil { // the literal, then the command's CRLF
 		t.Fatal(err)
 	}
 	expectPrefix(t, read, "* 1 EXISTS")

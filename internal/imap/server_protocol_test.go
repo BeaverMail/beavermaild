@@ -158,7 +158,7 @@ func TestIMAPAppendLiteralPlus(t *testing.T) {
 	if _, err := fmt.Fprintf(conn, "p3 APPEND Drafts {%d+}\r\n", len(raw)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := conn.Write(raw); err != nil {
+	if _, err := conn.Write(append(raw, "\r\n"...)); err != nil { // the literal, then the command's CRLF
 		t.Fatal(err)
 	}
 	expectPrefix(t, read, "* 1 EXISTS")

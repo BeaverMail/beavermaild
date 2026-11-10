@@ -61,7 +61,7 @@ func TestIMAPSyncAcrossSessions(t *testing.T) {
 
 	// B appends: its own APPEND reports EXISTS, and B takes the new message's \Recent.
 	msg := "From: c@d\r\n\r\nnew\r\n"
-	send(t, b, "b1 APPEND INBOX {"+strconv.Itoa(len(msg))+"+}\r\n"+msg[:len(msg)-2])
+	send(t, b, "b1 APPEND INBOX {"+strconv.Itoa(len(msg))+"+}\r\n"+msg) // send adds the command's final CRLF
 	lines, tagged := until(rb, "b1")
 	if !strings.HasPrefix(tagged, "b1 OK") || !slices.Contains(lines, "* 3 EXISTS") || !slices.Contains(lines, "* 1 RECENT") {
 		t.Fatalf("append: %q %q", lines, tagged)
