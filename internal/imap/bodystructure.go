@@ -155,13 +155,7 @@ func formatIMAPParams(params map[string]string) string {
 	}
 	keys := make([]string, 0, len(params))
 	for k := range params {
-		if strings.EqualFold(k, "boundary") {
-			continue
-		}
 		keys = append(keys, k)
-	}
-	if len(keys) == 0 {
-		return "NIL"
 	}
 	// ponytail: stable order not required by RFC; sort for tests
 	for i := 0; i < len(keys); i++ {

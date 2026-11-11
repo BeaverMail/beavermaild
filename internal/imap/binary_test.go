@@ -13,8 +13,9 @@ func TestBinarySection(t *testing.T) {
 		"--b\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\na=3Db=\r\nc\r\n" +
 		"--b\r\nContent-Transfer-Encoding: 7bit\r\n\r\nplain\r\n" +
 		"--b\r\nContent-Transfer-Encoding: x-uuencode\r\n\r\nbegin\r\n" +
+		"--b\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\nx=ZZ\x01y\x7fz\r\n" + // malformed: kept as is
 		"--b--\r\n")
-	for section, want := range map[string]string{"1": "\x00hi!", "2": "a=bc", "3": "plain", "9": ""} {
+	for section, want := range map[string]string{"1": "\x00hi!", "2": "a=bc", "3": "plain", "5": "x=ZZ\x01y\x7fz", "9": ""} {
 		got, err := binarySection(raw, section)
 		if err != nil || string(got) != want {
 			t.Errorf("BINARY[%s] = %q, %v; want %q", section, got, err, want)

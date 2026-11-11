@@ -42,8 +42,8 @@ func TestFormatBodyStructureNestedMultipartNoSpaceBetweenParts(t *testing.T) {
 		"Content-Disposition: attachment; filename=a.pdf\r\nContent-Language: en, it\r\n\r\nJVBERg==\r\n" +
 		"--outer--\r\n")
 	want := `((("TEXT" "PLAIN" ("CHARSET" "utf-8") NIL NIL "7BIT" 4 1 NIL NIL NIL NIL)` +
-		`("TEXT" "HTML" ("CHARSET" "utf-8") NIL NIL "7BIT" 11 1 NIL NIL NIL NIL) "ALTERNATIVE" NIL NIL NIL NIL)` +
-		`("APPLICATION" "PDF" NIL NIL NIL "BASE64" 8 NIL ("ATTACHMENT" ("FILENAME" "a.pdf")) ("en" "it") NIL) "MIXED" NIL NIL NIL NIL)`
+		`("TEXT" "HTML" ("CHARSET" "utf-8") NIL NIL "7BIT" 11 1 NIL NIL NIL NIL) "ALTERNATIVE" ("BOUNDARY" "inner") NIL NIL NIL)` +
+		`("APPLICATION" "PDF" NIL NIL NIL "BASE64" 8 NIL ("ATTACHMENT" ("FILENAME" "a.pdf")) ("en" "it") NIL) "MIXED" ("BOUNDARY" "outer") NIL NIL NIL)`
 	if got := formatBodyStructure(raw); got != want {
 		t.Fatalf("got  %s\nwant %s", got, want)
 	}

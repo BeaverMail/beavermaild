@@ -50,7 +50,7 @@ func binarySection(raw []byte, section string) ([]byte, error) {
 		n, _ := base64.RawStdEncoding.Decode(out, clean)
 		return out[:n], nil
 	case "quoted-printable":
-		out, _ := io.ReadAll(quotedprintable.NewReader(bytes.NewReader(part.body)))
+		out, _ := io.ReadAll(quotedprintable.NewReader(bytes.NewReader(escapeQPControls(part.body))))
 		return out, nil
 	default:
 		return nil, errUnknownCTE
@@ -104,4 +104,26 @@ func base64NULParts(raw []byte) []byte {
 		last = ed.end
 	}
 	return append(out, raw[last:]...)
+}
+
+// escapeQPControls writes as =XX the control bytes Go's quoted-printable reader rejects: it would
+// stop there and truncate the part. RFC 2045 6.7 asks for robust decoding, so they pass through.
+func escapeQPControls(b []byte) []byte {
+	var out []byte
+	for i, c := range b {
+		if c < ' ' && c != '\t' && c != '\r' && c != '\n' || c == 0x7f {
+			if out == nil {
+				out = append(make([]byte, 0, len(b)+8), b[:i]...)
+			}
+			out = append(out, '=', "0123456789ABCDEF"[c>>4], "0123456789ABCDEF"[c&15])
+			continue
+		}
+		if out != nil {
+			out = append(out, c)
+		}
+	}
+	if out == nil {
+		return b
+	}
+	return out
 }
