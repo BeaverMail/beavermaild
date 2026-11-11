@@ -68,6 +68,7 @@ func Run(ctx context.Context, opts RunOptions) (plugin.JobResult, error) {
 	}
 
 	cmd := exec.CommandContext(ctx, exe)
+	cmd.Env = append(os.Environ(), pluginhost.LicenseEnv(stack.Cfg)...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return plugin.JobResult{}, err

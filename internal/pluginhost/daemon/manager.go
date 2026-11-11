@@ -21,6 +21,7 @@ type Manager struct {
 	log            *slog.Logger
 	socketDir      string
 	dataDir        string
+	env            []string
 	timeout        time.Duration
 	failOpen       bool
 	restartBackoff time.Duration
@@ -38,6 +39,7 @@ type Manager struct {
 type Config struct {
 	SocketDir      string
 	DataDir        string
+	Env            []string // extra plugin environment (license dir, install id)
 	Timeout        time.Duration
 	FailOpen       bool
 	RestartBackoff time.Duration
@@ -55,6 +57,7 @@ func NewManager(log *slog.Logger, cfg Config) *Manager {
 		log:            log,
 		socketDir:      cfg.SocketDir,
 		dataDir:        cfg.DataDir,
+		env:            cfg.Env,
 		timeout:        cfg.Timeout,
 		failOpen:       cfg.FailOpen,
 		restartBackoff: cfg.RestartBackoff,
@@ -99,7 +102,7 @@ func (m *Manager) Start(ctx context.Context) error {
 			return err
 		}
 		socketPath := filepath.Join(m.socketDir, e.Name+".sock")
-		sess, err := spawnPluginSession(m.ctx, e.Name, exe, socketPath, m.dataDir)
+		sess, err := spawnPluginSession(m.ctx, e.Name, exe, socketPath, m.dataDir, m.env)
 		if err != nil {
 			for _, s := range sessions {
 				s.stop()

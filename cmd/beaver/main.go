@@ -1056,14 +1056,24 @@ func runPluginsList(args []string) int {
 	for _, skipErr := range reg.Skipped() {
 		fmt.Fprintf(os.Stderr, "skipped %v\n", skipErr)
 	}
+	licensesDir := filepath.Join(filepath.Dir(*configPath), "licenses")
+	installID := ""
+	if cfg, err := config.Load(*configPath); err == nil {
+		licensesDir = cfg.LicensesDir()
+		if id, err := cfg.InstallID(); err == nil {
+			installID = id
+			fmt.Fprintf(os.Stderr, "install_id=%s licenses=%s\n", installID, licensesDir)
+		}
+	}
 	for _, e := range reg.List() {
 		exe, err := reg.ResolveExe(e)
 		status := "ok"
 		if err != nil {
 			status = err.Error()
 		}
-		fmt.Fprintf(os.Stderr, "command=%s exe=%s capabilities=%s cli_flags=%s status=%s api_version=%d\n",
-			strings.Join(e.Command, " "), e.Exe, strings.Join(e.Capabilities, ","), formatCliFlags(e.CliFlags), status, plugin.APIVersion)
+		fmt.Fprintf(os.Stderr, "command=%s exe=%s capabilities=%s cli_flags=%s status=%s api_version=%d license=%s\n",
+			strings.Join(e.Command, " "), e.Exe, strings.Join(e.Capabilities, ","), formatCliFlags(e.CliFlags), status, plugin.APIVersion,
+			pluginhost.LicenseStatus(e, licensesDir, installID))
 		_ = exe
 	}
 	if len(reg.List()) == 0 {

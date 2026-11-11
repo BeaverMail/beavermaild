@@ -19,6 +19,7 @@ import (
 
 var descriptor = plugin.Descriptor{
 	Command: []string{"filter"},
+	License: plugin.LicenseFree,
 	CliFlags: []plugin.CliFlag{
 		{Key: "client_ip", Flag: "client-ip", Description: "simulated SMTP client IP (scan)"},
 		{Key: "ehlo_domain", Flag: "ehlo", Description: "simulated SMTP EHLO domain (scan)"},

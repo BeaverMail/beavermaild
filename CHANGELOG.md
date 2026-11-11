@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Paid plugins: new SDK package `plugin/license` verifies Ed25519-signed license files offline.
+  The host passes the licenses directory (`<config dir>/licenses`) and the installation id to
+  every plugin. `beaver init` creates the installation id in `<data_dir>/install-id`.
+  `beaver plugins list` prints the installation id and each plugin's license status.
+- `beaver-license` (in the SDK, built with `make beaver-license`, not packaged) creates a vendor
+  signing key and issues license files; any plugin vendor can use it with its own key.
+
 ## 0.4.0
 
 - IMAP BODYSTRUCTURE of a multipart includes the `BOUNDARY` parameter, as RFC 3501 7.4.2 asks for

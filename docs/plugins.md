@@ -222,6 +222,64 @@ func runJob(req plugin.CliRequest, emit *plugin.BatchEmitter) error {
 
 Rules: import only `github.com/BeaverMail/beavermaild/plugin` and stdlib; never `internal/*`; never open the host database, blob dir, or write under `data/` directly.
 
+### Paid plugins (`plugin/license`)
+
+A paid plugin ships as a public binary and is unlocked by a license file signed with Ed25519. Verification happens in the plugin at startup and never uses the network.
+
+- **License file:** `<config dir>/licenses/<plugin>.lic` (`/etc/beavermail/licenses/` with package defaults). `<plugin>` is the binary name without `beaver-plugin-`, and must match `Product.Plugin`.
+- **Environment:** the host sets `BEAVER_LICENSES_DIR` and `BEAVER_INSTALL_ID` for every plugin process (CLI, admin, daemon).
+- **Install id:** `beaver init` creates `<data_dir>/install-id`, a random id that stays the same across upgrades and restores from backup. A fresh install gets a new id. `beaver plugins list` prints it.
+- **Payload:** `plugin`, `model`, `licensee`, exactly one scope (`domains` or `install_id`), and `updates_until` (perpetual only). The file is `{"payload": "<payload JSON>", "signature": "<base64>"}`; `license.Sign` creates it.
+- **Models:**
+  - `oneshot`: never expires.
+  - `perpetual`: covers every build whose `Product.Released` is on or before `updates_until`. Older builds keep working after that date.
+- **Domain scope:** the plugin checks each account with `License.AllowsAccount` and refuses accounts outside the listed domains.
+
+```go
+var product = license.Product{Plugin: "widget", PublicKey: vendorKey, Released: "2026-11-11", BuyURL: "https://example.com/buy"}
+
+func main() {
+    if plugin.IsMetadataProcess() {
+        desc.License, desc.LicenseKey, desc.Released = plugin.LicensePaid, base64.StdEncoding.EncodeToString(product.PublicKey), product.Released
+        plugin.EmitDescriptor(desc)
+    }
+    lic := product.Require() // missing or invalid: readable message with BuyURL on stderr, exit 1
+    _ = lic
+    plugin.RunCLI(runJob)
+}
+```
+
+The descriptor fields `license`, `license_key` and `released` only let `beaver plugins list` show the status. The plugin itself enforces the license. Possible values:
+
+- `license=-`: the plugin declares nothing; it may use its own license scheme.
+- `license=free`
+- `license=valid[, updates until <date>][ domains=...]`
+- `license=expired (...)`
+- `license=invalid (...)`
+- `license=missing (<path>)`
+
+The status is informational: it relies on what the plugin declares about itself.
+
+#### Issuing licenses (`beaver-license`)
+
+Any vendor can sign its own plugins: each vendor has its own key pair, and the host does not care who signed. The tool is part of the SDK (Apache-2.0) and is built separately from the server (`make beaver-license`); it is not in `dist` or the packages.
+
+```bash
+beaver-license keygen -out vendor.key          # once; prints the public key for license.Product
+beaver-license issue -key vendor.key -plugin widget -model perpetual -licensee "Example Ltd" \
+    -install-id <id from beaver plugins list> -updates-until 2027-11-11 > widget.lic
+beaver-license issue -key vendor.key -plugin widget -model oneshot -licensee "Example Ltd" \
+    -domains example.com,example.org > widget.lic
+```
+
+`issue` verifies the file with the same code the plugin runs before writing it. Keep `vendor.key` offline: anyone who has it can issue licenses, and an issued license cannot be revoked.
+
+#### Plugin names
+
+The binary name is the plugin id. It is used for the command lookup and for the license file name, so two plugins with the same name collide. Third-party plugins should be named `beaver-plugin-<vendor>-<name>`.
+
+A license error only stops the plugin. It never deletes or blocks mail data.
+
 ## Daemon plugins
 
 SMTP persistent plugins use `internal/pluginhost/daemon/` and are started by `beaver serve` when a plugin `Descriptor` declares the `smtp` capability. Web capability remains scaffold only.
@@ -235,4 +293,5 @@ See **Capabilities (strategic model)** above for how the same exe runs as CLI vs
 | Version | Changes |
 |---------|---------|
 | 2 | CLI JSONL on stdio; `params` for op-specific args; host-side clear-recent; `raw_path` batch payload; metadata probe (`BEAVER_PLUGIN_MODE=metadata`); `Descriptor` / `CliFlag`; registry scan-only (no aggregate manifest); exact command as `plugins list` (no hyphen alias); `beaver plugins list` and plugin lines in `beaver help`; `JobResult.ByMailbox`; plugin stderr forwarded to operator |
+| 2 (additive) | Descriptor `license` (`free`, `paid`, or unset), `license_key`, `released`; env `BEAVER_LICENSES_DIR`, `BEAVER_INSTALL_ID`; SDK package `plugin/license`. Older plugins and hosts ignore the new fields. |
 | 2.1 (draft) | SMTP daemon filter on `beaver serve`; multi-phase socket protocol; configurable filter timeout (default fail-open) |

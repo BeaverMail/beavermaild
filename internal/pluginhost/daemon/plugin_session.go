@@ -27,6 +27,7 @@ type pluginSession struct {
 	socket  string
 	exe     string
 	dataDir string
+	env     []string
 	cmd     *exec.Cmd
 	conn    net.Conn
 	mu      sync.Mutex
@@ -151,7 +152,7 @@ func (p *pluginSession) connectSession(ctx context.Context) error {
 	if p.dataDir != "" {
 		env = append(env, plugin.EnvDataDir+"="+p.dataDir)
 	}
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = append(append(os.Environ(), env...), p.env...)
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("daemon: start %q: %w", p.name, err)
 	}
@@ -210,12 +211,13 @@ func (p *pluginSession) reconnect(ctx context.Context) error {
 	return p.connectSession(ctx)
 }
 
-func spawnPluginSession(ctx context.Context, name, exe, socketPath, dataDir string) (*pluginSession, error) {
+func spawnPluginSession(ctx context.Context, name, exe, socketPath, dataDir string, env []string) (*pluginSession, error) {
 	p := &pluginSession{
 		name:    name,
 		socket:  socketPath,
 		exe:     exe,
 		dataDir: dataDir,
+		env:     env,
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()

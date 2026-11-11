@@ -25,7 +25,10 @@ func InitLayout(configPath, dataDir, hostname string) (*Config, error) {
 		if err := os.MkdirAll(cfg.BlobDir(), 0o700); err != nil {
 			return nil, err
 		}
-		_, err = cfg.SecureDataDir()
+		if _, err := cfg.SecureDataDir(); err != nil {
+			return nil, err
+		}
+		_, err = cfg.InstallID()
 		return cfg, err
 	} else if !os.IsNotExist(err) {
 		return nil, err
@@ -66,6 +69,9 @@ func InitLayout(configPath, dataDir, hostname string) (*Config, error) {
 	}
 	// MkdirAll keeps the mode of a data dir that already exists; tighten it explicitly.
 	if _, err := cfg.SecureDataDir(); err != nil {
+		return nil, err
+	}
+	if _, err := cfg.InstallID(); err != nil {
 		return nil, err
 	}
 	// The config dir must stay traversable for the service user under our 077 umask;

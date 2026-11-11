@@ -23,6 +23,9 @@ type Entry struct {
 	CliKind        string                 `json:"cli_kind,omitempty"`
 	// Capabilities: cli = ephemeral CLI jobs; smtp/web = persistent daemon under beaver serve (see docs/plugins.md).
 	Capabilities []string `json:"capabilities"`
+	License      string   `json:"license,omitempty"`
+	LicenseKey   string   `json:"license_key,omitempty"`
+	Released     string   `json:"released,omitempty"`
 }
 
 // Registry resolves plugin executables for CLI and daemon capabilities.
@@ -104,6 +107,7 @@ func mergeDescriptor(base Entry, desc plugin.Descriptor) Entry {
 	if len(desc.CliSubcommands) > 0 {
 		base.CliSubcommands = desc.CliSubcommands
 	}
+	base.License, base.LicenseKey, base.Released = desc.License, desc.LicenseKey, desc.Released
 	return base
 }
 

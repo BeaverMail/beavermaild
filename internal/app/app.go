@@ -353,6 +353,7 @@ func (a *App) Run(ctx context.Context) error {
 	dm := daemon.NewManager(a.log, daemon.Config{
 		SocketDir:      a.cfg.PluginsSMTPSocketDir(),
 		DataDir:        a.cfg.DataDir,
+		Env:            pluginhost.LicenseEnv(a.cfg),
 		Timeout:        a.cfg.PluginsSMTPFilterTimeout(),
 		FailOpen:       a.cfg.PluginsSMTPTimeoutFailOpen(),
 		RestartBackoff: a.cfg.PluginsSMTPRestartBackoff(),

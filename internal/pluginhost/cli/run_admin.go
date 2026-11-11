@@ -44,6 +44,7 @@ func RunAdmin(ctx context.Context, opts RunOptions) error {
 
 	cmd := exec.CommandContext(ctx, exe)
 	cmd.Env = append(os.Environ(), plugin.EnvDataDir+"="+cfg.DataDir)
+	cmd.Env = append(cmd.Env, pluginhost.LicenseEnv(cfg)...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return err
