@@ -168,7 +168,7 @@ func formatAddressField(value string) string {
 	if len(parts) == 0 {
 		return "NIL"
 	}
-	return "(" + strings.Join(parts, " ") + ")"
+	return "(" + strings.Join(parts, "") + ")"
 }
 
 // formatMailbox renders one RFC 3501 address (name adl mailbox host).

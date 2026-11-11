@@ -112,14 +112,15 @@ func TestQuoteIMAPString8BitIsLiteral(t *testing.T) {
 	}
 }
 
-// TestEnvelopeGroupSyntax: RFC 822 groups keep their start and end markers (RFC 3501), and an
-// empty group ("undisclosed-recipients:;") is not dropped.
+// TestEnvelopeGroupSyntax: RFC 822 groups keep their start and end markers (RFC 3501), an
+// empty group ("undisclosed-recipients:;") is not dropped, and addresses are written back to
+// back (env-to = "(" 1*address ")": no SP between them).
 func TestEnvelopeGroupSyntax(t *testing.T) {
 	t.Parallel()
 
 	for value, want := range map[string]string{
-		"group: g1@d1.example, \"Two\" <g2@d2.example>;, solo@example.org": `((NIL NIL "group" NIL) (NIL NIL "g1" "d1.example") ("Two" NIL "g2" "d2.example") (NIL NIL NIL NIL) (NIL NIL "solo" "example.org"))`,
-		"undisclosed-recipients:;": `((NIL NIL "undisclosed-recipients" NIL) (NIL NIL NIL NIL))`,
+		"group: g1@d1.example, \"Two\" <g2@d2.example>;, solo@example.org": `((NIL NIL "group" NIL)(NIL NIL "g1" "d1.example")("Two" NIL "g2" "d2.example")(NIL NIL NIL NIL)(NIL NIL "solo" "example.org"))`,
+		"undisclosed-recipients:;": `((NIL NIL "undisclosed-recipients" NIL)(NIL NIL NIL NIL))`,
 		`"a: b" <x@example.org>`:   `(("a: b" NIL "x" "example.org"))`,
 		"":                         "NIL",
 	} {

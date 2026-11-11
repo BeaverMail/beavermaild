@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- IMAP ENVELOPE address lists (also inside BODYSTRUCTURE of message/rfc822 parts) are written
+  back to back, without a space between addresses, as the RFC 3501 grammar requires.
 - Login with an unknown or malformed user name now fails like a wrong password (IMAP `NO`,
   SMTP `535`) and counts toward the attempt limit; IMAP and SMTP used to drop the connection,
   which also told existing users apart from unknown ones.
