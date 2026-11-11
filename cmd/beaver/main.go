@@ -792,7 +792,10 @@ func runAccountCreate(args []string) int {
 	defer closeStore()
 
 	dom, err := dir.LookupDomain(ctx, *domainName)
-	if err != nil {
+	if errors.Is(err, directory.ErrNotFound) {
+		fmt.Fprintf(os.Stderr, "account create: domain %q does not exist (add it with: beaver domain add)\n", *domainName)
+		return cli.ExitError
+	} else if err != nil {
 		fmt.Fprintf(os.Stderr, "account create: %v\n", err)
 		return cli.ExitError
 	}
