@@ -49,8 +49,15 @@ func (d *Local) DataDir() string { return d.dataDir }
 
 // Authenticate checks email and password and returns the principal.
 func (d *Local) Authenticate(ctx context.Context, email, password string) (Principal, error) {
+	// An unknown or malformed user is a failed login like a wrong password: callers answer it the
+	// same way and count it toward the attempt limit.
+	if _, _, err := splitEmail(email); err != nil {
+		return Principal{}, ErrInvalidCredentials
+	}
 	acc, dom, err := d.lookupAccount(ctx, email)
-	if err != nil {
+	if errors.Is(err, ErrNotFound) {
+		return Principal{}, ErrInvalidCredentials
+	} else if err != nil {
 		return Principal{}, err
 	}
 	if !acc.Active {

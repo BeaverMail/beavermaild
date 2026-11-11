@@ -65,6 +65,9 @@ func TestIMAPAuthenticatePlainSASLIR(t *testing.T) {
 	expectPrefix(t, read, "* CAPABILITY IMAP4rev1 MOVE LITERAL+ SASL-IR AUTH=PLAIN")
 	expectPrefix(t, read, "a1 OK")
 
+	send(t, conn, "a0 LOGIN nobody@localhost beaver") // unknown user: NO, not a dropped connection
+	expectPrefix(t, read, "a0 NO LOGIN failed")
+
 	cred := base64.StdEncoding.EncodeToString([]byte("\x00alice@localhost\x00beaver"))
 	send(t, conn, "a2 AUTHENTICATE PLAIN "+cred)
 	expectPrefix(t, read, "a2 OK AUTHENTICATE completed")

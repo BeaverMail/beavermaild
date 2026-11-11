@@ -164,6 +164,11 @@ func TestLoginDisabled(t *testing.T) {
 	if _, err := d.Authenticate(ctx, email, "wrong"); !errors.Is(err, directory.ErrInvalidCredentials) {
 		t.Fatalf("wrong password must not reveal suspension: err=%v", err)
 	}
+	for _, user := range []string{"nobody@customer.example", "alice@", "alice"} {
+		if _, err := d.Authenticate(ctx, user, "pw"); !errors.Is(err, directory.ErrInvalidCredentials) {
+			t.Fatalf("%q: unknown user must fail like a wrong password: err=%v", user, err)
+		}
+	}
 	if _, _, err := d.ResolveEmail(ctx, email); err != nil {
 		t.Fatalf("delivery lookup must still work: %v", err)
 	}
