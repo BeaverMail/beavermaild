@@ -18,6 +18,9 @@ func (s *session) cmdSort(ctx context.Context, tag, arg string, byUID bool) erro
 	if !ok {
 		return s.tagged(tag, "BAD SORT RETURN syntax")
 	}
+	if ret.update && s.hasSearchContext(tag) {
+		return s.tagged(tag, "BAD tag already names an updating search")
+	}
 	crits, searchArg, ok := parseSortArg(arg)
 	if !ok {
 		return s.tagged(tag, "BAD SORT syntax")
@@ -48,6 +51,11 @@ func (s *session) cmdSort(ctx context.Context, tag, arg string, byUID bool) erro
 	}
 	if err := s.untagged(resp); err != nil {
 		return err
+	}
+	if ret.update {
+		if err := s.addSearchContext(tag, byUID, crits, expr, seqs); err != nil {
+			return err
+		}
 	}
 	return s.tagged(tag, "OK SORT completed")
 }

@@ -61,12 +61,12 @@ func parseMediaType(ct string) (mediaType string, params map[string]string) {
 func formatMIMEPart(mediaType string, params map[string]string, hdr map[string][]string, body []byte, ext bool) string {
 	major, subtype, _ := strings.Cut(strings.ToLower(mediaType), "/")
 	if major == "multipart" {
-		return formatMultipart(subtype, params, body, ext)
+		return formatMultipart(subtype, params, hdr, body, ext)
 	}
 	return formatLeafPart(major, subtype, params, hdr, body, ext)
 }
 
-func formatMultipart(subtype string, params map[string]string, body []byte, ext bool) string {
+func formatMultipart(subtype string, params map[string]string, hdr map[string][]string, body []byte, ext bool) string {
 	boundary := params["boundary"]
 	if boundary == "" {
 		return `(("TEXT" "PLAIN" NIL NIL NIL "7BIT" 0 0) "` + strings.ToUpper(subtype) + `" NIL)`
@@ -90,7 +90,33 @@ func formatMultipart(subtype string, params map[string]string, body []byte, ext 
 	if !ext {
 		return "(" + strings.Join(parts, "") + ` "` + sub + `")`
 	}
-	return "(" + strings.Join(parts, "") + ` "` + sub + `" ` + formatIMAPParams(params) + ")"
+	return "(" + strings.Join(parts, "") + ` "` + sub + `" ` + formatIMAPParams(params) + " " + bodyExt(hdr) + ")"
+}
+
+// bodyExt is the extension data shared by every part type (RFC 3501 7.4.2): disposition with its
+// parameters, language and location.
+func bodyExt(hdr map[string][]string) string {
+	disp := "NIL"
+	if v := mimeGet(hdr, "Content-Disposition"); v != "" {
+		if d, p, err := mime.ParseMediaType(v); err == nil {
+			disp = "(" + quoteIMAPString(strings.ToUpper(d)) + " " + formatIMAPParams(p) + ")"
+		}
+	}
+	lang := "NIL"
+	var tags []string
+	for _, t := range strings.Split(mimeGet(hdr, "Content-Language"), ",") {
+		if t = strings.TrimSpace(t); t != "" {
+			tags = append(tags, quoteIMAPString(t))
+		}
+	}
+	switch len(tags) {
+	case 0:
+	case 1:
+		lang = tags[0]
+	default:
+		lang = "(" + strings.Join(tags, " ") + ")"
+	}
+	return disp + " " + lang + " " + nstring(mimeGet(hdr, "Content-Location"))
 }
 
 func formatLeafPart(major, subtype string, params map[string]string, hdr map[string][]string, body []byte, ext bool) string {
@@ -107,16 +133,20 @@ func formatLeafPart(major, subtype string, params map[string]string, hdr map[str
 	desc := nstring(mimeGet(hdr, "Content-Description"))
 	size := len(body)
 	paramsStr := formatIMAPParams(params)
+	tail := ")"
+	if ext { // body-ext-1part
+		tail = " " + nstring(mimeGet(hdr, "Content-MD5")) + " " + bodyExt(hdr) + ")"
+	}
 	if major == "TEXT" {
 		lines := countLines(body)
-		return `("` + major + `" "` + subtype + `" ` + paramsStr + ` ` + id + ` ` + desc + ` "` + enc + `" ` + strconv.Itoa(size) + ` ` + strconv.Itoa(lines) + `)`
+		return `("` + major + `" "` + subtype + `" ` + paramsStr + ` ` + id + ` ` + desc + ` "` + enc + `" ` + strconv.Itoa(size) + ` ` + strconv.Itoa(lines) + tail
 	}
 	// body-type-msg: a message/rfc822 part also carries the inner ENVELOPE, BODYSTRUCTURE and line count.
 	if major == "MESSAGE" && subtype == "RFC822" {
 		return `("` + major + `" "` + subtype + `" ` + paramsStr + ` ` + id + ` ` + desc + ` "` + enc + `" ` + strconv.Itoa(size) +
-			` ` + formatEnvelope(body) + ` ` + formatBodyPart(body, ext) + ` ` + strconv.Itoa(countLines(body)) + `)`
+			` ` + formatEnvelope(body) + ` ` + formatBodyPart(body, ext) + ` ` + strconv.Itoa(countLines(body)) + tail
 	}
-	return `("` + major + `" "` + subtype + `" ` + paramsStr + ` ` + id + ` ` + desc + ` "` + enc + `" ` + strconv.Itoa(size) + `)`
+	return `("` + major + `" "` + subtype + `" ` + paramsStr + ` ` + id + ` ` + desc + ` "` + enc + `" ` + strconv.Itoa(size) + tail
 }
 
 func formatIMAPParams(params map[string]string) string {
@@ -165,8 +195,10 @@ func mapEncoding(cte string) string {
 		return "8BIT"
 	case "binary":
 		return "BINARY"
-	default:
+	case "", "7bit", "7-bit":
 		return "7BIT"
+	default: // body-fld-enc is any string: an unknown encoding is reported as it is
+		return strings.ToUpper(strings.TrimSpace(cte))
 	}
 }
 

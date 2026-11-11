@@ -35,7 +35,10 @@ func (s *session) pushIdleMailboxChanges(ctx context.Context) error {
 	if err := s.announceKeywords(fresh); err != nil {
 		return err
 	}
-	return s.applyIdleMailboxDiff(fresh, highest)
+	if err := s.applyIdleMailboxDiff(fresh, highest); err != nil {
+		return err
+	}
+	return s.refreshContexts(ctx) // ADDTO after EXISTS (RFC 5267 4.3.3)
 }
 
 // applyIdleMailboxDiff emits IDLE updates and refreshes the session snapshot.
@@ -89,8 +92,10 @@ func (s *session) applyIdleMailboxDiff(fresh []mail.Message, highestMod uint64) 
 // emitIdleFetch sends an unsolicited FLAGS (and optional MODSEQ) FETCH during IDLE.
 func (s *session) emitIdleFetch(seq int, msg mail.Message) error {
 	line := fmt.Sprintf("%d FETCH (FLAGS %s", seq, mail.FormatMessageFlags(msg.Meta))
-	if s.condstore { // RFC 7162 3.2.4: UID and MODSEQ once CONDSTORE is enabled
+	if s.condstore || s.notify != nil { // RFC 7162 3.2.4, RFC 5465 5.1: UID once enabled
 		line = fmt.Sprintf("%d FETCH (UID %d FLAGS %s", seq, msg.UID, mail.FormatMessageFlags(msg.Meta))
+	}
+	if s.condstore {
 		modSeq := msg.Meta.ModSeq
 		if modSeq == 0 {
 			modSeq = 1

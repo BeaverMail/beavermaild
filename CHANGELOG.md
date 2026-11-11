@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+- Login with an unknown or malformed user name now fails like a wrong password (IMAP `NO`,
+  SMTP `535`) and counts toward the attempt limit; IMAP and SMTP used to drop the connection,
+  which also told existing users apart from unknown ones.
+- IMAP BODYSTRUCTURE carries the extension data of every part (RFC 3501 7.4.2): MD5,
+  Content-Disposition with its parameters (attachment file names), language and location. An
+  unknown transfer encoding is reported as it is instead of `7BIT`.
+- IMAP URLAUTH (RFC 4467) and URLAUTH=BINARY (RFC 5524): `GENURLAUTH` signs message URLs with a
+  per-mailbox key (mechanism INTERNAL, HMAC-SHA256), `URLFETCH` returns the data of valid URLs
+  (with `BODY`, `BINARY`, `BODYPARTSTRUCTURE` items; with BINARY the structure describes the
+  decoded part) and NIL otherwise, `RESETKEY` revokes keys.
+  Access `authuser`, `anonymous` and `user+name` are honoured, `submit+` is refused. SELECT and
+  EXAMINE send `OK [URLMECH INTERNAL]`.
+- IMAP CATENATE (RFC 4469): `APPEND ... CATENATE (TEXT {n} URL "...")` builds a message from
+  literals and parts of the user's messages (RFC 5092 URLs); an invalid URL answers
+  `NO [BADURL ...]`, also within MULTIAPPEND.
+- IMAP CONTEXT=SEARCH and CONTEXT=SORT (RFC 5267): `RETURN (PARTIAL lo:hi)`, and `RETURN (UPDATE)`
+  keeps the result current with `ESEARCH ADDTO`/`REMOVEFROM` until `CANCELUPDATE` or another
+  SELECT; at most 8 updating contexts per session, more get `NO [NOUPDATE]`.
+- IMAP UIDBATCHES (draft-ietf-mailmaint-imap-uidbatches): `UIDBATCHES size [first:last]` splits
+  the selected mailbox into UID ranges, newest first; sizes under 500 answer `NO [TOOFEW]`.
+- IMAP APPEND: a refused synchronizing literal (too large, or after an invalid part) ends the
+  command with a tagged NO instead of closing the connection.
+- IMAP NOTIFY (RFC 5465): `NOTIFY SET [STATUS]` / `NOTIFY NONE` with the SELECTED,
+  SELECTED-DELAYED, PERSONAL, INBOXES, SUBSCRIBED, SUBTREE and MAILBOXES filters and the
+  MessageNew (with FETCH items), MessageExpunge, FlagChange, MailboxName and SubscriptionChange
+  events, pushed between commands and during IDLE; other events answer `NO [BADEVENT ...]`.
 - IMAP BINARY (RFC 3516): `FETCH BINARY[part]`, `BINARY.PEEK[part]` (also partial) and
   `BINARY.SIZE[part]` return the part decoded from base64 or quoted-printable, as a literal8 when
   it holds NUL; an undecodable encoding answers `NO [UNKNOWN-CTE]`. `APPEND` takes literal8 (`~{n}`); parts

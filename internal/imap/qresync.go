@@ -44,6 +44,9 @@ func parseQResyncParams(inner string) (*qresyncParams, bool) {
 // sendExpunge reports that the message at seq (1-based) with uid is gone: VANISHED once the
 // client enabled QRESYNC, EXPUNGE otherwise (RFC 7162 3.2.10).
 func (s *session) sendExpunge(seq int, uid uint32) error {
+	if err := s.contextsExpunge(seq, uid); err != nil {
+		return err
+	}
 	if s.qresync {
 		return s.untagged("VANISHED " + strconv.FormatUint(uint64(uid), 10))
 	}

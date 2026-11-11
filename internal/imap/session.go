@@ -48,6 +48,8 @@ type session struct {
 	// clears the flag in storage so no other session sees it, but this session keeps reporting it.
 	recent   map[uint32]struct{} // EmailID set
 	qresync  bool                // ENABLE QRESYNC: expunges are reported as VANISHED
+	notify   *notifyState        // NOTIFY setting (RFC 5465); nil until the first NOTIFY
+	contexts []*searchContext    // updating SEARCH/SORT results (RFC 5267) of the selected mailbox
 	keywords map[string]struct{} // keywords announced in the last FLAGS response
 	// keywordsMbox is the mailbox s.keywords belongs to: reselecting it keeps them, so a QRESYNC
 	// client's cached messages never carry a keyword the new FLAGS dropped.
@@ -100,6 +102,9 @@ func (s *session) run(ctx context.Context) error {
 // serveCommands reads and runs commands until the session ends or a command fails.
 func (s *session) serveCommands(ctx context.Context) error {
 	for {
+		if err := s.waitCommand(ctx); err != nil {
+			return err
+		}
 		line, err := s.readLine()
 		if err != nil {
 			if s.isStopping() {
@@ -203,6 +208,9 @@ func (s *session) serveCommands(ctx context.Context) error {
 			if err := s.cmdSubscribe(ctx, tag, arg); err != nil {
 				return err
 			}
+			if err := s.notifyResync(ctx); err != nil {
+				return err
+			}
 		case "UNSUBSCRIBE":
 			if s.principal.AccountID == 0 {
 				if err := s.tagged(tag, "NO LOGIN required"); err != nil {
@@ -211,6 +219,9 @@ func (s *session) serveCommands(ctx context.Context) error {
 				continue
 			}
 			if err := s.cmdUnsubscribe(ctx, tag, arg); err != nil {
+				return err
+			}
+			if err := s.notifyResync(ctx); err != nil {
 				return err
 			}
 		case "SELECT", "EXAMINE":
@@ -230,16 +241,38 @@ func (s *session) serveCommands(ctx context.Context) error {
 			if err := s.cmdStatus(ctx, tag, arg); err != nil {
 				return err
 			}
-		case "CREATE":
-			if err := s.cmdCreate(ctx, tag, arg); err != nil {
+		case "CREATE", "DELETE", "RENAME":
+			cmdFn := map[string]func(context.Context, string, string) error{
+				"CREATE": s.cmdCreate, "DELETE": s.cmdDelete, "RENAME": s.cmdRename,
+			}[cmd]
+			if err := cmdFn(ctx, tag, arg); err != nil {
 				return err
 			}
-		case "DELETE":
-			if err := s.cmdDelete(ctx, tag, arg); err != nil {
+			if err := s.notifyResync(ctx); err != nil { // its own change is not an event for it
 				return err
 			}
-		case "RENAME":
-			if err := s.cmdRename(ctx, tag, arg); err != nil {
+		case "NOTIFY":
+			if err := s.cmdNotify(ctx, tag, arg); err != nil {
+				return err
+			}
+		case "RESETKEY":
+			if err := s.cmdResetKey(ctx, tag, arg); err != nil {
+				return err
+			}
+		case "GENURLAUTH":
+			if err := s.cmdGenURLAuth(ctx, tag, arg); err != nil {
+				return err
+			}
+		case "URLFETCH":
+			if err := s.cmdURLFetch(ctx, tag, arg); err != nil {
+				return err
+			}
+		case "CANCELUPDATE":
+			if err := s.cmdCancelUpdate(tag, arg); err != nil {
+				return err
+			}
+		case "UIDBATCHES":
+			if err := s.cmdUIDBatches(tag, arg); err != nil {
 				return err
 			}
 		case "NAMESPACE":
@@ -375,7 +408,7 @@ func (s *session) capabilityLine() string {
 		caps = append(caps, "LOGINDISABLED")
 	}
 	if s.principal.AccountID != 0 {
-		caps = append(caps, "ENABLE", "IDLE", "NAMESPACE", "UIDPLUS", "UNSELECT", "SPECIAL-USE", "LIST-EXTENDED", "CONDSTORE", "SORT", "SORT=DISPLAY", "THREAD=REFERENCES", "THREAD=ORDEREDSUBJECT", "ESEARCH", "ESORT", "BINARY", "MULTIAPPEND", "QUOTA")
+		caps = append(caps, "ENABLE", "IDLE", "NAMESPACE", "UIDPLUS", "UNSELECT", "SPECIAL-USE", "LIST-EXTENDED", "CONDSTORE", "SORT", "SORT=DISPLAY", "THREAD=REFERENCES", "THREAD=ORDEREDSUBJECT", "ESEARCH", "ESORT", "BINARY", "MULTIAPPEND", "NOTIFY", "UIDBATCHES", "CATENATE", "CONTEXT=SEARCH", "CONTEXT=SORT", "URLAUTH", "URLAUTH=BINARY", "QUOTA")
 	}
 	return "CAPABILITY " + strings.Join(caps, " ")
 }
@@ -546,6 +579,7 @@ func (s *session) openMailbox(ctx context.Context, tag, name string, examine boo
 	s.messages = msgs
 	s.mbox = mbox
 	s.selected = true
+	s.contexts = nil
 	s.idleWatchModSeq = highestMod
 	if err := s.untagged(s.flagsLine()); err != nil {
 		return err
@@ -571,7 +605,7 @@ func (s *session) openMailbox(ctx context.Context, tag, name string, examine boo
 	if s.condstore {
 		okLines = append(okLines, fmt.Sprintf("OK [HIGHESTMODSEQ %d] Highest", highestMod))
 	}
-	okLines = append(okLines, "OK [PERMANENTFLAGS "+s.permanentFlags()+"] Limited")
+	okLines = append(okLines, "OK [PERMANENTFLAGS "+s.permanentFlags()+"] Limited", "OK [URLMECH INTERNAL] URLAUTH mechanisms")
 	for _, line := range okLines {
 		if err := s.untagged(line); err != nil {
 			return err
@@ -752,6 +786,9 @@ func (s *session) cmdSearch(ctx context.Context, tag, arg string, byUID bool) er
 	if !ok {
 		return s.tagged(tag, "BAD SEARCH RETURN syntax")
 	}
+	if ret.update && s.hasSearchContext(tag) {
+		return s.tagged(tag, "BAD tag already names an updating search")
+	}
 	expr, st := parseSearchCommand(arg)
 	switch st {
 	case searchBadCharset:
@@ -778,6 +815,11 @@ func (s *session) cmdSearch(ctx context.Context, tag, arg string, byUID bool) er
 	}
 	if err := s.untagged(resp); err != nil {
 		return err
+	}
+	if ret.update {
+		if err := s.addSearchContext(tag, byUID, nil, expr, seqs); err != nil {
+			return err
+		}
 	}
 	return s.tagged(tag, "OK SEARCH completed")
 }
@@ -1266,6 +1308,11 @@ func (s *session) tagged(tag, resp string) error {
 			if err := s.pushIdleMailboxChanges(s.syncCtx); err != nil {
 				return err
 			}
+		}
+	}
+	if len(s.contexts) > 0 { // this session's own STORE changes results too
+		if err := s.refreshContexts(s.syncCtx); err != nil {
+			return err
 		}
 	}
 	_, err := fmt.Fprintf(s.conn, "%s %s\r\n", tag, resp)

@@ -51,7 +51,12 @@ func (s *session) cmdIdle(ctx context.Context, tag string) error {
 		if !errors.As(err, &netErr) || !netErr.Timeout() {
 			return err
 		}
-		if err := s.pushIdleMailboxChanges(ctx); err != nil {
+		// With NOTIFY, IDLE sends exactly the events it set up (RFC 5465 4).
+		if s.notify != nil {
+			if err := s.notifyPoll(ctx, true); err != nil {
+				return err
+			}
+		} else if err := s.pushIdleMailboxChanges(ctx); err != nil {
 			return err
 		}
 	}

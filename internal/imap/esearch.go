@@ -8,8 +8,12 @@ import (
 	"github.com/BeaverMail/beavermaild/internal/mail"
 )
 
-// returnOpts are the RETURN options of an extended SEARCH or SORT.
-type returnOpts struct{ min, max, all, count bool }
+// returnOpts are the RETURN options of an extended SEARCH or SORT; PARTIAL and UPDATE come
+// from RFC 5267 CONTEXT.
+type returnOpts struct {
+	min, max, all, count, update bool
+	partialLo, partialHi         int // PARTIAL lo:hi (lo <= hi), 0 when absent
+}
 
 // cutReturnOpts parses a leading "RETURN (opts)". present is false when arg has none; ok is
 // false on a malformed or unknown option. An empty list means ALL (RFC 4731 3.1).
@@ -26,8 +30,8 @@ func cutReturnOpts(arg string) (o returnOpts, rest string, present, ok bool) {
 	if len(fields) == 0 {
 		o.all = true
 	}
-	for _, f := range fields {
-		switch f {
+	for i := 0; i < len(fields); i++ {
+		switch f := fields[i]; f {
 		case "MIN":
 			o.min = true
 		case "MAX":
@@ -36,9 +40,27 @@ func cutReturnOpts(arg string) (o returnOpts, rest string, present, ok bool) {
 			o.all = true
 		case "COUNT":
 			o.count = true
+		case "UPDATE":
+			o.update = true
+		case "CONTEXT": // a hint that the result will be reused
+		case "PARTIAL":
+			if i+1 == len(fields) || o.partialLo != 0 {
+				return o, "", true, false
+			}
+			i++
+			a, b, found := strings.Cut(fields[i], ":")
+			lo, okA := parseNZNumber(a)
+			hi, okB := parseNZNumber(b)
+			if !found || !okA || !okB {
+				return o, "", true, false
+			}
+			o.partialLo, o.partialHi = min(lo, hi), max(lo, hi)
 		default:
 			return o, "", true, false
 		}
+	}
+	if o.all && o.partialLo != 0 { // RFC 5267 4.4: one of PARTIAL and ALL at most
+		return o, "", true, false
 	}
 	return o, rest, true, true
 }
@@ -63,6 +85,13 @@ func (s *session) esearchLine(tag string, byUID bool, seqs []uint32, o returnOpt
 		if o.all {
 			b.WriteString(" ALL " + compactRuns(nums))
 		}
+	}
+	if o.partialLo != 0 {
+		set := "NIL"
+		if o.partialLo <= len(nums) {
+			set = compactRuns(nums[o.partialLo-1 : min(o.partialHi, len(nums))])
+		}
+		b.WriteString(" PARTIAL (" + strconv.Itoa(o.partialLo) + ":" + strconv.Itoa(o.partialHi) + " " + set + ")")
 	}
 	if o.count {
 		b.WriteString(" COUNT " + strconv.Itoa(len(nums)))

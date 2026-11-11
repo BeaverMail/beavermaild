@@ -38,10 +38,12 @@ func TestFormatBodyStructureNestedMultipartNoSpaceBetweenParts(t *testing.T) {
 		"--inner\r\nContent-Type: text/plain; charset=utf-8\r\n\r\ntest\r\n" +
 		"--inner\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<p>test</p>\r\n" +
 		"--inner--\r\n" +
-		"--outer\r\nContent-Type: application/pdf\r\nContent-Transfer-Encoding: base64\r\n\r\nJVBERg==\r\n" +
+		"--outer\r\nContent-Type: application/pdf\r\nContent-Transfer-Encoding: base64\r\n" +
+		"Content-Disposition: attachment; filename=a.pdf\r\nContent-Language: en, it\r\n\r\nJVBERg==\r\n" +
 		"--outer--\r\n")
-	want := `((("TEXT" "PLAIN" ("CHARSET" "utf-8") NIL NIL "7BIT" 4 1)("TEXT" "HTML" ("CHARSET" "utf-8") NIL NIL "7BIT" 11 1) "ALTERNATIVE" NIL)` +
-		`("APPLICATION" "PDF" NIL NIL NIL "BASE64" 8) "MIXED" NIL)`
+	want := `((("TEXT" "PLAIN" ("CHARSET" "utf-8") NIL NIL "7BIT" 4 1 NIL NIL NIL NIL)` +
+		`("TEXT" "HTML" ("CHARSET" "utf-8") NIL NIL "7BIT" 11 1 NIL NIL NIL NIL) "ALTERNATIVE" NIL NIL NIL NIL)` +
+		`("APPLICATION" "PDF" NIL NIL NIL "BASE64" 8 NIL ("ATTACHMENT" ("FILENAME" "a.pdf")) ("en" "it") NIL) "MIXED" NIL NIL NIL NIL)`
 	if got := formatBodyStructure(raw); got != want {
 		t.Fatalf("got  %s\nwant %s", got, want)
 	}
@@ -57,7 +59,7 @@ func TestFormatBodyStructureMessageRFC822(t *testing.T) {
 		"--b\r\nContent-Type: message/rfc822\r\n\r\n" + inner +
 		"--b--\r\n")
 	bs := formatBodyStructure(raw)
-	for _, want := range []string{`("MESSAGE" "RFC822" NIL NIL NIL "7BIT" `, ` "inner" `, `("TEXT" "PLAIN" NIL NIL NIL "7BIT" 2 1) 4)`} {
+	for _, want := range []string{`("MESSAGE" "RFC822" NIL NIL NIL "7BIT" `, ` "inner" `, `("TEXT" "PLAIN" NIL NIL NIL "7BIT" 2 1 NIL NIL NIL NIL) 4 NIL NIL NIL NIL)`} {
 		if !strings.Contains(bs, want) {
 			t.Fatalf("missing %q in %s", want, bs)
 		}

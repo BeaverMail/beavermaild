@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strconv"
 	"strings"
 	"time"
 
@@ -14,49 +13,37 @@ import (
 	"github.com/BeaverMail/beavermaild/internal/storage"
 )
 
-// appendSpec is one message of an APPEND: "[flags] [date-time] {n}" (MULTIAPPEND repeats it).
+// appendSpec is one message of an APPEND: "[flags] [date-time]" then a literal ({n}, {n+}, ~{n})
+// or a CATENATE list (RFC 4469). MULTIAPPEND repeats it.
 type appendSpec struct {
 	flags        uint32
 	internalDate int64
 	size         int
 	nonsync      bool
 	binary       bool // literal8 (~{n}, RFC 3516)
+	catenate     bool
 }
 
 // cmdAppend appends one message, or several with MULTIAPPEND (RFC 3502): all of them or none.
-// Literals may be literal8 (~{n}, RFC 3516 BINARY).
+// Literals may be literal8 (~{n}, RFC 3516 BINARY); a message may be built with CATENATE.
 func (s *session) cmdAppend(ctx context.Context, tag, arg string) error {
 	if s.principal.AccountID == 0 {
-		return s.tagged(tag, "NO LOGIN required")
+		return s.rejectCommand(tag, arg, "NO LOGIN required")
 	}
-	mboxName, rest, ok := parseAppendMailboxToken(strings.TrimSpace(arg))
-	spec, specOK := parseAppendSpec(rest)
-	if !ok || !specOK {
-		return s.tagged(tag, "BAD APPEND syntax")
+	mboxName, cur, ok := parseAppendMailboxToken(strings.TrimSpace(arg))
+	if !ok {
+		return s.rejectCommand(tag, arg, "BAD APPEND syntax")
 	}
-	// Check the mailbox before the literal: a client must not create folders by APPENDing (RFC 3501
+	// Check the mailbox before any literal: a client must not create folders by APPENDing (RFC 3501
 	// says NO [TRYCREATE]), and a sync literal is then never uploaded.
-	var mbox mail.Mailbox
-	var refuse string
-	if err := mail.ValidateMailboxName(mboxName); err != nil {
-		refuse = "BAD mailbox name syntax"
-	} else if mbox, err = s.inbox.ResolveMailbox(ctx, s.principal.AccountID, mboxName); errors.Is(err, storage.ErrNotFound) {
-		refuse = "NO [TRYCREATE] mailbox does not exist"
-	} else if err != nil {
+	mbox, err := s.inbox.ResolveMailbox(ctx, s.principal.AccountID, mboxName)
+	switch {
+	case mail.ValidateMailboxName(mboxName) != nil:
+		return s.rejectCommand(tag, cur, "BAD mailbox name syntax")
+	case errors.Is(err, storage.ErrNotFound):
+		return s.rejectCommand(tag, cur, "NO [TRYCREATE] mailbox does not exist")
+	case err != nil:
 		return err
-	}
-	if refuse != "" && spec.size <= mail.MaxAppendBytes {
-		if spec.nonsync {
-			// The client already sends a {n+} literal: drop it, or its bytes would be read as commands.
-			s.bumpReadDeadline()
-			if _, err := io.CopyN(io.Discard, s.r, int64(spec.size)); err != nil {
-				return err
-			}
-			if _, err := s.readLine(); err != nil { // the rest of the command line
-				return err
-			}
-		}
-		return s.tagged(tag, refuse)
 	}
 
 	// Read every message first: MULTIAPPEND is all or nothing. The size cap covers them all, so
@@ -64,45 +51,29 @@ func (s *session) cmdAppend(ctx context.Context, tag, arg string) error {
 	var raws [][]byte
 	var specs []appendSpec
 	total := 0
-	for {
-		total += spec.size
-		if total > mail.MaxAppendBytes {
-			if spec.nonsync {
-				// The client is already sending the bytes, which would otherwise be read as commands
-				// (RFC 7888 4): say why and hang up rather than read megabytes to throw away.
-				_ = s.untagged("BYE [TOOBIG] APPEND literal too large")
-				return errLiteralTooLarge
-			}
-			if len(raws) > 0 {
-				// The command line still expects this literal; ending the connection is the only clean exit.
-				_ = s.untagged("BYE [TOOBIG] APPEND too large")
-				return errLiteralTooLarge
-			}
-			return s.tagged(tag, "NO [TOOBIG] message too large")
+	for strings.TrimSpace(cur) != "" {
+		spec, after, ok := parseAppendHead(cur)
+		if !ok {
+			return s.rejectCommand(tag, cur, "BAD APPEND syntax")
 		}
-		if !spec.nonsync {
-			if err := s.continuation(); err != nil {
+		var raw []byte
+		if !spec.catenate {
+			if raw, ok, err = s.readAppendLiteral(tag, spec, &total); !ok || err != nil {
 				return err
 			}
-		}
-		raw, err := s.readLiteral(spec.size)
-		if err != nil {
+			if spec.binary {
+				raw = base64NULParts(raw)
+			}
+			if cur, err = s.readLine(); err != nil {
+				return err
+			}
+		} else if raw, cur, ok, err = s.readCatenate(ctx, tag, after, &total); !ok || err != nil {
 			return err
-		}
-		if spec.binary {
-			raw = base64NULParts(raw)
 		}
 		raws, specs = append(raws, raw), append(specs, spec)
-		line, err := s.readLine()
-		if err != nil {
-			return err
-		}
-		if strings.TrimSpace(line) == "" {
-			break
-		}
-		if spec, ok = parseAppendSpec(line); !ok {
-			return s.tagged(tag, "BAD APPEND syntax")
-		}
+	}
+	if len(raws) == 0 {
+		return s.tagged(tag, "BAD APPEND syntax")
 	}
 
 	var ids, uids []uint32
@@ -128,6 +99,113 @@ func (s *session) cmdAppend(ctx context.Context, tag, arg string) error {
 	return s.tagged(tag, fmt.Sprintf("OK [%s] APPEND completed", formatAppendUID(mbox.UIDValidity, uids)))
 }
 
+// readAppendLiteral reads the message literal spec announces, counting it in *total. ok is false
+// when the command was refused instead (the reply or BYE is already sent).
+func (s *session) readAppendLiteral(tag string, spec appendSpec, total *int) (raw []byte, ok bool, err error) {
+	if *total += spec.size; *total > mail.MaxAppendBytes {
+		if spec.nonsync {
+			// The client is already sending the bytes, which would otherwise be read as commands
+			// (RFC 7888 4): say why and hang up rather than read megabytes to throw away.
+			_ = s.untagged("BYE [TOOBIG] APPEND literal too large")
+			return nil, false, errLiteralTooLarge
+		}
+		// Refusing a sync literal ends the command: the client never sends it.
+		return nil, false, s.tagged(tag, "NO [TOOBIG] message too large")
+	}
+	if !spec.nonsync {
+		if err := s.continuation(); err != nil {
+			return nil, false, err
+		}
+	}
+	raw, err = s.readLiteral(spec.size)
+	return raw, err == nil, err
+}
+
+// readCatenate builds a CATENATE message (RFC 4469) from its parts, rest being the line after
+// "CATENATE (": TEXT literals and URLs of messages this user may read. It returns the line left
+// after the closing parenthesis; ok is false when the command was refused.
+func (s *session) readCatenate(ctx context.Context, tag, rest string, total *int) (msg []byte, tail string, ok bool, err error) {
+	for {
+		rest = strings.TrimLeft(rest, " ")
+		word, arg, _ := strings.Cut(rest, " ")
+		switch {
+		case strings.HasPrefix(rest, ")"):
+			return msg, rest[1:], true, nil
+		case strings.EqualFold(word, "URL"):
+			var raw string
+			if strings.HasPrefix(arg, "\"") {
+				raw, rest, ok = parseQuoted(arg)
+			} else {
+				i := strings.IndexAny(arg, " )")
+				if i < 0 {
+					i = len(arg)
+				}
+				raw, rest, ok = arg[:i], arg[i:], i > 0
+			}
+			if !ok {
+				return nil, "", false, s.rejectCommand(tag, rest, "BAD CATENATE syntax")
+			}
+			data, err := s.catenateURL(ctx, raw)
+			if errors.Is(err, errBadURL) {
+				return nil, "", false, s.rejectCommand(tag, rest, "NO [BADURL "+raw+"] CATENATE URL refused")
+			} else if err != nil {
+				return nil, "", false, err
+			}
+			if *total += len(data); *total > mail.MaxAppendBytes {
+				return nil, "", false, s.rejectCommand(tag, rest, "NO [TOOBIG] message too large")
+			}
+			msg = append(msg, data...)
+		case strings.EqualFold(word, "TEXT"):
+			spec, after, ok := parseAppendHead(arg)
+			if !ok || spec.catenate || after != "" || spec.flags != 0 || spec.internalDate != 0 || spec.binary {
+				return nil, "", false, s.rejectCommand(tag, rest, "BAD CATENATE syntax")
+			}
+			data, ok, err := s.readAppendLiteral(tag, spec, total)
+			if !ok || err != nil {
+				return nil, "", false, err
+			}
+			msg = append(msg, data...)
+			if rest, err = s.readLine(); err != nil {
+				return nil, "", false, err
+			}
+		default:
+			return nil, "", false, s.rejectCommand(tag, rest, "BAD CATENATE syntax")
+		}
+	}
+}
+
+// catenateURL returns the bytes a CATENATE URL names: a message or part in this user's mailboxes.
+func (s *session) catenateURL(ctx context.Context, raw string) ([]byte, error) {
+	u, ok := parseIMAPURL(raw)
+	if !ok || u.access != "" || u.absolute && !strings.EqualFold(u.owner(), s.principal.Email()) {
+		return nil, errBadURL
+	}
+	return s.resolveURL(ctx, s.principal.AccountID, u)
+}
+
+// rejectCommand answers resp to a command whose last line read is line. Non-synchronizing literals
+// the client is already sending are read and dropped; a synchronizing one is refused unsent.
+func (s *session) rejectCommand(tag, line, resp string) error {
+	for {
+		n, nonsync, found := literalMarker(line)
+		if !found || !nonsync {
+			return s.tagged(tag, resp)
+		}
+		if n > mail.MaxAppendBytes {
+			_ = s.untagged("BYE [TOOBIG] literal too large")
+			return errLiteralTooLarge
+		}
+		s.bumpReadDeadline()
+		if _, err := io.CopyN(io.Discard, s.r, int64(n)); err != nil {
+			return err
+		}
+		var err error
+		if line, err = s.readLine(); err != nil {
+			return err
+		}
+	}
+}
+
 func (s *session) readLiteral(n int) ([]byte, error) {
 	s.bumpReadDeadline()
 	buf := make([]byte, n)
@@ -142,55 +220,50 @@ func parseAppendArg(arg string) (mailbox string, flags uint32, internalDate int6
 	if !ok {
 		return "", 0, 0, 0, false, false
 	}
-	spec, ok := parseAppendSpec(rest)
-	if !ok {
+	spec, after, ok := parseAppendHead(rest)
+	if !ok || spec.catenate || after != "" {
 		return "", 0, 0, 0, false, false
 	}
 	return mailbox, spec.flags, spec.internalDate, spec.size, spec.nonsync, true
 }
 
-// parseAppendSpec parses "[(flags)] ["date-time"] {n}" (or {n+}, ~{n}, ~{n+}).
-func parseAppendSpec(rest string) (appendSpec, bool) {
-	var spec appendSpec
-	rest = strings.TrimSpace(rest)
-	litStart := strings.LastIndexByte(rest, '{')
-	if litStart < 0 || rest[len(rest)-1] != '}' {
-		return spec, false
-	}
-	lit := strings.TrimSpace(rest[litStart+1 : len(rest)-1])
-	if strings.HasSuffix(lit, "+") {
-		spec.nonsync = true
-		lit = strings.TrimSuffix(lit, "+")
-	}
-	size, err := strconv.Atoi(strings.TrimSpace(lit))
-	if err != nil || size <= 0 {
-		return spec, false
-	}
-	spec.size = size
-	rest = strings.TrimSpace(rest[:litStart])
-	rest, spec.binary = strings.CutSuffix(rest, "~") // literal8 (RFC 3516)
+// parseAppendHead parses "[(flags)] ["date-time"]" then either a literal ending the line ({n},
+// {n+}, ~{n}, ~{n+}) or "CATENATE (", whose parts start in after.
+func parseAppendHead(rest string) (spec appendSpec, after string, ok bool) {
 	rest = strings.TrimSpace(rest)
 	if strings.HasPrefix(rest, "(") {
-		close := strings.IndexByte(rest, ')')
-		if close < 0 {
-			return spec, false
+		end := strings.IndexByte(rest, ')')
+		if end < 0 {
+			return spec, "", false
 		}
-		spec.flags = parseAppendFlags(rest[:close+1])
-		rest = strings.TrimSpace(rest[close+1:])
+		spec.flags = parseAppendFlags(rest[:end+1])
+		rest = strings.TrimSpace(rest[end+1:])
 	}
 	if strings.HasPrefix(rest, "\"") {
 		dateStr, tail, ok := parseQuoted(rest)
 		if !ok {
-			return spec, false
+			return spec, "", false
 		}
 		t, ok := parseIMAPInternalDate(dateStr)
 		if !ok {
-			return spec, false
+			return spec, "", false
 		}
 		spec.internalDate = t.Unix()
 		rest = strings.TrimSpace(tail)
 	}
-	return spec, rest == ""
+	if len(rest) >= 8 && strings.EqualFold(rest[:8], "CATENATE") {
+		after, found := strings.CutPrefix(strings.TrimLeft(rest[8:], " "), "(")
+		spec.catenate = true
+		return spec, after, found
+	}
+	n, nonsync, found := literalMarker(rest)
+	if !found || n <= 0 {
+		return spec, "", false
+	}
+	lit := rest[:strings.LastIndexByte(rest, '{')]
+	lit, spec.binary = strings.CutSuffix(lit, "~") // literal8 (RFC 3516)
+	spec.size, spec.nonsync = n, nonsync
+	return spec, "", lit == ""
 }
 
 // parseIMAPInternalDate parses an APPEND date-time / INTERNALDATE string.
