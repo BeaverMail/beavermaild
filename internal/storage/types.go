@@ -95,6 +95,7 @@ type Mailbox struct {
 	MessageCount  uint32 `msgpack:"mc,omitempty"` // denormalized messages in folder; 0 until first sync/bump
 	Subscribed    bool   `msgpack:"sub,omitempty"`
 	SubSet        bool   `msgpack:"ss,omitempty"` // true once SUBSCRIBE/UNSUBSCRIBE touched this folder
+	URLAuthKey    []byte `msgpack:"uk,omitempty"` // IMAP URLAUTH access key (RFC 4467); nil until GENURLAUTH
 }
 
 // EmailMeta is persisted mail metadata; raw body is inline KV or blob fs (BlobHash).

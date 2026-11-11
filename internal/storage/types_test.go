@@ -2,6 +2,7 @@ package storage_test
 
 import (
 	"bytes"
+	"reflect"
 	"testing"
 
 	"github.com/BeaverMail/beavermaild/internal/storage"
@@ -72,7 +73,7 @@ func TestMarshalPersistCoreTypes(t *testing.T) {
 				if err := storage.UnmarshalPersist(wire, &got); err != nil {
 					t.Fatal(err)
 				}
-				if got != want {
+				if !reflect.DeepEqual(got, want) {
 					t.Fatalf("got %+v want %+v", got, want)
 				}
 			case storage.EmailMeta:

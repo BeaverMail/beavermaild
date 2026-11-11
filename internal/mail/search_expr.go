@@ -53,23 +53,34 @@ func MatchSearchExprContext(ctx context.Context, msgs []Message, expr SearchExpr
 // UsesModSeq reports whether expr contains a MODSEQ criterion (RFC 7162: the SEARCH and SORT
 // responses then carry the highest mod-sequence of the returned messages).
 func (e *SearchExpr) UsesModSeq() bool {
+	return e.anyCrit(func(c *SearchCriteria) bool { return c.ModSeq != nil })
+}
+
+// UsesPosition reports whether expr has a sequence-set or UID criterion, whose matches depend on
+// the other messages of the mailbox (their count, the highest UID for "*").
+func (e *SearchExpr) UsesPosition() bool {
+	return e.anyCrit(func(c *SearchCriteria) bool { return c.Seqs != nil || c.UIDs != nil })
+}
+
+// anyCrit reports whether some criterion node of expr satisfies pred.
+func (e *SearchExpr) anyCrit(pred func(*SearchCriteria) bool) bool {
 	if e == nil {
 		return false
 	}
 	switch e.Kind {
 	case SearchExprCrit:
-		return e.Crit.ModSeq != nil
+		return pred(&e.Crit)
 	case SearchExprAnd:
 		for _, child := range e.And {
-			if child.UsesModSeq() {
+			if child.anyCrit(pred) {
 				return true
 			}
 		}
 		return false
 	case SearchExprOr:
-		return e.Or[0].UsesModSeq() || e.Or[1].UsesModSeq()
+		return e.Or[0].anyCrit(pred) || e.Or[1].anyCrit(pred)
 	case SearchExprNot:
-		return e.Not.UsesModSeq()
+		return e.Not.anyCrit(pred)
 	default:
 		return false
 	}
