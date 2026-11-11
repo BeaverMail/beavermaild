@@ -7,7 +7,7 @@ DIST_NAME := beavermail-$(VERSION)-linux-$(DIST_ARCH)
 # Static Linux release binaries; -trimpath keeps build-machine paths out of them.
 DIST_GO := CGO_ENABLED=0 GOOS=linux GOARCH=$(DIST_ARCH) go build -trimpath -ldflags "-s -w -X main.version=$(VERSION)"
 
-.PHONY: beaver beaver-go beaver-plugin-antispam plugins test integration web-dev web-build dist deb
+.PHONY: beaver beaver-go beaver-plugin-antispam plugins beaver-license test integration web-dev web-build dist deb
 
 # Mail stack + embedded admin UI (needs Node for web-build).
 # Dev builds carry the git version too (e.g. v0.1.2-3-gabc123-dirty), so they are never mistaken for a release.
@@ -25,6 +25,10 @@ plugins: beaver-plugin-antispam
 beaver-plugin-antispam:
 	mkdir -p $(PLUGINS_DIR)
 	go build -o $(PLUGINS_DIR)/beaver-plugin-antispam ./cmd/beaver-plugin-antispam
+
+# Vendor-side license tool (keygen, issue); not part of dist or the packages.
+beaver-license:
+	go build -o beaver-license ./plugin/license/cmd/beaver-license
 
 test:
 	go test ./...

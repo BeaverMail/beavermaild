@@ -46,7 +46,19 @@ type Descriptor struct {
 	CliSubcommands []CliSubcommand `json:"cli_subcommands,omitempty"`
 	Capabilities   []string        `json:"capabilities,omitempty"`
 	CliKind        string          `json:"cli_kind,omitempty"`
+	// License is LicenseFree (or empty) or LicensePaid. A paid plugin also declares its
+	// Ed25519 public key (base64) and release date so beaver plugins list can show license status;
+	// the plugin itself enforces the license with plugin/license.
+	License    string `json:"license,omitempty"`
+	LicenseKey string `json:"license_key,omitempty"`
+	Released   string `json:"released,omitempty"`
 }
+
+// Descriptor License values.
+const (
+	LicenseFree = "free"
+	LicensePaid = "paid"
+)
 
 // EmitDescriptor writes the descriptor JSON line to stdout and exits 0.
 func EmitDescriptor(desc Descriptor) {
