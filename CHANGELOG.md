@@ -1,7 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.4.0
 
+- IMAP BODYSTRUCTURE of a multipart includes the `BOUNDARY` parameter, as RFC 3501 7.4.2 asks for
+  the full MIME parameter list.
+- IMAP BINARY of a quoted-printable part with stray control bytes returns the whole part with those
+  bytes kept (RFC 2045 6.7); it used to stop at the first such byte.
 - IMAP ENVELOPE address lists (also inside BODYSTRUCTURE of message/rfc822 parts) are written
   back to back, without a space between addresses, as the RFC 3501 grammar requires.
 - Login with an unknown or malformed user name now fails like a wrong password (IMAP `NO`,
