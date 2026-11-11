@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 package plugin
 
 // IMAP system flag bits for batch messages (aligned with internal/mail).

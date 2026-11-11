@@ -4,6 +4,10 @@ CLI extensions are separate executables (`beaver-plugin-*`) spawned by `beaver` 
 
 Go package: `github.com/BeaverMail/beavermaild/plugin`
 
+## Plugin licensing
+
+The SDK in `plugin/` is licensed under Apache-2.0 (see `plugin/LICENSE`); the rest of BeaverMail is AGPL-3.0-only. A plugin may use any license, proprietary included, as long as it talks to the host only through the protocol described here: a separate process, the JSON descriptor on stdout, `params` on stdin, JSONL events and the exit code. A plugin must not import anything outside `plugin/` (such as `internal/`), and it must not be loaded into the host process (Go `plugin` package, cgo, shared libraries); either would make it a derivative of the AGPL code.
+
 ## Quick start
 
 1. Build the host:

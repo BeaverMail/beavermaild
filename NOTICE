@@ -1,6 +1,8 @@
 BeaverMail
 Copyright (c) 2026 BLUEBOX SOFTWARE S.L.
-Licensed under the GNU Affero General Public License v3.0 only (see LICENSE).
+Licensed under the GNU Affero General Public License v3.0 only (see LICENSE),
+except the plugin SDK in plugin/, which is licensed under the Apache License,
+Version 2.0 (see plugin/LICENSE).
 
 This product includes material from the following projects, used under the
 Apache License, Version 2.0 (see LICENSES/Apache-2.0.txt).

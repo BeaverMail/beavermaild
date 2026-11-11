@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Account scan manifest: host-prepared message list for account_scan CLI profile.
 package plugin
 

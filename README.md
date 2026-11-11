@@ -66,7 +66,8 @@ Or set `BEAVER_QUEUE_RUN_DELAY=5s` for faster local testing.
 Copyright (c) 2026 BLUEBOX SOFTWARE S.L.
 
 BeaverMail is licensed under the GNU Affero General Public License v3.0 only (`AGPL-3.0-only`), see
-[LICENSE](LICENSE). Third-party notices: [NOTICE](NOTICE).
+[LICENSE](LICENSE). The plugin SDK in [plugin/](plugin/) is licensed under Apache-2.0, see
+[plugin/LICENSE](plugin/LICENSE). Third-party notices: [NOTICE](NOTICE).
 
 For a commercial license without the AGPL obligations, contact legal@blueboxsoft.com.
 

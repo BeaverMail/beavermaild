@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Package plugin is the public SDK for BeaverMail extension executables.
 package plugin
 

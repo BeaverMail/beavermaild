@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Plugin self-description for host discovery (metadata probe mode).
 package plugin
 
