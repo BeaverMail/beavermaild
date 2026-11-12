@@ -1266,7 +1266,7 @@ func (s *session) writeFetch(ctx context.Context, seq int, msg mail.Message, ite
 			return err
 		}
 		defer release()
-		raw, err = s.inbox.LoadRaw(ctx, msg.Meta)
+		raw, err = s.inbox.LoadMessage(ctx, msg.Meta)
 		if err != nil {
 			return err
 		}
@@ -1280,7 +1280,7 @@ func (s *session) writeFetch(ctx context.Context, seq int, msg mail.Message, ite
 		parts = append(parts, "FLAGS "+mail.FormatMessageFlags(msg.Meta))
 	}
 	if items.size {
-		parts = append(parts, fmt.Sprintf("RFC822.SIZE %d", msg.Meta.Size))
+		parts = append(parts, fmt.Sprintf("RFC822.SIZE %d", mail.RFC822Size(msg.Meta)))
 	}
 	if items.envelope {
 		parts = append(parts, "ENVELOPE "+formatEnvelope(raw))
@@ -1368,15 +1368,9 @@ func (s *session) writeFetchWithLiterals(seq int, parts []string, sections []bod
 
 // writeFetchStreamed is writeFetchWithLiterals for whole-message sections, copied from the stored file.
 func (s *session) writeFetchStreamed(ctx context.Context, seq int, parts []string, sections []bodySectionFetch, msg mail.Message) error {
-	f, err := s.inbox.OpenRaw(ctx, msg.Meta)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	st, err := f.Stat()
-	if err != nil {
-		return err
-	}
+	// The size is the wire form's (CRLF), as is every offset; sections are read in order from one
+	// stream, so each one reopens it rather than seeking.
+	size := int64(mail.RFC822Size(msg.Meta))
 	prefix := ""
 	if len(parts) > 0 {
 		prefix = strings.Join(parts, " ") + " "
@@ -1385,7 +1379,7 @@ func (s *session) writeFetchStreamed(ctx context.Context, seq int, parts []strin
 		return err
 	}
 	for i, bs := range sections {
-		off, n := bs.partialRange(st.Size())
+		off, n := bs.partialRange(size)
 		sep := ""
 		if i > 0 {
 			sep = " "
@@ -1393,11 +1387,11 @@ func (s *session) writeFetchStreamed(ctx context.Context, seq int, parts []strin
 		if _, err := fmt.Fprintf(s.conn, "%s%s {%d}\r\n", sep, bs.responseName(), n); err != nil {
 			return err
 		}
-		if _, err := io.Copy(nulMaskWriter{s.conn}, io.NewSectionReader(f, off, n)); err != nil {
+		if err := s.copyWireRange(ctx, msg.Meta, off, n); err != nil {
 			return err
 		}
 	}
-	_, err = fmt.Fprintf(s.conn, ")\r\n")
+	_, err := fmt.Fprintf(s.conn, ")\r\n")
 	return err
 }
 
@@ -1408,15 +1402,27 @@ var rawLoads = make(chan struct{}, rawLoadLimit)
 
 const rawLoadLimit = 16
 
-// rawOpener opens messages for SEARCH, SORT and THREAD, which read them in pieces (no rawLoads slot).
-func (s *session) rawOpener(ctx context.Context) mail.RawLoader {
-	return func(m mail.Message) (io.ReadCloser, error) {
-		f, err := s.inbox.OpenRaw(ctx, m.Meta)
-		if err != nil {
-			return nil, err // not f: a nil *os.File would make a non-nil ReadCloser
-		}
-		return f, nil
+// copyWireRange sends n bytes of the message's wire form from off. Exactly n: the literal length
+// is already on the wire, so a short message ends the connection rather than desynchronise it.
+func (s *session) copyWireRange(ctx context.Context, meta storage.EmailMeta, off, n int64) error {
+	r, err := s.inbox.OpenMessage(ctx, meta)
+	if err != nil {
+		return err
 	}
+	defer r.Close()
+	if _, err := io.CopyN(io.Discard, r, off); err != nil {
+		return fmt.Errorf("imap: message shorter than its RFC822.SIZE: %w", err)
+	}
+	if _, err := io.CopyN(nulMaskWriter{s.conn}, r, n); err != nil {
+		return fmt.Errorf("imap: message shorter than its RFC822.SIZE: %w", err)
+	}
+	return nil
+}
+
+// rawOpener opens messages for SEARCH, SORT and THREAD, which read them in pieces (no rawLoads
+// slot), in wire form like FETCH.
+func (s *session) rawOpener(ctx context.Context) mail.RawLoader {
+	return func(m mail.Message) (io.ReadCloser, error) { return s.inbox.OpenMessage(ctx, m.Meta) }
 }
 
 // acquireRawLoad waits for a rawLoads slot (or ctx) and returns its release.

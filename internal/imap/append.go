@@ -119,7 +119,8 @@ func (s *session) cmdAppend(ctx context.Context, tag, arg string) error {
 
 	var ids, uids []uint32
 	for i, raw := range raws {
-		emailID, err := s.inbox.Append(ctx, s.principal.AccountID, mbox.ID, raw, specs[i].flags, specs[i].internalDate)
+		// Bare CR as Exim treats it (mail.BareCR): never a line end inside a header field.
+		emailID, err := s.inbox.Append(ctx, s.principal.AccountID, mbox.ID, mail.BareCR(raw), specs[i].flags, specs[i].internalDate)
 		if err == nil && len(specs[i].keywords) > 0 {
 			if _, err = s.inbox.SetFlagsMany(ctx, s.principal.AccountID, []uint32{emailID}, 0, 0, specs[i].keywords, nil, 0); err != nil {
 				ids = append(ids, emailID) // stored: undone with the others below

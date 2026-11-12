@@ -168,7 +168,7 @@ func (s *session) loadURLMessage(ctx context.Context, accountID uint32, u imapUR
 	}
 	for _, m := range msgs {
 		if m.UID == u.uid {
-			return s.inbox.LoadRaw(ctx, m.Meta)
+			return s.inbox.LoadMessage(ctx, m.Meta)
 		}
 	}
 	return nil, errBadURL
