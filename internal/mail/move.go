@@ -191,6 +191,9 @@ func (ib *Inbox) CreateMailbox(ctx context.Context, accountID uint32, name strin
 	if err := ValidateMailboxName(name); err != nil {
 		return Mailbox{}, err
 	}
+	if err := checkNewMailboxName(name); err != nil {
+		return Mailbox{}, err
+	}
 	var id, uidValidity uint32
 	var subscribed bool
 	err := ib.update(ctx, accountID, func(t *txn) error {
@@ -205,7 +208,7 @@ func (ib *Inbox) CreateMailbox(ctx context.Context, accountID uint32, name strin
 		}
 		exists := make(map[string]bool, len(records))
 		for _, m := range records {
-			exists[strings.ToUpper(m.Name)] = true
+			exists[MailboxKey(m.Name)] = true
 		}
 		// RFC 3501 §6.3.3: superior names the hierarchy needs are created with the folder.
 		var names []string
@@ -214,11 +217,14 @@ func (ib *Inbox) CreateMailbox(ctx context.Context, accountID uint32, name strin
 				continue
 			}
 			parent := name[:i]
-			if parent != "" && !strings.HasSuffix(parent, "/") && !exists[strings.ToUpper(parent)] {
+			if parent != "" && !strings.HasSuffix(parent, "/") && !exists[MailboxKey(parent)] {
 				names = append(names, parent)
 			}
 		}
 		names = append(names, name)
+		if len(records)+len(names) > MaxMailboxes {
+			return ErrMailboxLimit
+		}
 		first, err := ib.nextCustomMailboxID(t.ctx, accountID)
 		if err != nil {
 			return err
@@ -297,47 +303,105 @@ func (ib *Inbox) DeleteMailbox(ctx context.Context, accountID, mailboxID uint32)
 	})
 }
 
-// RenameMailbox renames a user folder and bumps UIDVALIDITY (RFC 3501).
+// RenameMailbox renames a user folder together with every folder under it, and creates the
+// superiors the new name needs (RFC 3501 6.3.5). Renaming INBOX moves its messages into a new
+// folder and leaves INBOX, and the folders under it, in place. Each renamed folder gets a new
+// UIDVALIDITY.
 func (ib *Inbox) RenameMailbox(ctx context.Context, accountID uint32, oldName, newName string) (Mailbox, error) {
-	oldName = stringsTrimMailboxName(oldName)
-	newName = stringsTrimMailboxName(newName)
 	if err := ValidateMailboxName(oldName); err != nil {
 		return Mailbox{}, err
 	}
 	if err := ValidateMailboxName(newName); err != nil {
 		return Mailbox{}, err
 	}
-	if strings.EqualFold(oldName, "INBOX") {
-		return Mailbox{}, ErrSystemMailbox
+	if err := checkNewMailboxName(newName); err != nil {
+		return Mailbox{}, err
 	}
 	old, err := ib.ResolveMailbox(ctx, accountID, oldName)
 	if err != nil {
 		return Mailbox{}, err
-	}
-	if old.ID <= DraftsMailboxID {
-		return Mailbox{}, ErrSystemMailbox
 	}
 	if _, err := ib.ResolveMailbox(ctx, accountID, newName); err == nil {
 		return Mailbox{}, ErrMailboxExists
 	} else if !errors.Is(err, storage.ErrNotFound) {
 		return Mailbox{}, err
 	}
-	var rec storage.Mailbox
+	if old.ID == InboxMailboxID {
+		return ib.renameInbox(ctx, accountID, newName)
+	}
+	if old.ID <= DraftsMailboxID {
+		return Mailbox{}, ErrSystemMailbox
+	}
+	oldKey, newKey := MailboxKey(old.Name), MailboxKey(newName)
+	if strings.HasPrefix(newKey, oldKey+"/") {
+		return Mailbox{}, ErrInvalidMailboxName // a folder cannot move under itself
+	}
+	// Superiors first, outside the rename: they are a SHOULD, and CreateMailbox applies the limits.
+	if i := strings.LastIndexByte(newName, '/'); i > 0 {
+		if _, err := ib.CreateMailbox(ctx, accountID, newName[:i], false); err != nil && !errors.Is(err, ErrMailboxExists) {
+			return Mailbox{}, err
+		}
+	}
+	var renamed storage.Mailbox
 	err = ib.update(ctx, accountID, func(t *txn) error {
-		var err error
-		if rec, err = t.mailbox(accountID, old.ID); err != nil {
+		records, err := ib.listMailboxRecords(t.ctx, accountID)
+		if err != nil {
 			return err
 		}
-		rec.Name = newName
-		if rec.UIDValidity, err = t.nextUIDValidity(accountID); err != nil {
-			return err
+		taken := make(map[string]bool, len(records))
+		var moving []storage.Mailbox
+		for _, m := range records {
+			if k := MailboxKey(m.Name); k == oldKey || strings.HasPrefix(k, oldKey+"/") {
+				moving = append(moving, m)
+			} else {
+				taken[k] = true
+			}
 		}
-		return t.putMailbox(accountID, rec)
+		for _, m := range moving {
+			m.Name = newName + m.Name[len(old.Name):]
+			if err := checkNewMailboxName(m.Name); err != nil {
+				return err
+			}
+			if taken[MailboxKey(m.Name)] {
+				return ErrMailboxExists
+			}
+			if m.UIDValidity, err = t.nextUIDValidity(accountID); err != nil {
+				return err
+			}
+			if err := t.putMailbox(accountID, m); err != nil {
+				return err
+			}
+			if m.ID == old.ID {
+				renamed = m
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		return Mailbox{}, err
 	}
-	return Mailbox{ID: old.ID, Name: newName, UIDValidity: rec.UIDValidity}, nil
+	return Mailbox{ID: old.ID, Name: newName, UIDValidity: renamed.UIDValidity}, nil
+}
+
+// renameInbox is RENAME INBOX (RFC 3501 6.3.5): a new folder takes all of INBOX's messages; INBOX
+// stays, empty, and keeps the folders under it.
+func (ib *Inbox) renameInbox(ctx context.Context, accountID uint32, newName string) (Mailbox, error) {
+	dest, err := ib.CreateMailbox(ctx, accountID, newName, false)
+	if err != nil {
+		return Mailbox{}, err
+	}
+	msgs, err := ib.List(ctx, accountID, InboxMailboxID)
+	if err != nil {
+		return Mailbox{}, err
+	}
+	ids := make([]uint32, len(msgs))
+	for i, m := range msgs {
+		ids[i] = m.StorageID()
+	}
+	if _, err := ib.MoveMessages(ctx, accountID, ids, dest.ID); err != nil {
+		return Mailbox{}, err
+	}
+	return dest, nil
 }
 
 func (ib *Inbox) nextCustomMailboxID(ctx context.Context, accountID uint32) (uint32, error) {
@@ -354,10 +418,6 @@ func (ib *Inbox) nextCustomMailboxID(ctx context.Context, accountID uint32) (uin
 	return max + 1, nil
 }
 
-func stringsTrimMailboxName(name string) string {
-	name = strings.TrimSpace(name)
-	if len(name) >= 2 && name[0] == '"' && name[len(name)-1] == '"' {
-		name = name[1 : len(name)-1]
-	}
-	return strings.TrimSpace(name)
-}
+// stringsTrimMailboxName is the name as given: IMAP passes it parsed, and leading or trailing
+// spaces are part of a name (RFC 3501 5.1), so " dup" and "dup" are two folders.
+func stringsTrimMailboxName(name string) string { return name }

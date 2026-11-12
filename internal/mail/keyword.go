@@ -9,18 +9,27 @@ import (
 
 // NormalizeKeyword canonicalizes an IMAP keyword for storage and comparison.
 func NormalizeKeyword(name string) string {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return ""
-	}
-	if !strings.HasPrefix(name, `\`) {
-		if _, ok := ParseIMAPFlagName(`\` + name); ok {
-			return `\` + name
-		}
-		return name
-	}
-	return name
+	return strings.TrimSpace(name)
 }
+
+// ValidKeyword reports whether name is a flag-keyword: an IMAP atom (RFC 3501 9), so any CHAR
+// except CTL, SP, NUL, 8-bit and the atom-specials ( ) { % * " \ ]. Anything else stored as a
+// keyword would be echoed into FLAGS and PERMANENTFLAGS of every session and break their parsing.
+func ValidKeyword(name string) bool {
+	if name == "" || len(name) > maxKeywordLen {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if c <= ' ' || c >= 0x7f || strings.IndexByte(`(){%*"\]`, c) >= 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// maxKeywordLen bounds one keyword; FLAGS lists every keyword in use in the mailbox.
+const maxKeywordLen = 128
 
 // HasKeyword reports whether meta carries the IMAP keyword (system or custom).
 func HasKeyword(meta storage.EmailMeta, keyword string) bool {
@@ -102,7 +111,11 @@ func FormatMessageFlags(meta storage.EmailMeta) string {
 	if meta.Flags&FlagRecent != 0 {
 		names = append(names, `\Recent`)
 	}
-	names = append(names, meta.Keywords...)
+	for _, kw := range meta.Keywords {
+		if ValidKeyword(kw) { // stored before keywords were validated: never echo a broken atom
+			names = append(names, kw)
+		}
+	}
 	if len(names) == 0 {
 		return "()"
 	}

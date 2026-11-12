@@ -107,3 +107,36 @@ func TestReadHeaderCapped(t *testing.T) {
 		t.Fatal("BODY after a long header not found")
 	}
 }
+
+// RFC 3501 6.4.4: content transfer encodings and RFC 2047 header words MUST be decoded before
+// comparing. Matching only the raw bytes missed every word of a base64 or quoted-printable body.
+func TestSearchTextDecodesTransferEncodings(t *testing.T) {
+	msgs := map[string]string{
+		"b64": "Subject: x\r\nContent-Transfer-Encoding: base64\r\n\r\naGVsbG8g\r\nd29ybGQ=\r\n",
+		"qp":  "Subject: x\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\nun caf=C3=A9 tr=\r\nes bon\r\n",
+		"nested": "Subject: x\r\nContent-Type: multipart/mixed; boundary=o\r\n\r\n--o\r\nContent-Type: text/plain\r\n\r\nplain\r\n" +
+			"--o\r\nContent-Type: message/rfc822\r\n\r\nSubject: inner\r\nContent-Type: multipart/alternative; boundary=i\r\n\r\n" +
+			"--i\r\nContent-Type: text/plain\r\nContent-Transfer-Encoding: base64\r\n\r\nc2VjcmV0IHdvcmQ=\r\n--i--\r\n--o--\r\n",
+		"hdr": "Subject: =?UTF-8?B?w6l0w6k=?=\r\n\r\nnothing\r\n",
+	}
+	cases := []struct {
+		msg, needle string
+		body, want  bool
+	}{
+		{"b64", "hello world", true, true},
+		{"b64", "HELLO", false, true},
+		{"qp", "café tres", true, true}, // "tr=\r\nes": a soft line break
+		{"nested", "secret word", true, true},
+		{"nested", "secret word", false, true},
+		{"hdr", "été", false, true},     // TEXT covers the decoded header
+		{"hdr", "été", true, false},     // BODY does not
+		{"b64", "aGVsbG8g", true, true}, // the raw bytes still match too
+		{"qp", "absent", false, false},
+	}
+	for _, tc := range cases {
+		load := BytesLoader(func(Message) ([]byte, error) { return []byte(msgs[tc.msg]), nil })
+		if got := openContains(load, Message{}, tc.needle, tc.body); got != tc.want {
+			t.Errorf("%s body=%v %q: %v, want %v", tc.msg, tc.body, tc.needle, got, tc.want)
+		}
+	}
+}

@@ -54,20 +54,15 @@ func FormatIMAPFlags(f uint32) string {
 	return "(" + strings.Join(names, " ") + ")"
 }
 
-// ParseIMAPFlagName maps an IMAP system flag name to a bit (empty if unknown).
+// ParseIMAPFlagName maps an IMAP system flag name to a bit. System flags always carry the
+// backslash and are case-insensitive (\seen is \Seen); "Seen" is an ordinary keyword (RFC 3501 2.3.2).
 func ParseIMAPFlagName(name string) (uint32, bool) {
-	// System flags are case-insensitive (RFC 3501: \seen is \Seen); bare names stay exact.
-	if rest, ok := strings.CutPrefix(name, `\`); ok {
-		name = rest
-		for _, f := range systemFlagNames {
-			if strings.EqualFold(name, f.name) {
-				return f.bit, true
-			}
-		}
+	rest, ok := strings.CutPrefix(name, `\`)
+	if !ok {
 		return 0, false
 	}
 	for _, f := range systemFlagNames {
-		if name == f.name {
+		if strings.EqualFold(rest, f.name) {
 			return f.bit, true
 		}
 	}

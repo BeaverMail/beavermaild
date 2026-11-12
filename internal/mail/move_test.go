@@ -276,8 +276,12 @@ func TestRenameMailbox(t *testing.T) {
 	if _, err := inbox.ResolveMailbox(ctx, acc.ID, "New"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := inbox.RenameMailbox(ctx, acc.ID, "INBOX", "X"); err != mail.ErrSystemMailbox {
+	// RFC 3501 6.3.5: renaming INBOX moves its messages to a new folder; INBOX stays.
+	if _, err := inbox.RenameMailbox(ctx, acc.ID, "INBOX", "X"); err != nil {
 		t.Fatalf("rename inbox err %v", err)
+	}
+	if _, err := inbox.ResolveMailbox(ctx, acc.ID, "INBOX"); err != nil {
+		t.Fatalf("INBOX gone after its rename: %v", err)
 	}
 	if _, err := inbox.CreateMailbox(ctx, acc.ID, "Taken", true); err != nil {
 		t.Fatal(err)

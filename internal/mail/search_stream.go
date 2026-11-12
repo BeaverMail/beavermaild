@@ -3,7 +3,13 @@ package mail
 import (
 	"bufio"
 	"bytes"
+	"encoding/base64"
 	"io"
+	"mime"
+	"mime/multipart"
+	"mime/quotedprintable"
+	"net/textproto"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -61,19 +67,84 @@ func readHeader(br *bufio.Reader, limit int) []byte {
 	}
 }
 
-// openContains reports whether m contains needle (only its body when body is set), matched as
-// rawContains does on the whole message, reading it chunk by chunk.
+// openContains reports whether m contains needle (only its body when body is set), reading it
+// chunk by chunk. RFC 3501 6.4.4 compares decoded text: the raw bytes are scanned first, then,
+// if they did not match, the text of base64 and quoted-printable parts and, for TEXT, the RFC 2047
+// words of the header.
 func openContains(load RawLoader, m Message, needle string, body bool) bool {
 	r, err := load(m)
 	if err != nil {
 		return false
 	}
-	defer r.Close()
 	br := bufio.NewReader(r)
 	if body {
 		readHeader(br, 0)
 	}
-	return readerContains(br, needle)
+	found := readerContains(br, needle)
+	r.Close()
+	if found {
+		return true
+	}
+	if r, err = load(m); err != nil {
+		return false
+	}
+	defer r.Close()
+	tp := textproto.NewReader(bufio.NewReader(r))
+	hdr, err := tp.ReadMIMEHeader()
+	if err != nil && len(hdr) == 0 {
+		return false
+	}
+	if !body {
+		for _, values := range hdr {
+			for _, v := range values {
+				if strings.Contains(v, "=?") && headerContains(v, needle) {
+					return true
+				}
+			}
+		}
+	}
+	return decodedPartsContain(hdr, tp.R, needle, 0)
+}
+
+// maxSearchMIMEDepth bounds the MIME levels the decoded pass enters, like the IMAP walks.
+const maxSearchMIMEDepth = 100
+
+// decodedPartsContain walks the entity with header hdr and body r as a stream and reports whether
+// the decoded text of a base64 or quoted-printable leaf holds needle. Other leaves were covered by
+// the raw pass. shortcut: decoded bytes are matched as they are, without charset conversion, so a
+// UTF-8 needle finds UTF-8 and US-ASCII parts only; convert when a charset library is allowed.
+func decodedPartsContain(hdr textproto.MIMEHeader, r io.Reader, needle string, depth int) bool {
+	if depth >= maxSearchMIMEDepth {
+		return false
+	}
+	mt, params, _ := mime.ParseMediaType(hdr.Get("Content-Type"))
+	switch {
+	case strings.HasPrefix(mt, "multipart/") && params["boundary"] != "":
+		mr := multipart.NewReader(r, params["boundary"])
+		for {
+			p, err := mr.NextRawPart() // raw: the walk decodes, once
+			if err != nil {
+				return false
+			}
+			if decodedPartsContain(p.Header, p, needle, depth+1) {
+				return true
+			}
+		}
+	case mt == "message/rfc822":
+		tp := textproto.NewReader(bufio.NewReader(r))
+		inner, err := tp.ReadMIMEHeader()
+		if err != nil && len(inner) == 0 {
+			return false
+		}
+		return decodedPartsContain(inner, tp.R, needle, depth+1)
+	}
+	switch strings.ToLower(strings.TrimSpace(hdr.Get("Content-Transfer-Encoding"))) {
+	case "base64":
+		return readerContains(base64.NewDecoder(base64.StdEncoding, r), needle) // skips CR/LF
+	case "quoted-printable":
+		return readerContains(quotedprintable.NewReader(r), needle)
+	}
+	return false
 }
 
 // readerContains is rawContains over a stream. Chunks are cut on rune starts, so lowercasing them

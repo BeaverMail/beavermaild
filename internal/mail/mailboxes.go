@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/BeaverMail/beavermaild/internal/storage"
 )
@@ -66,7 +65,6 @@ func (ib *Inbox) ResolveMailbox(ctx context.Context, accountID uint32, imapName 
 	if err := ib.EnsureMailboxes(ctx, accountID); err != nil {
 		return Mailbox{}, err
 	}
-	imapName = strings.TrimSpace(imapName)
 	if imapName == "" {
 		return Mailbox{}, fmt.Errorf("mail: empty mailbox name")
 	}
@@ -74,9 +72,9 @@ func (ib *Inbox) ResolveMailbox(ctx context.Context, accountID uint32, imapName 
 	if err != nil {
 		return Mailbox{}, err
 	}
-	upper := strings.ToUpper(imapName)
+	key := MailboxKey(imapName)
 	for _, m := range records {
-		if strings.ToUpper(m.Name) == upper {
+		if MailboxKey(m.Name) == key {
 			return Mailbox{
 				ID:            m.ID,
 				Name:          m.Name,
