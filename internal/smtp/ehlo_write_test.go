@@ -1,7 +1,9 @@
 package smtp
 
 import (
+	"bufio"
 	"net"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -21,7 +23,24 @@ func TestEHLOReplySingleWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := string(buf[:n])
-	if !strings.HasPrefix(got, "250-mx.example.net\r\n") || !strings.Contains(got, "250-AUTH PLAIN LOGIN\r\n") || !strings.HasSuffix(got, "250 2.0.0 Ok\r\n") {
+	if !strings.HasPrefix(got, "250-mx.example.net\r\n") || !strings.HasSuffix(got, "250 AUTH PLAIN LOGIN\r\n") {
 		t.Fatalf("first read %q, want the complete multi-line EHLO reply", got)
+	}
+}
+
+// RFC 5321 4.1.1.1: the last EHLO line is an extension too (Postfix ends with "250 CHUNKING"), and the
+// first line is the server domain, not a keyword.
+func TestReadEHLOCapsLastLine(t *testing.T) {
+	r := bufio.NewReader(strings.NewReader("250-mx.example.org PIPELINING ready\r\n250-SIZE 1000\r\n250-AUTH plain LOGIN\r\n250-X-STARTTLS-NOT\r\n250 CHUNKING\r\nNOOP\r\n"))
+	caps, err := readEHLOCaps(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := clientCaps{SizeLimit: 1000, Chunking: true, Auth: []string{"PLAIN", "LOGIN"}}
+	if !reflect.DeepEqual(caps, want) {
+		t.Fatalf("caps %+v, want %+v", caps, want)
+	}
+	if rest, _ := r.ReadString('\n'); rest != "NOOP\r\n" {
+		t.Fatalf("parser read past the last EHLO line, next %q", rest)
 	}
 }

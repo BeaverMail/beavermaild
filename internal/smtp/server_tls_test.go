@@ -69,8 +69,13 @@ func TestSMTPSTARTTLS(t *testing.T) {
 		t.Fatal(err)
 	}
 	read = bufio.NewReader(tlsConn)
+	// RFC 3207 4.2: the pre-TLS EHLO is forgotten, so MAIL needs a new one.
+	send(t, tlsConn, "MAIL FROM:<a@example.org>")
+	expect(t, read, "503 ")
 	send(t, tlsConn, "EHLO test")
 	readEHLO(t, read, "")
+	send(t, tlsConn, "MAIL FROM:<a@example.org>")
+	expect(t, read, "250 ")
 	send(t, tlsConn, "QUIT")
 }
 

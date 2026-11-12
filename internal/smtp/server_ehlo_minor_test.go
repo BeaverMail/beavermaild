@@ -52,12 +52,12 @@ func TestSMTPEHLONoStubExtensions(t *testing.T) {
 	expect(t, read, "220")
 	send(t, conn, "EHLO test")
 	forbidden := []string{
-		"250-BINARYMIME",
-		"250-REQUIRETLS",
-		"250-FUTURERELEASE",
-		"250-DELIVER BY",
-		"250-MT-PRIORITY",
-		"250-NO-SOLICITING",
+		"BINARYMIME",
+		"REQUIRETLS",
+		"FUTURERELEASE",
+		"DELIVER BY",
+		"MT-PRIORITY",
+		"NO-SOLICITING",
 	}
 	for {
 		line, err := read.ReadString('\n')
@@ -65,11 +65,11 @@ func TestSMTPEHLONoStubExtensions(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, bad := range forbidden {
-			if len(line) >= len(bad) && line[:len(bad)] == bad {
+			if len(line) >= 4 && strings.HasPrefix(line[4:], bad) { // last EHLO line uses "250 "
 				t.Fatalf("unexpected EHLO line %q", strings.TrimSpace(line))
 			}
 		}
-		if len(line) >= 7 && line[:7] == "250 2.0" {
+		if len(line) >= 4 && line[:4] == "250 " {
 			break
 		}
 	}
@@ -155,10 +155,10 @@ func TestSMTPVRFYEnabled(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(line) >= 8 && line[:8] == "250-VRFY" {
+		if len(line) >= 4 && strings.HasPrefix(line[4:], "VRFY") {
 			sawVRFY = true
 		}
-		if len(line) >= 7 && line[:7] == "250 2.0" {
+		if len(line) >= 4 && line[:4] == "250 " {
 			break
 		}
 	}

@@ -233,7 +233,7 @@ func ehlo(conn net.Conn, r *bufio.Reader, name string) (clientCaps, error) {
 
 func readEHLOCaps(r *bufio.Reader) (clientCaps, error) {
 	var caps clientCaps
-	for {
+	for first := true; ; first = false {
 		line, err := r.ReadString('\n')
 		if err != nil {
 			return caps, err
@@ -247,31 +247,32 @@ func readEHLOCaps(r *bufio.Reader) (clientCaps, error) {
 		if code != 250 {
 			return caps, &ResponseError{Code: code, Line: trimmed}
 		}
-		if len(trimmed) >= 4 && trimmed[3] != '-' {
-			break
+		last := len(trimmed) == 3 || trimmed[3] != '-'
+		// RFC 5321 4.1.1.1: the first line carries the domain; every later line, the last one included, is an ehlo-line.
+		if fields := strings.Fields(trimmed[min(4, len(trimmed)):]); !first && len(fields) > 0 {
+			switch strings.ToUpper(fields[0]) {
+			case "SIZE":
+				if len(fields) > 1 {
+					_, _ = fmt.Sscanf(fields[1], "%d", &caps.SizeLimit)
+				}
+			case "STARTTLS":
+				caps.StartTLS = true
+			case "8BITMIME":
+				caps.EightBitMIME = true
+			case "CHUNKING":
+				caps.Chunking = true
+			case "PIPELINING":
+				caps.Pipelining = true
+			case "AUTH":
+				for _, m := range fields[1:] {
+					caps.Auth = append(caps.Auth, strings.ToUpper(m))
+				}
+			}
 		}
-		rest := strings.TrimSpace(trimmed[4:])
-		upper := strings.ToUpper(rest)
-		if strings.HasPrefix(upper, "SIZE ") || strings.HasPrefix(upper, "SIZE\t") {
-			_, _ = fmt.Sscanf(upper, "SIZE %d", &caps.SizeLimit)
-		}
-		if strings.Contains(upper, "STARTTLS") {
-			caps.StartTLS = true
-		}
-		if strings.Contains(upper, "8BITMIME") {
-			caps.EightBitMIME = true
-		}
-		if strings.Contains(upper, "CHUNKING") {
-			caps.Chunking = true
-		}
-		if strings.Contains(upper, "PIPELINING") {
-			caps.Pipelining = true
-		}
-		if strings.HasPrefix(upper, "AUTH ") {
-			caps.Auth = append(caps.Auth, strings.Fields(upper[5:])...)
+		if last {
+			return caps, nil
 		}
 	}
-	return caps, nil
 }
 
 func authPlain(conn net.Conn, r *bufio.Reader, caps clientCaps, user, pass string) error {

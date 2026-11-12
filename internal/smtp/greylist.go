@@ -87,8 +87,9 @@ func (g *Greylist) save(ctx context.Context, suffix []byte, at time.Time) error 
 // greylistKeys returns full and batch-suffix keys for normalized triplet state.
 func greylistKeys(clientIP, mailFrom, rcptTo string) ([]byte, []byte) {
 	clientIP = normalizeGreylistIP(clientIP)
-	mailFrom = normalizeEnvelopeAddress(mailFrom)
-	rcptTo = normalizeEnvelopeAddress(rcptTo)
+	// Keys fold case: a retry spelled differently is still the same triplet.
+	mailFrom = strings.ToLower(mailFrom)
+	rcptTo = strings.ToLower(rcptTo)
 	sum := sha256.Sum256([]byte(clientIP + "\x00" + mailFrom + "\x00" + rcptTo))
 	tail := append([]byte(greylistKeyPrefix), sum[:]...)
 	suffix := storage.DocumentSuffix(0, 0, tail)

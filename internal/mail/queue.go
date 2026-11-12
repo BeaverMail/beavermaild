@@ -82,7 +82,7 @@ func (q *Queue) EnqueueDSN(ctx context.Context, env EnvelopeDSN, raw []byte) (ui
 			notify = NotifyDefault
 		}
 		rcpts[i] = storage.QueueRecipient{
-			Address: strings.ToLower(strings.TrimSpace(r.Address)),
+			Address: strings.TrimSpace(r.Address), // RFC 5321 2.4: keep the local part's case
 			Notify:  NotifyToStorage(notify),
 			Orcpt:   r.Orcpt,
 		}
@@ -90,7 +90,7 @@ func (q *Queue) EnqueueDSN(ctx context.Context, env EnvelopeDSN, raw []byte) (ui
 	msg := storage.QueueMessage{
 		Created:    uint64(time.Now().Unix()),
 		BlobHash:   hash,
-		ReturnPath: strings.ToLower(strings.TrimSpace(env.ReturnPath)),
+		ReturnPath: strings.TrimSpace(env.ReturnPath),
 		Recipients: rcpts,
 		Size:       uint64(len(raw)),
 		Ret:        string(env.Ret),

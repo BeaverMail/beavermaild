@@ -13,18 +13,13 @@ import (
 // cmdHelp returns a short list of supported SMTP commands.
 func (s *session) cmdHelp(arg string) error {
 	_ = arg
-	lines := []string{
+	// RFC 2034 4: every line of a multi-line reply carries the same enhanced status code.
+	return s.writef("%s", strings.Join([]string{
 		"214-2.0.0 Commands:",
-		"214- EHLO HELO MAIL RCPT DATA RSET NOOP QUIT",
-		"214- STARTTLS AUTH BDAT HELP VRFY EXPN",
+		"214-2.0.0 EHLO HELO MAIL RCPT DATA RSET NOOP QUIT",
+		"214-2.0.0 STARTTLS AUTH BDAT HELP VRFY EXPN",
 		"214 2.0.0 End",
-	}
-	for _, line := range lines {
-		if err := s.writef(line); err != nil {
-			return err
-		}
-	}
-	return nil
+	}, "\r\n"))
 }
 
 // cmdVrfy verifies a local mailbox when vrfy_enabled is true; default is 252 disabled.

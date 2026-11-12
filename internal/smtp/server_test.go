@@ -105,13 +105,7 @@ func readEHLO(t *testing.T, r *bufio.Reader, mustContain string) {
 		if mustContain != "" && len(line) >= len(mustContain) && strings.Contains(line, mustContain) {
 			found = true
 		}
-		if strings.HasPrefix(line, "250 2.0.0") {
-			if !found {
-				t.Fatalf("EHLO missing %q", mustContain)
-			}
-			return
-		}
-		if strings.HasPrefix(line, "250 OK") && !strings.HasPrefix(line, "250-") {
+		if strings.HasPrefix(line, "250 ") {
 			if !found {
 				t.Fatalf("EHLO missing %q", mustContain)
 			}

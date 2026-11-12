@@ -260,6 +260,9 @@ An alias delivers one copy of each message to every target mailbox (e.g. `info@`
 - An address is either a mailbox or an alias: creating one over the other returns `409`. `dmarc-reports` and
   `tls-reports` are reserved.
 - Routing order for incoming mail: mailbox, then alias, then the domain `catch_all`.
+- `postmaster@` is always accepted on every domain (RFC 5321): when no mailbox, alias or catch-all takes it, it goes
+  to the active `tenant_admin` accounts of the domain's tenant, else to the instance `admin` accounts. A bare
+  `RCPT TO:<Postmaster>` goes to the instance admins. Create a `postmaster` mailbox or alias to route it elsewhere.
 - A mailbox addressed both directly and through an alias in the same message gets one copy.
 - Each copy counts against the quota of the mailbox that receives it. Targets that are `active: false` are skipped;
   if no target is left, the sender gets `550`. Deleting a target mailbox leaves the alias with the remaining targets.

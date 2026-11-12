@@ -61,8 +61,7 @@ func TestSMTPEHLOExtensionsInbound(t *testing.T) {
 		"250-CHUNKING",
 		"250-DSN",
 		"250-PIPELINING",
-		"250-SIZE 4096",
-		"250 2.0.0",
+		"250 SIZE 4096",
 	} {
 		expect(t, read, want)
 	}
@@ -152,7 +151,7 @@ func TestSMTPPipeliningMailRcpt(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(line) >= 7 && line[:7] == "250 2.0" {
+		if len(line) >= 4 && line[:4] == "250 " {
 			break
 		}
 	}
@@ -206,24 +205,7 @@ func TestSMTPSubmissionAuthLogin(t *testing.T) {
 	read := bufio.NewReader(conn)
 	expect(t, read, "220")
 	send(t, conn, "EHLO test")
-	for {
-		line, err := read.ReadString('\n')
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(line) >= 12 && line[:12] == "250-AUTH PLA" {
-			break
-		}
-	}
-	for {
-		line, err := read.ReadString('\n')
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(line) >= 7 && line[:7] == "250 2.0" {
-			break
-		}
-	}
+	readEHLO(t, read, "AUTH PLAIN")
 
 	send(t, conn, "AUTH LOGIN")
 	expect(t, read, "334")

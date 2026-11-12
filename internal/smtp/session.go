@@ -64,7 +64,8 @@ type session struct {
 	curCmd      string       // command being answered, for reply logging (MAIL/RCPT keep their argument)
 	stopping    *atomic.Bool // server shutdown flag (nil when not served by a Server)
 
-	mailFrom  string
+	mailFrom  string // "" is the null reverse-path (bounces); inTxn tells whether MAIL was accepted
+	inTxn     bool
 	mailRet   mail.RetMode
 	mailEnvid string
 	mailBody  string
@@ -174,6 +175,10 @@ func (s *session) readCommandBatch() ([]smtpCommand, error) {
 	var batch []smtpCommand
 	for {
 		line, err := s.readLine()
+		if errors.Is(err, errLineTooLong) {
+			batch = append(batch, smtpCommand{cmd: cmdLineTooLong})
+			break
+		}
 		if err != nil {
 			return batch, err
 		}
@@ -203,22 +208,20 @@ func pipelineContinues(cmd string) bool {
 
 func (s *session) dispatch(ctx context.Context, cmd, arg string, mailBlocked bool) (stop, blockMail bool, err error) {
 	switch cmd {
-	case "EHLO":
-		s.heloDomain = strings.TrimSpace(arg)
-		s.pipelining = true
+	case "EHLO", "HELO":
+		// RFC 5321 4.1.4: a bad EHLO gets 501 and leaves the state alone; a good one resets like RSET.
+		domain, _, _ := strings.Cut(strings.TrimSpace(arg), " ")
+		if domain == "" {
+			return false, false, s.writef(replySyntaxHelo)
+		}
+		s.reset()
+		s.heloDomain = domain
+		s.pipelining = cmd == "EHLO"
 		s.checkSPFEhlo(ctx)
 		if err := s.filterHelo(ctx); err != nil {
 			return false, false, err
 		}
-		return false, false, s.writeEHLO(true)
-	case "HELO":
-		s.heloDomain = strings.TrimSpace(arg)
-		s.pipelining = false
-		s.checkSPFEhlo(ctx)
-		if err := s.filterHelo(ctx); err != nil {
-			return false, false, err
-		}
-		return false, false, s.writeEHLO(false)
+		return false, false, s.writeEHLO(cmd == "EHLO")
 	case "STARTTLS":
 		return false, false, s.cmdStartTLS()
 	case "AUTH":
@@ -244,8 +247,10 @@ func (s *session) dispatch(ctx context.Context, cmd, arg string, mailBlocked boo
 		return false, false, s.cmdVrfy(ctx, arg)
 	case "EXPN":
 		return false, false, s.cmdExpn(arg)
-	case "ETRN", "ATRN", "BURL":
+	case "ETRN", "ATRN", "BURL", "TURN", "SEND", "SOML", "SAML":
 		return false, false, s.writef(replyNotImplemented)
+	case cmdLineTooLong:
+		return false, false, s.writef(replyLineTooLong)
 	case "RSET":
 		s.reset()
 		return false, false, s.writef(replyOK)
@@ -255,7 +260,8 @@ func (s *session) dispatch(ctx context.Context, cmd, arg string, mailBlocked boo
 		_ = s.writef(replyBye)
 		return true, false, nil
 	default:
-		return false, false, s.writef(replyNotImplemented)
+		// RFC 5321 4.2.4: 500 for an unknown command, 502 only for known but unimplemented ones.
+		return false, false, s.writef(replyUnrecognized)
 	}
 }
 
@@ -263,6 +269,13 @@ func (s *session) handleMail(ctx context.Context, arg string) (blockMail bool, e
 	_ = ctx
 	if s.submission && !s.secure {
 		return true, s.writef(replyTLSRequired)
+	}
+	// RFC 5321 4.1.4: EHLO/HELO opens the session, and MAIL MUST NOT be sent inside an open transaction.
+	if s.heloDomain == "" {
+		return true, s.writef(replyNoHelo)
+	}
+	if s.inTxn {
+		return true, s.writef(replyNestedMail)
 	}
 	addr, declaredSize, mailParams, ok := parseMailArg(arg)
 	if !ok {
@@ -280,7 +293,8 @@ func (s *session) handleMail(ctx context.Context, arg string) (blockMail bool, e
 		}
 		return true, s.writef(replySyntaxMail)
 	}
-	if !validEnvelopeAddress(addr) {
+	// RFC 5321 4.1.1.2: Reverse-path = Path / "<>"; the null path carries bounces, DSNs and MDNs.
+	if addr != "" && !validEnvelopeAddress(addr) {
 		return true, s.writef(replySyntaxMail)
 	}
 	if addressNeedsUTF8(addr) && !mailParams.SMTPUTF8 {
@@ -292,7 +306,8 @@ func (s *session) handleMail(ctx context.Context, arg string) (blockMail bool, e
 	if s.submission && s.principal.AccountID == 0 {
 		return true, s.writef(replyAuthRequired)
 	}
-	if s.submission {
+	// A null path impersonates no one and must stay null (RFC 5321 4.5.5, 6.1).
+	if s.submission && addr != "" {
 		resolved, ok := resolveSubmissionMailFrom(s.principal, addr)
 		if !ok {
 			return true, s.writef(replySenderRejected)
@@ -300,6 +315,7 @@ func (s *session) handleMail(ctx context.Context, arg string) (blockMail bool, e
 		addr = resolved
 	}
 	s.reset()
+	s.inTxn = true
 	s.mailFrom = addr
 	s.mailRet = mailParams.Ret
 	s.mailEnvid = mailParams.Envid
@@ -333,8 +349,12 @@ func (s *session) handleRcpt(ctx context.Context, arg string, mailBlocked bool) 
 	if rcptParams.Unsupported != "" {
 		return s.writef(rcptParams.Unsupported)
 	}
-	if s.mailFrom == "" {
+	if !s.inTxn {
 		return s.writef(replyBadSequence)
+	}
+	// RFC 5321 4.5.1: "RCPT TO:<Postmaster>" with no domain MUST be accepted.
+	if strings.EqualFold(addr, directory.PostmasterLocalPart) && !s.submission {
+		return s.acceptPostmaster(ctx, rcptParams)
 	}
 	if !validEnvelopeAddress(addr) {
 		return s.writef(replySyntaxRcpt)
@@ -346,7 +366,8 @@ func (s *session) handleRcpt(ctx context.Context, arg string, mailBlocked bool) 
 	if err != nil {
 		return s.writef(replySyntaxRcpt)
 	}
-	if _, err := s.dir.LookupDomain(ctx, domName); err != nil {
+	dom, err := s.dir.LookupDomain(ctx, domName)
+	if err != nil {
 		if errors.Is(err, directory.ErrNotFound) {
 			if !s.submission {
 				return s.writef(replyRelayDenied)
@@ -387,6 +408,9 @@ func (s *session) handleRcpt(ctx context.Context, arg string, mailBlocked bool) 
 	// Report addresses skip account lookup so a catch-all cannot swallow them.
 	if target.report == "" {
 		accounts, err := s.resolveLocalRcpt(ctx, addr, domName)
+		if errors.Is(err, directory.ErrNotFound) && strings.EqualFold(localPart(addr), directory.PostmasterLocalPart) {
+			accounts, err = s.dir.ResolvePostmaster(ctx, dom.TenantID)
+		}
 		if errors.Is(err, directory.ErrNotFound) {
 			return s.writef(replyUserUnknown)
 		}
@@ -421,6 +445,44 @@ func (s *session) handleRcpt(ctx context.Context, arg string, mailBlocked bool) 
 		return s.writef(reply)
 	}
 	return s.writef(replyOK)
+}
+
+// acceptPostmaster takes the bare "Postmaster" recipient for the instance admins (RFC 5321 4.5.1).
+func (s *session) acceptPostmaster(ctx context.Context, params RcptParams) error {
+	accounts, err := s.dir.ResolvePostmaster(ctx, 0)
+	if errors.Is(err, directory.ErrNotFound) {
+		return s.writef(replyUserUnknown)
+	}
+	if err != nil {
+		return err
+	}
+	addr := directory.PostmasterLocalPart
+	if ok, err := s.allowGreylist(ctx, addr); err != nil {
+		return err
+	} else if !ok {
+		return s.writef("452 4.2.2 Try again later")
+	}
+	for _, acc := range accounts {
+		s.rcpt = append(s.rcpt, rcptTarget{address: addr, notify: params.Notify, orcpt: params.Orcpt, accountID: acc.ID})
+	}
+	if out, err := s.runFilter(ctx, FilterPhaseRcpt, []string{addr}, ""); err != nil {
+		return err
+	} else if out.Action != FilterActionAccept {
+		reply, _ := s.replyFilterAction(out.Action)
+		if reply == "" {
+			reply = replyFilterReject
+		}
+		return s.writef(reply)
+	}
+	return s.writef(replyOK)
+}
+
+// localPart returns the part of addr before the last "@".
+func localPart(addr string) string {
+	if i := strings.LastIndexByte(addr, '@'); i >= 0 {
+		return addr[:i]
+	}
+	return addr
 }
 
 // allowGreylist applies persistent greylisting only to unauthenticated inbound mail.
@@ -503,8 +565,13 @@ func (s *session) writeEHLO(extended bool) error {
 	}
 	// One write for the whole multi-line reply (as Postfix/Exim do): naive clients read the
 	// socket once after EHLO and otherwise take a leftover "250-..." line as the AUTH reply.
-	lines = append(lines, "250 2.0.0 Ok")
-	_, err := io.WriteString(s.conn, strings.Join(lines, "\r\n")+"\r\n")
+	// RFC 5321 4.1.1.1 / RFC 2034 3: the last line is an ehlo-keyword too, with no enhanced status code.
+	lines[len(lines)-1] = "250 " + strings.TrimPrefix(lines[len(lines)-1], "250-")
+	reply := strings.Join(lines, "\r\n") + "\r\n"
+	if replyHook != nil {
+		replyHook(s.curCmd, reply)
+	}
+	_, err := io.WriteString(s.conn, reply)
 	return err
 }
 
@@ -613,9 +680,6 @@ func resolveSubmissionMailFrom(p directory.Principal, mailFrom string) (string, 
 // placeholderSender reports MUAs that send a dummy envelope from instead of the account address.
 func placeholderSender(mailFrom string) bool {
 	mailFrom = strings.ToLower(strings.TrimSpace(mailFrom))
-	if mailFrom == "" {
-		return true
-	}
 	local, _, ok := strings.Cut(mailFrom, "@")
 	return ok && local == "unknown"
 }
@@ -646,10 +710,16 @@ func (s *session) cmdStartTLS() error {
 	s.conn = tlsConn
 	s.r = bufio.NewReader(tlsConn)
 	s.secure = true
+	// RFC 3207 4.2: forget everything learned before TLS; the client must send EHLO again.
+	s.reset()
+	s.heloDomain = ""
+	s.pipelining = false
+	s.authState = mailauth.SessionState{}
 	return nil
 }
 
 func (s *session) reset() {
+	s.inTxn = false
 	s.mailFrom = ""
 	s.mailRet = mail.RetNone
 	s.mailEnvid = ""
@@ -788,7 +858,7 @@ func (s *session) cmdBDAT(ctx context.Context, arg string) error {
 		s.reset()
 		return err
 	}
-	if s.mailFrom == "" || len(s.rcpt) == 0 {
+	if !s.inTxn || len(s.rcpt) == 0 {
 		return s.writef(replyBadSequence) // chunk already consumed, session stays in sync
 	}
 	s.bdatUsed = true
@@ -814,7 +884,7 @@ func (s *session) buildEnvelopeDSN(remotes []string) mail.EnvelopeDSN {
 		}
 	}
 	for _, addr := range remotes {
-		t, ok := remoteSet[strings.ToLower(addr)]
+		t, ok := remoteSet[addr]
 		notify := mail.NotifyDefault
 		orcpt := ""
 		if ok {
@@ -836,8 +906,15 @@ func (s *session) bumpReadDeadline() {
 	}
 }
 
+// replyHook sees every reply with the command it answers ("" before the first one); tests set it to
+// check replies against the RFC grammar.
+var replyHook func(cmd, reply string)
+
 func (s *session) writef(format string, args ...any) error {
 	line := fmt.Sprintf(format+"\r\n", args...)
+	if replyHook != nil {
+		replyHook(s.curCmd, line)
+	}
 	// Rejections are otherwise invisible to the operator (greylist, unknown user, filter, auth).
 	if line[0] == '4' || line[0] == '5' {
 		s.log.Info("smtp reply", "ip", s.clientIP(), "cmd", s.curCmd, "from", s.mailFrom, "reply", strings.TrimRight(line, "\r\n"), "submission", s.submission)
@@ -854,20 +931,42 @@ func (s *session) readLine() (string, error) {
 	} else {
 		s.bumpReadDeadline()
 	}
-	line, err := s.r.ReadString('\n')
-	if err != nil {
-		if stopping || (s.stopping != nil && s.stopping.Load()) {
-			_ = s.writef("421 4.3.2 %s Service shutting down", s.hostname)
-			return "", fmt.Errorf("smtp: server shutting down")
+	var line []byte
+	tooLong := false
+	for {
+		frag, err := s.r.ReadSlice('\n')
+		if len(line)+len(frag) > maxCommandLine {
+			tooLong = true // keep reading to the end of the line, but never buffer it
+		} else {
+			line = append(line, frag...)
 		}
-		return "", err
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		if err != nil {
+			if stopping || (s.stopping != nil && s.stopping.Load()) {
+				_ = s.writef("421 4.3.2 %s Service shutting down", s.hostname)
+				return "", fmt.Errorf("smtp: server shutting down")
+			}
+			return "", err
+		}
+		break
 	}
-	line = strings.TrimRight(line, "\r\n")
-	if len(line) > 512 {
-		return "", fmt.Errorf("smtp: line too long")
+	if tooLong {
+		return "", errLineTooLong
 	}
-	return line, nil
+	return strings.TrimRight(string(line), "\r\n"), nil
 }
+
+// maxCommandLine bounds a command or SASL line with its CRLF. RFC 5321 4.5.3.1 asks for as few limits as
+// possible (4.5.3.1.4's 512 is a floor) and RFC 4954 4 lets AUTH lines reach 12288 octets.
+const maxCommandLine = 12288 + 2
+
+// errLineTooLong reports a line over maxCommandLine; the session answers 500 and goes on.
+var errLineTooLong = errors.New("smtp: line too long")
+
+// cmdLineTooLong is the pseudo-command for an overlong line (a space never occurs in a parsed verb).
+const cmdLineTooLong = "LINE TOO LONG"
 
 func parseCommand(line string) (cmd, arg string) {
 	line = strings.TrimSpace(line)

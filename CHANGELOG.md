@@ -8,6 +8,20 @@
   `beaver plugins list` prints the installation id and each plugin's license status.
 - `beaver-license` (in the SDK, built with `make beaver-license`, not packaged) creates a vendor
   signing key and issues license files; any plugin vendor can use it with its own key.
+- SMTP accepts the null sender `MAIL FROM:<>` (RFC 5321 4.5.5): bounces and delivery reports from
+  other servers used to be refused with 501. Submission keeps a null sender null.
+- SMTP accepts `postmaster@` on every domain and a bare `RCPT TO:<Postmaster>` (RFC 5321 4.5.1).
+  Without a postmaster mailbox or alias the mail goes to the tenant admins, else the instance admins.
+- The local part of envelope addresses keeps its case (RFC 5321 2.4); only the domain is lowercased.
+  Local users still match case-insensitively.
+- SMTP EHLO reply ends with a keyword line instead of `250 2.0.0 Ok` (RFC 5321 4.1.1.1, RFC 2034).
+  The outbound client reads the last EHLO line too: it used to miss the extension listed there
+  (e.g. `STARTTLS` or `CHUNKING`).
+- SMTP command handling follows RFC 5321: MAIL needs EHLO/HELO first and is refused inside an open
+  transaction (503); a new EHLO resets the transaction; `EHLO` without a domain gets 501; unknown
+  commands get 500; unknown MAIL/RCPT parameters get 555; quoted local parts and source routes are
+  accepted; lines up to 12288 octets are read, longer ones get 500 instead of a dropped connection.
+  After STARTTLS the client must send EHLO again (RFC 3207 4.2). HELP lines all carry the enhanced code.
 
 ## 0.4.0
 

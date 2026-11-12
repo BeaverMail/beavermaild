@@ -242,7 +242,7 @@ func skipEHLO(t *testing.T, read *bufio.Reader) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(line) >= 7 && line[:7] == "250 2.0" {
+		if len(line) >= 4 && line[:4] == "250 " {
 			return
 		}
 	}

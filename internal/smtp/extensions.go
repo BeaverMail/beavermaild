@@ -44,17 +44,12 @@ func parseMailArg(arg string) (address string, declaredSize int, params MailPara
 	if len(arg) < 5 || !strings.EqualFold(arg[:5], "FROM:") {
 		return "", 0, MailParams{}, false
 	}
-	arg = strings.TrimSpace(arg[5:])
-	lt := strings.IndexByte(arg, '<')
-	if lt < 0 {
+	path, rest, ok := parsePath(arg[5:])
+	if !ok {
 		return "", 0, MailParams{}, false
 	}
-	gt := strings.IndexByte(arg[lt:], '>')
-	if gt < 0 {
-		return "", 0, MailParams{}, false
-	}
-	address = normalizeEnvelopeAddress(strings.TrimSpace(arg[lt+1 : lt+gt]))
-	for _, field := range strings.Fields(arg[lt+gt+1:]) {
+	address = normalizeEnvelopeAddress(path)
+	for _, field := range strings.Fields(rest) {
 		upper := strings.ToUpper(field)
 		key, val, hasVal := strings.Cut(upper, "=")
 		if !hasVal {
@@ -62,9 +57,7 @@ func parseMailArg(arg string) (address string, declaredSize int, params MailPara
 				params.SMTPUTF8 = true
 				continue
 			}
-			if strings.Contains(upper, "=") {
-				return "", 0, MailParams{}, false
-			}
+			params.Unsupported = replyParamUnknown
 			continue
 		}
 		switch key {
@@ -87,7 +80,7 @@ func parseMailArg(arg string) (address string, declaredSize int, params MailPara
 		case "HOLD":
 			params.Unsupported = replyParamNotSupported
 		default:
-			return "", 0, MailParams{}, false
+			params.Unsupported = replyParamUnknown // RFC 5321 4.1.1.11
 		}
 	}
 	return address, declaredSize, params, true
@@ -99,22 +92,18 @@ func parseRcptArg(arg string) (address string, params RcptParams, ok bool) {
 	if len(arg) < 3 || !strings.EqualFold(arg[:3], "TO:") {
 		return "", RcptParams{}, false
 	}
-	arg = strings.TrimSpace(arg[3:])
-	lt := strings.IndexByte(arg, '<')
-	if lt < 0 {
+	path, rest, ok := parsePath(arg[3:])
+	if !ok {
 		return "", RcptParams{}, false
 	}
-	gt := strings.IndexByte(arg[lt:], '>')
-	if gt < 0 {
-		return "", RcptParams{}, false
-	}
-	address = normalizeEnvelopeAddress(strings.TrimSpace(arg[lt+1 : lt+gt]))
+	address = normalizeEnvelopeAddress(path)
 	params.Notify = mail.NotifyDefault
-	for _, field := range strings.Fields(arg[lt+gt+1:]) {
+	for _, field := range strings.Fields(rest) {
 		upper := strings.ToUpper(field)
 		key, val, hasVal := strings.Cut(upper, "=")
 		if !hasVal {
-			return "", RcptParams{}, false
+			params.Unsupported = replyParamUnknown // RFC 5321 4.1.1.11
+			continue
 		}
 		switch key {
 		case "NOTIFY":
@@ -132,7 +121,7 @@ func parseRcptArg(arg string) (address string, params RcptParams, ok bool) {
 		case "SOLICIT":
 			params.Unsupported = replyParamNotSupported
 		default:
-			return "", RcptParams{}, false
+			params.Unsupported = replyParamUnknown // RFC 5321 4.1.1.11
 		}
 	}
 	return address, params, true
