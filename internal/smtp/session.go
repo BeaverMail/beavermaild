@@ -931,26 +931,13 @@ func (s *session) readLine() (string, error) {
 	} else {
 		s.bumpReadDeadline()
 	}
-	var line []byte
-	tooLong := false
-	for {
-		frag, err := s.r.ReadSlice('\n')
-		if len(line)+len(frag) > maxCommandLine {
-			tooLong = true // keep reading to the end of the line, but never buffer it
-		} else {
-			line = append(line, frag...)
+	line, tooLong, err := readLineBounded(s.r, maxCommandLine)
+	if err != nil {
+		if stopping || (s.stopping != nil && s.stopping.Load()) {
+			_ = s.writef("421 4.3.2 %s Service shutting down", s.hostname)
+			return "", fmt.Errorf("smtp: server shutting down")
 		}
-		if errors.Is(err, bufio.ErrBufferFull) {
-			continue
-		}
-		if err != nil {
-			if stopping || (s.stopping != nil && s.stopping.Load()) {
-				_ = s.writef("421 4.3.2 %s Service shutting down", s.hostname)
-				return "", fmt.Errorf("smtp: server shutting down")
-			}
-			return "", err
-		}
-		break
+		return "", err
 	}
 	if tooLong {
 		return "", errLineTooLong

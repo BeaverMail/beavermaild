@@ -14,7 +14,30 @@ import (
 	"github.com/BeaverMail/beavermaild/internal/mail"
 )
 
-const clientTimeout = 30 * time.Second
+// RFC 5321 4.5.3.2: per-command timeouts, never one for the whole transaction. Every read and write
+// gets its own deadline: 5 minutes for the greeting and commands (4.5.3.2.1-3), 10 minutes once the
+// transaction starts, which covers each data block and the wait after the final "." (4.5.3.2.6).
+const (
+	clientDialTimeout    = 30 * time.Second
+	clientCommandTimeout = 5 * time.Minute
+	clientDataTimeout    = 10 * time.Minute
+)
+
+// timeoutConn renews the deadline on every Read and Write, so a slow but live peer never times out.
+type timeoutConn struct {
+	net.Conn
+	d time.Duration
+}
+
+func (c *timeoutConn) Read(p []byte) (int, error) {
+	_ = c.Conn.SetReadDeadline(time.Now().Add(c.d))
+	return c.Conn.Read(p)
+}
+
+func (c *timeoutConn) Write(p []byte) (int, error) {
+	_ = c.Conn.SetWriteDeadline(time.Now().Add(c.d))
+	return c.Conn.Write(p)
+}
 
 // ClientOptions configures STARTTLS, AUTH, TLS verify, and MX opportunistic TLS for outbound Send.
 type ClientOptions struct {
@@ -46,13 +69,15 @@ func SendReply(ctx context.Context, addr, mailFrom, rcptTo string, data []byte, 
 		host = addr
 	}
 
-	dialer := net.Dialer{Timeout: clientTimeout}
-	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	dialer := net.Dialer{Timeout: clientDialTimeout}
+	raw, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return "", fmt.Errorf("smtp client dial: %w", err)
 	}
-	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(clientTimeout))
+	defer raw.Close()
+	defer context.AfterFunc(ctx, func() { _ = raw.Close() })() // shutdown must not wait for the timeouts
+	tc := &timeoutConn{Conn: raw, d: clientCommandTimeout}
+	var conn net.Conn = tc
 
 	r := bufio.NewReader(conn)
 	if err := expectCode(r, 220); err != nil {
@@ -88,6 +113,7 @@ func SendReply(ctx context.Context, addr, mailFrom, rcptTo string, data []byte, 
 		}
 	}
 
+	tc.d = clientDataTimeout
 	mailLine := mailFromLine(mailFrom, data, caps)
 	rcptLine := fmt.Sprintf("RCPT TO:<%s>", rcptTo)
 

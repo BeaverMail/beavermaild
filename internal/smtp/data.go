@@ -55,17 +55,17 @@ func readDATA(r *bufio.Reader, limits DataLimits, beforeRead ...func()) ([]byte,
 		if refresh != nil {
 			refresh()
 		}
-		line, err := r.ReadBytes('\n')
+		line, tooLong, err := readLineBounded(r, limits.MaxLineBytes+2)
 		if err != nil {
 			return nil, err
+		}
+		if tooLong {
+			return nil, ErrLineTooLong
 		}
 		if len(line) < 2 || line[len(line)-2] != '\r' {
 			return nil, ErrBareLF
 		}
 		content := line[:len(line)-2]
-		if len(content) > limits.MaxLineBytes {
-			return nil, ErrLineTooLong
-		}
 		if bytes.Equal(content, []byte(".")) {
 			break
 		}
@@ -81,6 +81,26 @@ func readDATA(r *bufio.Reader, limits DataLimits, beforeRead ...func()) ([]byte,
 	return buf.Bytes(), nil
 }
 
+// readLineBounded reads through the next '\n' but keeps at most max bytes of it: a longer line is
+// consumed to its end, reported with tooLong, and never buffered whole.
+func readLineBounded(r *bufio.Reader, max int) (line []byte, tooLong bool, err error) {
+	for {
+		frag, err := r.ReadSlice('\n')
+		if len(line)+len(frag) > max {
+			tooLong = true
+		} else {
+			line = append(line, frag...)
+		}
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		if tooLong {
+			line = nil
+		}
+		return line, tooLong, err
+	}
+}
+
 // drainDATA discards the remainder of a failed DATA phase until the end marker.
 func drainDATA(r *bufio.Reader, beforeRead ...func()) {
 	var refresh func()
@@ -91,14 +111,12 @@ func drainDATA(r *bufio.Reader, beforeRead ...func()) {
 		if refresh != nil {
 			refresh()
 		}
-		line, err := r.ReadBytes('\n')
+		line, _, err := readLineBounded(r, 3)
 		if err != nil {
 			return
 		}
-		if len(line) >= 3 && line[len(line)-2] == '\r' && line[len(line)-1] == '\n' {
-			if bytes.Equal(line[:len(line)-2], []byte(".")) {
-				return
-			}
+		if bytes.Equal(line, []byte(".\r\n")) {
+			return
 		}
 	}
 }

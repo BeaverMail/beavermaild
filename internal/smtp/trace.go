@@ -34,8 +34,12 @@ func (s *session) receivedField(now time.Time) string {
 			proto += "A"
 		}
 	}
+	ip := s.clientIP()
+	if strings.Contains(ip, ":") {
+		ip = "IPv6:" + ip // RFC 5321 4.1.3 IPv6-address-literal
+	}
 	v := fmt.Sprintf("from %s (%s [%s])\r\n\tby %s (BeaverMail) with %s id %s",
-		traceToken(s.heloDomain), traceToken(ptr), s.clientIP(), s.hostname, proto, s.currentFilterID())
+		traceToken(s.heloDomain), traceToken(ptr), ip, s.hostname, proto, s.currentFilterID())
 	if tc, ok := s.conn.(*tls.Conn); ok {
 		st := tc.ConnectionState()
 		v += fmt.Sprintf("\r\n\t(version=%s cipher=%s)", tls.VersionName(st.Version), tls.CipherSuiteName(st.CipherSuite))

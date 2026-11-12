@@ -2,6 +2,8 @@ package smtp_test
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/BeaverMail/beavermaild/internal/smtp"
@@ -18,18 +20,15 @@ func TestDomainFromAddress(t *testing.T) {
 	}
 }
 
+// example.com publishes a null MX (RFC 7505): no host to try, a permanent failure.
 func TestLookupHostsExampleCOM(t *testing.T) {
 	t.Parallel()
 	hosts, err := smtp.LookupHosts(context.Background(), "example.com")
-	if err != nil {
-		t.Skipf("mx lookup: %v", err)
-	}
-	if len(hosts) == 0 {
-		t.Fatal("no hosts")
-	}
-	for _, h := range hosts {
-		if h == "" {
-			t.Fatalf("empty host in %v", hosts)
+	var de *smtp.DeliveryError
+	if !errors.As(err, &de) || !de.Permanent {
+		if err != nil && strings.Contains(err.Error(), "lookup") {
+			t.Skipf("mx lookup: %v", err)
 		}
+		t.Fatalf("hosts %v err %v, want permanent null MX", hosts, err)
 	}
 }

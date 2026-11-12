@@ -22,6 +22,13 @@
   commands get 500; unknown MAIL/RCPT parameters get 555; quoted local parts and source routes are
   accepted; lines up to 12288 octets are read, longer ones get 500 instead of a dropped connection.
   After STARTTLS the client must send EHLO again (RFC 3207 4.2). HELP lines all carry the enhanced code.
+- Outbound delivery to a domain with a null MX (`MX 0 .`, RFC 7505) fails permanently at once; it used
+  to try localhost. A domain with no MX but an address record is delivered to directly (implicit MX,
+  RFC 5321 5.1) instead of bouncing. MX hosts of equal preference are tried in random order.
+- The outbound SMTP client times out per read/write (5 minutes, 10 once the transaction starts) instead
+  of after 30 seconds for the whole session, so large messages and slow servers no longer fail.
+- SMTP DATA lines are read with bounded memory; an IPv6 client address in `Received` carries the
+  `IPv6:` tag (RFC 5321 4.1.3).
 
 ## 0.4.0
 
