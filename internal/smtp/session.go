@@ -17,6 +17,7 @@ import (
 	"github.com/BeaverMail/beavermaild/internal/directory"
 	"github.com/BeaverMail/beavermaild/internal/mail"
 	"github.com/BeaverMail/beavermaild/internal/mailauth"
+	"github.com/BeaverMail/beavermaild/internal/sasl"
 	"github.com/BeaverMail/beavermaild/internal/security"
 	"github.com/BeaverMail/beavermaild/internal/storage"
 	"github.com/BeaverMail/beavermaild/internal/tlsload"
@@ -624,13 +625,17 @@ func (s *session) writeEHLO(extended bool) error {
 	return err
 }
 
-// cmdAuth handles AUTH on submission listeners after TLS is active.
+// cmdAuth handles AUTH on submission listeners after TLS is active (RFC 4954 4).
 func (s *session) cmdAuth(ctx context.Context, arg string) error {
 	if !s.submission {
 		return s.writef(replyNotImplemented)
 	}
 	if !s.secure {
 		return s.writef(replyTLSRequiredAuth)
+	}
+	// One successful AUTH per session, and none inside a mail transaction (both MUST, 503).
+	if s.principal.AccountID != 0 || s.inTxn {
+		return s.writef(replyBadSequence)
 	}
 	mech, rest := splitAuthArg(arg)
 	switch {
@@ -643,48 +648,87 @@ func (s *session) cmdAuth(ctx context.Context, arg string) error {
 	}
 }
 
-func (s *session) authPlain(ctx context.Context, credLine string) error {
-	credLine = strings.TrimSpace(credLine)
-	if credLine == "" {
-		if err := s.writef("334 "); err != nil {
-			return err
-		}
-		line, err := s.readLine()
-		if err != nil {
-			return err
-		}
-		credLine = line
+// SASL exchange replies (RFC 4954 4).
+const (
+	replyAuthCancelled = "501 5.0.0 Authentication cancelled"
+	replyAuthBase64    = "501 5.5.2 Cannot decode response"
+	replyAuthLineLong  = "500 5.5.6 Authentication exchange line is too long"
+	replyAuthBadCreds  = "535 5.7.8 Authentication credentials invalid"
+)
+
+// authResponse sends challenge and reads the client's answer. It returns the decoded bytes, or
+// the reply that ends the exchange: "*" cancels (501), anything not BASE64 is refused (501), and a
+// line past the authentication buffer fails the command (500 5.5.6), not the session.
+func (s *session) authResponse(challenge string) (data []byte, reply string, err error) {
+	if err := s.writef("334 " + challenge); err != nil {
+		return nil, "", err
 	}
-	user, pass, ok := decodeAuthPlain(credLine)
-	if !ok {
-		return s.writef("535 5.7.8 Authentication credentials invalid")
+	line, err := s.readLine()
+	if errors.Is(err, errLineTooLong) {
+		return nil, replyAuthLineLong, nil
+	} else if err != nil {
+		return nil, "", err
+	}
+	if strings.TrimSpace(line) == sasl.Cancel {
+		return nil, replyAuthCancelled, nil
+	}
+	if data, err = sasl.DecodeResponse(line); err != nil {
+		return nil, replyAuthBase64, nil
+	}
+	return data, "", nil
+}
+
+func (s *session) authPlain(ctx context.Context, initial string) error {
+	var data []byte
+	if initial = strings.TrimSpace(initial); initial != "" {
+		var err error
+		if data, err = sasl.DecodeResponse(initial); err != nil {
+			return s.writef(replyAuthBase64)
+		}
+	} else {
+		var reply string
+		var err error
+		if data, reply, err = s.authResponse(""); err != nil || reply != "" {
+			if err != nil {
+				return err
+			}
+			return s.writef(reply)
+		}
+	}
+	authzid, user, pass, err := sasl.ParsePlain(data)
+	if err != nil {
+		return s.writef(replyAuthBadCreds)
+	}
+	if !sasl.AuthorizedAs(authzid, user) {
+		return s.writef(replyAuthBadCreds) // RFC 4616 2: no rule lets one user act as another
 	}
 	return s.finishAuth(ctx, user, pass)
 }
 
-func (s *session) authLogin(ctx context.Context, credLine string) error {
-	if strings.TrimSpace(credLine) != "" {
-		return s.writef("535 5.7.8 Authentication credentials invalid")
+// authLogin is the LOGIN mechanism (draft-murchison-sasl-login): the server asks first, so an
+// initial response is refused with 501 (RFC 4954 4).
+func (s *session) authLogin(ctx context.Context, initial string) error {
+	if strings.TrimSpace(initial) != "" {
+		return s.writef("501 5.5.2 LOGIN takes no initial response")
 	}
-	if err := s.writef("334 " + base64.StdEncoding.EncodeToString([]byte("Username:"))); err != nil {
-		return err
+	user, reply, err := s.authResponse(base64.StdEncoding.EncodeToString([]byte("Username:")))
+	if err != nil || reply != "" {
+		if err != nil {
+			return err
+		}
+		return s.writef(reply)
 	}
-	userLine, err := s.readLine()
-	if err != nil {
-		return err
+	if len(user) == 0 {
+		return s.writef(replyAuthBadCreds)
 	}
-	user := decodeSMTPBase64(userLine)
-	if user == "" {
-		return s.writef("535 5.7.8 Authentication credentials invalid")
+	pass, reply, err := s.authResponse(base64.StdEncoding.EncodeToString([]byte("Password:")))
+	if err != nil || reply != "" {
+		if err != nil {
+			return err
+		}
+		return s.writef(reply)
 	}
-	if err := s.writef("334 " + base64.StdEncoding.EncodeToString([]byte("Password:"))); err != nil {
-		return err
-	}
-	passLine, err := s.readLine()
-	if err != nil {
-		return err
-	}
-	return s.finishAuth(ctx, user, decodeSMTPBase64(passLine))
+	return s.finishAuth(ctx, string(user), string(pass))
 }
 
 func (s *session) finishAuth(ctx context.Context, user, pass string) error {
@@ -700,7 +744,7 @@ func (s *session) finishAuth(ctx context.Context, user, pass string) error {
 			if errors.Is(err, directory.ErrInvalidCredentials) {
 				s.authGate.RecordAuthFailure(ip, user)
 			}
-			return s.writef("535 5.7.8 Authentication credentials invalid")
+			return s.writef(replyAuthBadCreds)
 		}
 		return err
 	}

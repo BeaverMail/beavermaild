@@ -166,7 +166,7 @@ func SendReply(ctx context.Context, addr, mailFrom, rcptTo string, data []byte, 
 	}
 
 	tc.d = clientDataTimeout
-	mailLine := mailFromLine(mailFrom, data, caps)
+	mailLine := mailFromLine(mailFrom, data, caps, opts.User != "" && opts.Password != "")
 	rcptLine := fmt.Sprintf("RCPT TO:<%s>", rcptTo)
 
 	if caps.Pipelining {
@@ -179,10 +179,16 @@ func wantSTARTTLS(opts ClientOptions) bool {
 	return opts.STARTTLS || opts.OpportunisticSTARTTLS || opts.MTASTSRequireTLS
 }
 
-func mailFromLine(mailFrom string, data []byte, caps clientCaps) string {
+// mailFromLine builds MAIL FROM. After authenticating to the server it adds AUTH=<>: RFC 4954 5
+// requires it when relaying to a server one has authenticated to, and this server vouches for
+// no submitter identity.
+func mailFromLine(mailFrom string, data []byte, caps clientCaps, authenticated bool) string {
 	mailLine := "MAIL FROM:<>"
 	if strings.TrimSpace(mailFrom) != "" {
 		mailLine = fmt.Sprintf("MAIL FROM:<%s>", mailFrom)
+	}
+	if authenticated {
+		mailLine += " AUTH=<>"
 	}
 	if len(data) > 0 {
 		mailLine += fmt.Sprintf(" SIZE=%d", len(data))

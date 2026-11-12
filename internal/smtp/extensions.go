@@ -2,7 +2,6 @@
 package smtp
 
 import (
-	"encoding/base64"
 	"strconv"
 	"strings"
 
@@ -25,18 +24,27 @@ type RcptParams struct {
 	Unsupported string
 }
 
-// decodeSMTPBase64 decodes a client base64 line; raw input is accepted on decode failure.
-func decodeSMTPBase64(line string) string {
-	line = strings.TrimSpace(line)
-	if line == "" {
-		return ""
+// validXtext reports whether v is an xtext (RFC 3461 4): characters "!" to "~" except "+" and
+// "=", or "+" followed by two upper-case hex digits.
+func validXtext(v string) bool {
+	if v == "" {
+		return false
 	}
-	raw, err := base64.StdEncoding.DecodeString(line)
-	if err != nil {
-		return line
+	for i := 0; i < len(v); i++ {
+		switch c := v[i]; {
+		case c == '+':
+			if i+2 >= len(v) || !isUpperHex(v[i+1]) || !isUpperHex(v[i+2]) {
+				return false
+			}
+			i += 2
+		case c < '!' || c > '~' || c == '=':
+			return false
+		}
 	}
-	return string(raw)
+	return true
 }
+
+func isUpperHex(c byte) bool { return '0' <= c && c <= '9' || 'A' <= c && c <= 'F' }
 
 // parseMailArg extracts the envelope sender, SIZE, and DSN parameters from MAIL FROM.
 func parseMailArg(arg string) (address string, declaredSize int, params MailParams, ok bool) {
@@ -77,6 +85,13 @@ func parseMailArg(arg string) (address string, declaredSize int, params MailPara
 			params.Envid = field[len(key)+1:]
 		case "BODY":
 			params.Body = val
+		case "AUTH":
+			// RFC 4954 5: a server advertising AUTH MUST accept the parameter, logged in or not. This
+			// server trusts no client to assert another submitter, so it parses and drops it, which
+			// the RFC allows (the message is then treated as AUTH=<>).
+			if !validXtext(val) {
+				return "", 0, MailParams{}, false
+			}
 		case "HOLD":
 			params.Unsupported = replyParamNotSupported
 		default:

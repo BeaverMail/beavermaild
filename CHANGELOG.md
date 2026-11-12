@@ -118,6 +118,18 @@
     addresses are never encoded.
   - URLFETCH BINARY BODYPARTSTRUCTURE reports 0 lines for decoded data, as Dovecot does
     (imaptest urlauth-binary); raw parts keep their line count.
+- SMTP AUTH conformance (RFC 4954, RFC 4616), with one SASL decoder shared with IMAP
+  (`internal/sasl`):
+  - Responses must be BASE64 (`=` is empty): anything else gets 501 5.5.2 instead of being read as
+    text; PLAIN needs three fields, and an authorization identity other than the user fails (535).
+  - `*` cancels with 501 in PLAIN and LOGIN. In LOGIN it used to be ignored: the server asked for
+    the password and took the client's next command as one.
+  - A second AUTH after logging in, or an AUTH inside a mail transaction, gets 503 (the open
+    transaction used to be dropped); LOGIN with an initial response gets 501.
+  - An authentication line longer than 12288 octets gets 500 5.5.6; the session goes on (it was
+    closed).
+  - MAIL FROM accepts the AUTH= parameter (it got 555) and drops it, as RFC 4954 5 allows; when
+    relaying through a server it authenticates to, the client sends AUTH=<>.
   - SEARCH BODY and TEXT also match the decoded text of base64 and quoted-printable parts, and TEXT
     the decoded RFC 2047 header words (no charset conversion: UTF-8 and US-ASCII parts).
 

@@ -218,6 +218,7 @@ func TestClientRelaySTARTTLSAuth(t *testing.T) {
 	defer ln.Close()
 
 	var authed bool
+	var mailLine string
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -259,6 +260,15 @@ func TestClientRelaySTARTTLSAuth(t *testing.T) {
 		}
 		reply(tlsConn, "235 OK\r\n")
 		for _, cmd := range []string{"MAIL", "RCPT", "DATA"} {
+			if cmd == "MAIL" {
+				l, err := tr.ReadString('\n')
+				if err != nil {
+					return
+				}
+				mailLine = strings.TrimSpace(l)
+				reply(tlsConn, "250 OK\r\n")
+				continue
+			}
 			if err := readPrefix(tr, cmd); err != nil {
 				return
 			}
@@ -292,6 +302,10 @@ func TestClientRelaySTARTTLSAuth(t *testing.T) {
 	<-done
 	if !authed {
 		t.Fatal("AUTH not verified")
+	}
+	// RFC 4954 5: relaying to a server it authenticated to, the client vouches for no submitter.
+	if !strings.Contains(mailLine, " AUTH=<>") {
+		t.Fatalf("MAIL after AUTH: %q, want AUTH=<>", mailLine)
 	}
 }
 
