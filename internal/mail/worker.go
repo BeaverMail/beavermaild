@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"strings"
 	"sync"
 	"time"
@@ -37,6 +38,12 @@ type Worker struct {
 	policy QueuePolicy
 
 	lastPurge time.Time
+
+	// In-flight deliveries, by entry and by destination domain (see drain).
+	mu       sync.Mutex
+	inflight map[uint32]bool
+	perDest  map[string]int
+	wg       sync.WaitGroup
 }
 
 // NewWorker returns a queue worker. remote may be nil when only local delivery is needed.
@@ -55,13 +62,15 @@ func NewWorker(log *slog.Logger, queue *Queue, inbox *Inbox, dir *directory.Loca
 	}
 }
 
-// Run polls the queue until ctx is canceled.
+// Run polls the queue until ctx is canceled, then waits for the deliveries in flight (their
+// connections close on cancellation).
 func (w *Worker) Run(ctx context.Context) {
 	ticker := time.NewTicker(w.policy.RunDelay)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
+			w.wg.Wait()
 			return
 		case <-ticker.C:
 			w.drain(ctx)
@@ -69,43 +78,73 @@ func (w *Worker) Run(ctx context.Context) {
 	}
 }
 
-// ProcessOnce drains pending queue entries once (for tests).
+// ProcessOnce starts one pass and waits for its deliveries (for tests).
 func (w *Worker) ProcessOnce(ctx context.Context) {
 	w.drain(ctx)
+	w.wg.Wait()
 }
 
+// Outbound concurrency. A pass never waits for the deliveries it starts: an entry stays "in flight"
+// until its goroutine ends, and later passes start whatever is free. So a slow or tarpitting remote
+// (RFC 5321 timeouts reach 10 minutes per command) holds only its own slots, never the queue, and at
+// most OutboundPerDestination of them (Postfix: 20 per domain out of 100).
+const (
+	OutboundConcurrency    = 16
+	OutboundPerDestination = 4
+)
+
+// drain starts a delivery for every pending entry that is not already in flight, within the limits.
 func (w *Worker) drain(ctx context.Context) {
 	entries, err := w.queue.ListPending(ctx)
 	if err != nil {
 		w.log.Warn("queue list", slog.Any("err", err))
 		return
 	}
-	// Entries go out in parallel: one slow or tarpitting remote (RFC 5321 timeouts reach 10 minutes
-	// per command) must not hold back every other message. Each entry has its own goroutine, so its
-	// state is never shared; the pass ends when all of them are done.
-	sem := make(chan struct{}, OutboundConcurrency)
-	var wg sync.WaitGroup
+	w.mu.Lock()
+	if w.inflight == nil {
+		w.inflight = map[uint32]bool{}
+		w.perDest = map[string]int{}
+	}
 	for _, e := range entries {
-		if ctx.Err() != nil {
+		if ctx.Err() != nil || len(w.inflight) >= OutboundConcurrency {
 			break
 		}
-		sem <- struct{}{}
-		wg.Add(1)
+		dest := destination(e.Msg)
+		if w.inflight[e.ID] || w.perDest[dest] >= OutboundPerDestination {
+			continue
+		}
+		w.inflight[e.ID] = true
+		w.perDest[dest]++
+		w.wg.Add(1)
 		go func() {
-			defer func() { <-sem; wg.Done() }()
+			defer func() {
+				w.mu.Lock()
+				delete(w.inflight, e.ID)
+				w.perDest[dest]--
+				w.mu.Unlock()
+				w.wg.Done()
+			}()
 			if err := w.deliverEntry(ctx, e); err != nil && ctx.Err() == nil {
 				w.log.Warn("queue deliver", "id", e.ID, slog.Any("err", err))
 			}
 		}()
 	}
-	wg.Wait()
+	w.mu.Unlock()
 	w.purgeCompleted(ctx, time.Now())
 }
 
-// OutboundConcurrency is how many queue entries are delivered at once.
-// shortcut: one global limit, no per-destination cap (Postfix: 20 per domain, 100 total); add one if a
-// single slow domain with many queued messages starts filling every slot.
-const OutboundConcurrency = 16
+// destination is the domain of the entry's first pending recipient: the concurrency bucket.
+func destination(msg storage.QueueMessage) string {
+	for _, r := range msg.Recipients {
+		if recipientPending(r) {
+			if at := strings.LastIndexByte(r.Address, '@'); at >= 0 {
+				return strings.ToLower(r.Address[at+1:])
+			}
+			return ""
+		}
+	}
+	return ""
+}
 
 // purgeInterval bounds how often finished entries are scanned for expiry.
 const purgeInterval = time.Minute
@@ -121,8 +160,11 @@ func (w *Worker) purgeCompleted(ctx context.Context, now time.Time) {
 		w.log.Warn("queue list", slog.Any("err", err))
 		return
 	}
+	w.mu.Lock()
+	busy := maps.Clone(w.inflight)
+	w.mu.Unlock()
 	for _, e := range entries {
-		if pendingRecipients(e.Msg) > 0 {
+		if pendingRecipients(e.Msg) > 0 || busy[e.ID] {
 			continue
 		}
 		if e.Msg.Done == 0 || now.Sub(time.UnixMilli(e.Msg.Done)) > w.policy.KeepCompleted {
