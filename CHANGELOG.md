@@ -130,6 +130,9 @@
     closed).
   - MAIL FROM accepts the AUTH= parameter (it got 555) and drops it, as RFC 4954 5 allows; when
     relaying through a server it authenticates to, the client sends AUTH=<>.
+- SMTP STARTTLS (RFC 3207): `STARTTLS` with a parameter gets 501. Submission before TLS answers
+  530 5.7.0 to every command but NOOP, EHLO, STARTTLS and QUIT (AUTH keeps 538 5.7.11); HELO,
+  RSET, VRFY and HELP used to answer in clear.
   - SEARCH BODY and TEXT also match the decoded text of base64 and quoted-printable parts, and TEXT
     the decoded RFC 2047 header words (no charset conversion: UTF-8 and US-ASCII parts).
 

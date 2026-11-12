@@ -33,7 +33,6 @@ type session struct {
 	tls   *tlsload.Certs
 
 	secure      bool
-	tlsRequired bool
 	vrfyEnabled bool
 	submission  bool
 	pipelining  bool
@@ -97,7 +96,7 @@ type smtpCommand struct {
 	arg string
 }
 
-func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *mail.Inbox, queue *mail.Queue, certs *tlsload.Certs, secure, tlsRequired, vrfyEnabled, submission bool, limits DataLimits, filter MessageFilter, filterTmpDir string, filterTimeoutMs int, mailAuth *mailauth.Verifier, gate security.AuthGate, sendGate security.SendGate, greylist *Greylist, asnLookup *ASNLookup, readTimeout time.Duration) *session {
+func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *mail.Inbox, queue *mail.Queue, certs *tlsload.Certs, secure, vrfyEnabled, submission bool, limits DataLimits, filter MessageFilter, filterTmpDir string, filterTimeoutMs int, mailAuth *mailauth.Verifier, gate security.AuthGate, sendGate security.SendGate, greylist *Greylist, asnLookup *ASNLookup, readTimeout time.Duration) *session {
 	if filter == nil {
 		filter = NopFilter{}
 	}
@@ -119,7 +118,6 @@ func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *ma
 		queue:           queue,
 		tls:             certs,
 		secure:          secure,
-		tlsRequired:     tlsRequired,
 		vrfyEnabled:     vrfyEnabled,
 		submission:      submission,
 		dataLimits:      limits.withDefaults(),
@@ -218,6 +216,16 @@ func pipelineContinues(cmd string) bool {
 }
 
 func (s *session) dispatch(ctx context.Context, cmd, arg string, mailBlocked bool) (stop, blockMail bool, err error) {
+	// Submission without TLS is of no use (AUTH needs it): like a server that requires TLS, answer
+	// every command but NOOP, EHLO, STARTTLS and QUIT with 530 (RFC 3207 4). AUTH keeps the more
+	// specific 538 5.7.11 of RFC 4954 6.
+	if s.submission && !s.secure && s.tls != nil {
+		switch cmd {
+		case "NOOP", "EHLO", "STARTTLS", "QUIT", "AUTH":
+		default:
+			return false, cmd == "MAIL", s.writef(replyTLSRequired)
+		}
+	}
 	switch cmd {
 	case "EHLO", "HELO":
 		// RFC 5321 4.1.4: a bad EHLO gets 501 and leaves the state alone; a good one resets like RSET.
@@ -234,6 +242,9 @@ func (s *session) dispatch(ctx context.Context, cmd, arg string, mailBlocked boo
 		}
 		return false, false, s.writeEHLO(cmd == "EHLO")
 	case "STARTTLS":
+		if strings.TrimSpace(arg) != "" {
+			return false, false, s.writef("501 5.5.4 Syntax: STARTTLS takes no parameters") // RFC 3207 4
+		}
 		return false, false, s.cmdStartTLS()
 	case "AUTH":
 		return false, false, s.cmdAuth(ctx, arg)

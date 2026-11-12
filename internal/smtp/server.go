@@ -21,7 +21,6 @@ import (
 // Options configures optional TLS and protocol knobs for SMTP listeners.
 type Options struct {
 	Certs           *tlsload.Certs
-	TLSRequired     bool
 	VRFYEnabled     bool
 	DataLimits      DataLimits
 	Filter          MessageFilter
@@ -48,7 +47,6 @@ type Server struct {
 	inbox               *mail.Inbox
 	queue               *mail.Queue
 	certs               *tlsload.Certs
-	tlsRequired         bool
 	vrfyEnabled         bool
 	dataLimits          DataLimits
 	filter              MessageFilter
@@ -86,7 +84,6 @@ func NewServer(log *slog.Logger, addr string, dir *directory.Local, inbox *mail.
 		inbox:               inbox,
 		queue:               queue,
 		certs:               opts.Certs,
-		tlsRequired:         opts.TLSRequired,
 		vrfyEnabled:         opts.VRFYEnabled,
 		dataLimits:          opts.DataLimits.withDefaults(),
 		filter:              opts.Filter,
@@ -236,7 +233,7 @@ const drainTimeout = 5 * time.Second
 
 func (s *Server) serveConn(ctx context.Context, conn net.Conn, secure, submission bool, lim *security.ConnLimiter) {
 	defer lim.Release()
-	sess := newSession(s.log, conn, s.dir, s.inbox, s.queue, s.certs, secure, s.tlsRequired, s.vrfyEnabled, submission, s.dataLimits, s.filter, s.filterTmpDir, s.filterTimeoutMs, s.mailAuth, s.authGate, s.sendGate, s.greylist, s.asnLookup, s.readTimeout)
+	sess := newSession(s.log, conn, s.dir, s.inbox, s.queue, s.certs, secure, s.vrfyEnabled, submission, s.dataLimits, s.filter, s.filterTmpDir, s.filterTimeoutMs, s.mailAuth, s.authGate, s.sendGate, s.greylist, s.asnLookup, s.readTimeout)
 	// Close the session's current conn: after STARTTLS it is the TLS conn, whose Close sends
 	// close_notify (closing only the raw TCP conn makes peers log "TLS not properly terminated").
 	defer func() { _ = sess.conn.Close() }()
