@@ -52,22 +52,25 @@ func (d *Local) Authenticate(ctx context.Context, email, password string) (Princ
 	// An unknown or malformed user is a failed login like a wrong password: callers answer it the
 	// same way and count it toward the attempt limit.
 	if _, _, err := splitEmail(email); err != nil {
+		_ = verifyPassword(dummyHash(), password)
 		return Principal{}, ErrInvalidCredentials
 	}
 	acc, dom, err := d.lookupAccount(ctx, email)
 	if errors.Is(err, ErrNotFound) {
+		_ = verifyPassword(dummyHash(), password)
 		return Principal{}, ErrInvalidCredentials
 	} else if err != nil {
 		return Principal{}, err
 	}
 	if !acc.Active {
+		_ = verifyPassword(dummyHash(), password)
 		return Principal{}, ErrInactive
 	}
 	cred, err := d.getCred(ctx, acc.ID)
 	if err != nil {
 		return Principal{}, err
 	}
-	if err := VerifyPassword(cred.PasswordHash, password); err != nil {
+	if err := verifyPassword(cred.PasswordHash, password); err != nil {
 		return Principal{}, ErrInvalidCredentials
 	}
 	// Suspension is checked after the password so it is not revealed to someone without it.
