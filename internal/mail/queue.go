@@ -91,6 +91,7 @@ func (q *Queue) EnqueueDSN(ctx context.Context, env EnvelopeDSN, raw []byte) (ui
 		Created:    uint64(time.Now().Unix()),
 		BlobHash:   hash,
 		ReturnPath: strings.TrimSpace(env.ReturnPath),
+		SignAs:     strings.TrimSpace(env.SignAs),
 		Recipients: rcpts,
 		Size:       uint64(len(raw)),
 		Ret:        string(env.Ret),
@@ -283,32 +284,44 @@ func (q *Queue) LoadRaw(ctx context.Context, msg storage.QueueMessage) ([]byte, 
 	return q.blobs.Get(ctx, msg.BlobHash)
 }
 
+// nextQueueID increments the queue counter with a CAS, like directory ids: concurrent SMTP sessions,
+// the worker's DSNs and the CLI must never get the same id (the second entry would overwrite the first).
 func (q *Queue) nextQueueID(ctx context.Context) (uint32, error) {
 	key := storage.AppendKey(nil, storage.SubspaceLookup, 0, 0, 0, []byte("meta/queue"))
-	wire, err := q.store.Get(ctx, key)
-	var next uint32 = 1
-	if err == nil {
-		if err := storage.UnmarshalPersist(wire, &next); err != nil {
+	suffix := storage.BatchSuffix(0, 0, []byte("meta/queue"))
+	for range 64 {
+		wire, err := q.store.Get(ctx, key)
+		var next uint32 = 1
+		if err == nil {
+			if err := storage.UnmarshalPersist(wire, &next); err != nil {
+				return 0, err
+			}
+			next++
+		} else if errors.Is(err, storage.ErrNotFound) {
+			wire = nil
+		} else {
 			return 0, err
 		}
-		next++
-	} else if !errors.Is(err, storage.ErrNotFound) {
-		return 0, err
+		encoded, err := storage.MarshalPersist(nil, 1, next)
+		if err != nil {
+			return 0, err
+		}
+		batch := storage.NewBatch().WithAccount(0)
+		if err := batch.Assert(storage.SubspaceLookup, suffix, wire); err != nil {
+			return 0, err
+		}
+		if err := batch.Set(storage.SubspaceLookup, suffix, encoded); err != nil {
+			return 0, err
+		}
+		err = q.store.Commit(ctx, batch)
+		if err == nil {
+			return next, nil
+		}
+		if !errors.Is(err, storage.ErrCASConflict) {
+			return 0, err
+		}
 	}
-
-	encoded, err := storage.MarshalPersist(nil, 1, next)
-	if err != nil {
-		return 0, err
-	}
-	batch := storage.NewBatch().WithAccount(0)
-	suffix := storage.BatchSuffix(0, 0, []byte("meta/queue"))
-	if err := batch.Set(storage.SubspaceLookup, suffix, encoded); err != nil {
-		return 0, err
-	}
-	if err := q.store.Commit(ctx, batch); err != nil {
-		return 0, err
-	}
-	return next, nil
+	return 0, fmt.Errorf("mail: queue id: too much contention")
 }
 
 func pendingRecipients(msg storage.QueueMessage) int {

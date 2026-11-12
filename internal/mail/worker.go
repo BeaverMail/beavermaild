@@ -2,11 +2,13 @@
 package mail
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/BeaverMail/beavermaild/internal/directory"
@@ -78,13 +80,32 @@ func (w *Worker) drain(ctx context.Context) {
 		w.log.Warn("queue list", slog.Any("err", err))
 		return
 	}
+	// Entries go out in parallel: one slow or tarpitting remote (RFC 5321 timeouts reach 10 minutes
+	// per command) must not hold back every other message. Each entry has its own goroutine, so its
+	// state is never shared; the pass ends when all of them are done.
+	sem := make(chan struct{}, OutboundConcurrency)
+	var wg sync.WaitGroup
 	for _, e := range entries {
-		if err := w.deliverEntry(ctx, e); err != nil && ctx.Err() == nil {
-			w.log.Warn("queue deliver", "id", e.ID, slog.Any("err", err))
+		if ctx.Err() != nil {
+			break
 		}
+		sem <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer func() { <-sem; wg.Done() }()
+			if err := w.deliverEntry(ctx, e); err != nil && ctx.Err() == nil {
+				w.log.Warn("queue deliver", "id", e.ID, slog.Any("err", err))
+			}
+		}()
 	}
+	wg.Wait()
 	w.purgeCompleted(ctx, time.Now())
 }
+
+// OutboundConcurrency is how many queue entries are delivered at once.
+// shortcut: one global limit, no per-destination cap (Postfix: 20 per domain, 100 total); add one if a
+// single slow domain with many queued messages starts filling every slot.
+const OutboundConcurrency = 16
 
 // purgeInterval bounds how often finished entries are scanned for expiry.
 const purgeInterval = time.Minute
@@ -145,7 +166,7 @@ func (w *Worker) deliverEntry(ctx context.Context, e QueueEntry) error {
 	// Sign the exact bytes that go on the wire (stored DATA messages use bare LF).
 	raw = CRLF(raw)
 	if w.signer != nil && w.hasPendingRemote(ctx, msg) {
-		raw, err = w.signer.Sign(msg.ReturnPath, raw)
+		raw, err = w.signer.Sign(cmp.Or(msg.ReturnPath, msg.SignAs), raw)
 		if err != nil {
 			return err
 		}

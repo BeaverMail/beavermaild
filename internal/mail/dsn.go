@@ -39,6 +39,7 @@ type RcptDSN struct {
 // EnvelopeDSN holds MAIL FROM DSN parameters and per-recipient NOTIFY/ORCPT.
 type EnvelopeDSN struct {
 	ReturnPath string
+	SignAs     string // authenticated sender, DKIM identity for a null ReturnPath
 	Ret        RetMode
 	Envid      string
 	Body       string // 7BIT or 8BITMIME from MAIL FROM BODY=

@@ -137,6 +137,9 @@ type QueueMessage struct {
 	Envid          string           `msgpack:"envid,omitempty"`
 	Body           string           `msgpack:"body,omitempty"` // 7BIT or 8BITMIME
 	Done           int64            `msgpack:"dn,omitempty"`   // unix ms when no recipient was left pending; kept as history until retention
+	// SignAs is the authenticated sender, the DKIM identity when ReturnPath is null (<>): signing by the
+	// header From instead would let a user get another tenant's domain signature.
+	SignAs string `msgpack:"sa,omitempty"`
 }
 
 // HasBlob reports whether BlobHash points at filesystem blob storage.
