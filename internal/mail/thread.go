@@ -55,7 +55,7 @@ func ThreadReferencesContext(ctx context.Context, msgs []Message, expr SearchExp
 		}
 		var h MsgHeaders
 		if load != nil {
-			if raw, err := load(m); err == nil {
+			if raw, ok := loadHeader(load, m); ok {
 				h = ParseMsgHeaders(raw)
 			}
 		}

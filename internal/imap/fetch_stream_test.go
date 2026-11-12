@@ -1,7 +1,9 @@
 package imap
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"strings"
@@ -95,5 +97,28 @@ func TestWriteDeadlineConnStalledClient(t *testing.T) {
 	c := &writeDeadlineConn{Conn: server, d: 50 * time.Millisecond}
 	if _, err := c.Write([]byte("* 1 FETCH (BODY[] {5}\r\nhello)\r\n")); err == nil {
 		t.Fatal("write to a client that never reads: want a timeout")
+	}
+}
+
+// URLFETCH and CATENATE load whole messages: each URL waits for a rawLoads slot, so many URLs or
+// many clients cannot pile up messages in memory.
+func TestURLLoadsWaitForSlot(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	for range rawLoadLimit {
+		rawLoads <- struct{}{}
+	}
+	defer func() {
+		for range rawLoadLimit {
+			<-rawLoads
+		}
+	}()
+	cancel()
+	s := &session{}
+	var b bytes.Buffer
+	if err := s.urlFetchItem(ctx, &b, urlFetchItem{url: "imap://alice@example.org/INBOX/;UID=1"}); err == nil || b.Len() != 0 {
+		t.Fatalf("URLFETCH item ran without a slot: err=%v out=%q", err, b.String())
+	}
+	if _, err := s.catenateURL(ctx, "/INBOX/;UID=1"); err == nil || errors.Is(err, errBadURL) {
+		t.Fatalf("CATENATE URL ran without a slot: %v", err)
 	}
 }

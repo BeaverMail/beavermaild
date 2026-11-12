@@ -17,7 +17,7 @@ func TestMatchSearchTextBodyCCBCCSize(t *testing.T) {
 			Size: uint32(len(raw)),
 		},
 	}}
-	load := func(m mail.Message) ([]byte, error) { return raw, nil }
+	load := mail.BytesLoader(func(m mail.Message) ([]byte, error) { return raw, nil })
 
 	if n := mail.MatchSearchWithLoader(msgs, mail.SearchCriteria{Text: "needle"}, load); len(n) != 1 {
 		t.Fatalf("text body %v", n)

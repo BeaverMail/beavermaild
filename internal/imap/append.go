@@ -180,6 +180,11 @@ func (s *session) catenateURL(ctx context.Context, raw string) ([]byte, error) {
 	if !ok || u.access != "" || u.absolute && !strings.EqualFold(u.owner(), s.principal.Email()) {
 		return nil, errBadURL
 	}
+	release, err := acquireRawLoad(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	return s.resolveURL(ctx, s.principal.AccountID, u)
 }
 

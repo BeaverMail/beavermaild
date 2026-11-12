@@ -819,9 +819,7 @@ func (s *session) cmdSearch(ctx context.Context, tag, arg string, byUID bool) er
 		}
 	}
 	w := s.watchCommand(ctx)
-	load := mail.RawLoader(func(m mail.Message) ([]byte, error) {
-		return s.inbox.LoadRaw(w.ctx, m.Meta)
-	})
+	load := s.rawOpener(w.ctx)
 	seqs, _ := mail.MatchSearchExprContext(w.ctx, s.messages, expr, load)
 	if cause := w.end(); cause != nil {
 		return s.abortCommand(tag, cause)
@@ -1324,11 +1322,23 @@ func (s *session) writeFetchStreamed(ctx context.Context, seq int, parts []strin
 	return err
 }
 
-// rawLoads bounds how many messages FETCH holds in memory at once across all sessions: memory stays
-// under rawLoadLimit x the largest message, whatever the number of clients.
+// rawLoads bounds how many whole messages FETCH, URLFETCH and CATENATE hold in memory at once
+// across all sessions: memory stays under rawLoadLimit x the largest message, whatever the number
+// of clients.
 var rawLoads = make(chan struct{}, rawLoadLimit)
 
 const rawLoadLimit = 16
+
+// rawOpener opens messages for SEARCH, SORT and THREAD, which read them in pieces (no rawLoads slot).
+func (s *session) rawOpener(ctx context.Context) mail.RawLoader {
+	return func(m mail.Message) (io.ReadCloser, error) {
+		f, err := s.inbox.OpenRaw(ctx, m.Meta)
+		if err != nil {
+			return nil, err // not f: a nil *os.File would make a non-nil ReadCloser
+		}
+		return f, nil
+	}
+}
 
 // acquireRawLoad waits for a rawLoads slot (or ctx) and returns its release.
 func acquireRawLoad(ctx context.Context) (func(), error) {

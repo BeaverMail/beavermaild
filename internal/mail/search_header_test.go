@@ -18,7 +18,7 @@ func TestMatchSearchFromSubject(t *testing.T) {
 			ReceivedAt: time.Date(2024, 3, 15, 12, 0, 0, 0, time.UTC).Unix(),
 		},
 	}}
-	load := func(m mail.Message) ([]byte, error) { return raw, nil }
+	load := mail.BytesLoader(func(m mail.Message) ([]byte, error) { return raw, nil })
 
 	found := mail.MatchSearchWithLoader(msgs, mail.SearchCriteria{From: "alice@example"}, load)
 	if len(found) != 1 {
@@ -66,7 +66,7 @@ func TestMatchSearchHeaderCriterion(t *testing.T) {
 
 	raw := []byte("From: a@b.com\r\nMessage-ID: <needle@example.com>\r\n\r\nbody\r\n")
 	msgs := []mail.Message{{UID: 1}}
-	load := func(m mail.Message) ([]byte, error) { return raw, nil }
+	load := mail.BytesLoader(func(m mail.Message) ([]byte, error) { return raw, nil })
 
 	found := mail.MatchSearchWithLoader(msgs, mail.SearchCriteria{
 		Headers: []mail.HeaderCriterion{{Field: "Message-ID", Value: "needle@example"}},
@@ -86,7 +86,7 @@ func TestMatchSearchHeaderRepeatedAndEmpty(t *testing.T) {
 		[]byte("Subject: none\r\n\r\nbody\r\n"),
 	}
 	msgs := []mail.Message{{UID: 1}, {UID: 2}}
-	load := func(m mail.Message) ([]byte, error) { return raws[m.UID-1], nil }
+	load := mail.BytesLoader(func(m mail.Message) ([]byte, error) { return raws[m.UID-1], nil })
 	for value, want := range map[string]int{"another": 1, "": 1, "missing": 0} {
 		found := mail.MatchSearchWithLoader(msgs, mail.SearchCriteria{
 			Headers: []mail.HeaderCriterion{{Field: "X-Extra", Value: value}},
@@ -112,9 +112,9 @@ func TestSearchSentDateSenderZone(t *testing.T) {
 	for i := range msgs {
 		msgs[i] = mail.Message{UID: uint32(i + 1)}
 	}
-	load := func(m mail.Message) ([]byte, error) {
+	load := mail.BytesLoader(func(m mail.Message) ([]byte, error) {
 		return []byte("Date: " + dates[m.UID-1] + "\r\n\r\nx\r\n"), nil
-	}
+	})
 	day := func(d int) *time.Time { t := time.Date(2007, 3, d, 0, 0, 0, 0, time.UTC); return &t }
 	for name, tc := range map[string]struct {
 		c    mail.SearchCriteria
@@ -141,7 +141,7 @@ func TestSearchFromCommentedAddress(t *testing.T) {
 		"other@example.org",
 	}
 	msgs := []mail.Message{{UID: 1}, {UID: 2}, {UID: 3}}
-	load := func(m mail.Message) ([]byte, error) { return []byte("From: " + froms[m.UID-1] + "\r\n\r\nx\r\n"), nil }
+	load := mail.BytesLoader(func(m mail.Message) ([]byte, error) { return []byte("From: " + froms[m.UID-1] + "\r\n\r\nx\r\n"), nil })
 	if got := mail.MatchSearchWithLoader(msgs, mail.SearchCriteria{From: "user-from@example.org"}, load); len(got) != 2 {
 		t.Fatalf("address: got %v", got)
 	}

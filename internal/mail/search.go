@@ -93,9 +93,6 @@ func newSearchPos(msgs []Message) searchPos {
 	return p
 }
 
-// RawLoader loads RFC 822 bytes for header SEARCH criteria.
-type RawLoader func(Message) ([]byte, error)
-
 // MatchSearch returns 1-based sequence numbers matching criteria in msgs order.
 func MatchSearch(msgs []Message, c SearchCriteria) []uint32 {
 	return MatchSearchWithLoader(msgs, c, nil)
@@ -182,24 +179,23 @@ func matchSearchOne(m Message, pos searchPos, c SearchCriteria, load RawLoader) 
 		if load == nil {
 			return false
 		}
-		raw, err := load(m)
-		if err != nil {
-			return false
-		}
-		if c.Text != "" && !rawContains(raw, c.Text) {
-			return false
-		}
-		if c.Body != "" && !bodyContains(raw, c.Body) {
-			return false
-		}
-		if needsHeaderSearch(c) && !matchSearchHeaders(raw, c) {
-			return false
-		}
-		if c.SentSince != nil || c.SentBefore != nil || c.SentOn != nil {
-			sent, ok := parseMessageDate(raw)
-			if !ok || !matchSearchDay(sent, c.SentSince, c.SentBefore, c.SentOn) {
+		if needsHeaderSearch(c) || c.SentSince != nil || c.SentBefore != nil || c.SentOn != nil {
+			hdr, ok := loadHeader(load, m)
+			if !ok || needsHeaderSearch(c) && !matchSearchHeaders(hdr, c) {
 				return false
 			}
+			if c.SentSince != nil || c.SentBefore != nil || c.SentOn != nil {
+				sent, ok := parseMessageDate(hdr)
+				if !ok || !matchSearchDay(sent, c.SentSince, c.SentBefore, c.SentOn) {
+					return false
+				}
+			}
+		}
+		if c.Text != "" && !openContains(load, m, c.Text, false) {
+			return false
+		}
+		if c.Body != "" && !openContains(load, m, c.Body, true) {
+			return false
 		}
 	}
 	if c.All {
@@ -355,22 +351,6 @@ var headerDecoder = new(mime.WordDecoder)
 // rawContains is case-insensitive substring search on RFC822 bytes or header text.
 func rawContains(raw []byte, needle string) bool {
 	return bytes.Contains(bytes.ToLower(raw), bytes.ToLower([]byte(needle)))
-}
-
-// bodyContains searches only the message body after the header/body separator.
-func bodyContains(raw []byte, needle string) bool {
-	_, body := splitHeaderBody(raw)
-	return rawContains(body, needle)
-}
-
-func splitHeaderBody(raw []byte) ([]byte, []byte) {
-	if i := bytes.Index(raw, []byte("\r\n\r\n")); i >= 0 {
-		return raw[:i], raw[i+4:]
-	}
-	if i := bytes.Index(raw, []byte("\n\n")); i >= 0 {
-		return raw[:i], raw[i+2:]
-	}
-	return raw, nil
 }
 
 // MatchSearchUID returns UIDs matching criteria (for UID SEARCH responses).

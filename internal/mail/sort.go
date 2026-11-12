@@ -109,8 +109,8 @@ func loadSortFields(m Message, load RawLoader) sortFields {
 	if load == nil {
 		return f
 	}
-	raw, err := load(m)
-	if err != nil {
+	raw, ok := loadHeader(load, m)
+	if !ok {
 		return f
 	}
 	h := ParseMsgHeaders(raw)

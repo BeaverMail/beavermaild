@@ -38,9 +38,7 @@ func (s *session) cmdSort(ctx context.Context, tag, arg string, byUID bool) erro
 		}
 	}
 	w := s.watchCommand(ctx)
-	load := mail.RawLoader(func(m mail.Message) ([]byte, error) {
-		return s.inbox.LoadRaw(w.ctx, m.Meta)
-	})
+	load := s.rawOpener(w.ctx)
 	seqs, _ := mail.SortMessagesContext(w.ctx, s.messages, crits, expr, load)
 	if cause := w.end(); cause != nil {
 		return s.abortCommand(tag, cause)
@@ -85,9 +83,7 @@ func (s *session) cmdThread(ctx context.Context, tag, arg string, byUID bool) er
 		return s.tagged(tag, "BAD THREAD syntax")
 	}
 	w := s.watchCommand(ctx)
-	load := mail.RawLoader(func(m mail.Message) ([]byte, error) {
-		return s.inbox.LoadRaw(w.ctx, m.Meta)
-	})
+	load := s.rawOpener(w.ctx)
 	threads, _ := thread(w.ctx, s.messages, expr, load)
 	if cause := w.end(); cause != nil {
 		return s.abortCommand(tag, cause)

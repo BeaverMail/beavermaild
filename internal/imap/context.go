@@ -117,7 +117,7 @@ func (s *session) refreshContexts(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	load := mail.RawLoader(func(m mail.Message) ([]byte, error) { return s.inbox.LoadRaw(ctx, m.Meta) })
+	load := s.rawOpener(ctx)
 	for _, c := range s.contexts {
 		if err := s.refreshContext(ctx, c, load); err != nil {
 			return err

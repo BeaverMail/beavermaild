@@ -18,7 +18,7 @@ func TestMatchSearchExprOrNot(t *testing.T) {
 	rawAlice := []byte("From: alice@example.com\r\nSubject: hello\r\n\r\n")
 	rawBob := []byte("From: bob@example.com\r\nSubject: world\r\n\r\n")
 	rawCarol := []byte("From: carol@example.com\r\nSubject: other\r\n\r\n")
-	load := func(m mail.Message) ([]byte, error) {
+	load := mail.BytesLoader(func(m mail.Message) ([]byte, error) {
 		switch m.UID {
 		case 1:
 			return rawAlice, nil
@@ -27,7 +27,7 @@ func TestMatchSearchExprOrNot(t *testing.T) {
 		default:
 			return rawCarol, nil
 		}
-	}
+	})
 
 	orExpr := mail.SearchExpr{
 		Kind: mail.SearchExprOr,

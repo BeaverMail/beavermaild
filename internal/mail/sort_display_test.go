@@ -16,9 +16,9 @@ func headerMsgs(headers []string) ([]mail.Message, mail.RawLoader) {
 		msgs[i].UID = uint32(i + 1)
 		msgs[i].Meta.ReceivedAt = int64(i)
 	}
-	return msgs, func(m mail.Message) ([]byte, error) {
+	return msgs, mail.BytesLoader(func(m mail.Message) ([]byte, error) {
 		return []byte(headers[m.UID-1] + "\r\n\r\nbody\r\n"), nil
-	}
+	})
 }
 
 var allExpr = mail.SearchExpr{Kind: mail.SearchExprCrit, Crit: mail.SearchCriteria{All: true}}

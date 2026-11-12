@@ -147,59 +147,78 @@ func (s *session) cmdURLFetch(ctx context.Context, tag, arg string) error {
 	}
 	var b bytes.Buffer
 	b.WriteString("* URLFETCH")
+	// One message in memory at a time: each URL waits for a rawLoads slot and its part of the
+	// response is written before the next one is loaded.
 	for _, it := range items {
-		b.WriteString(" " + quoteIMAPString(it.url))
-		u, raw, err := s.urlauthMessage(ctx, it.url)
-		if errors.Is(err, errBadURL) {
-			b.WriteString(" NIL")
-			continue
-		} else if err != nil {
+		if err := s.urlFetchItem(ctx, &b, it); err != nil {
 			return err
 		}
-		data, section := []byte{}, u.section
-		if section != "" {
-			fieldsSection, fields, ok := parseHeaderFieldsSection(section)
-			if !ok {
-				fieldsSection = section
-			}
-			data = extractBodySection(raw, fieldsSection, fields)
-		} else {
-			data = raw
+		if _, err := s.conn.Write(b.Bytes()); err != nil {
+			return err
 		}
-		data = u.partialData(data)
-		if !it.ext {
-			writeLiteral(&b, " ", data)
-			continue
-		}
-		var dec []byte
-		var decErr error
-		if it.binary {
-			dec, decErr = binarySection(raw, section)
-		}
-		if it.bodypart {
-			// With BINARY the structure describes the decoded data the client receives (RFC 5524 3.2).
-			b.WriteString(" (BODYPARTSTRUCTURE " + urlPartStructure(raw, section, it.binary && decErr == nil, dec) + ")")
-		}
-		if it.binary {
-			b.WriteString(" (BINARY")
-			if decErr != nil {
-				b.WriteString(" NIL")
-			} else {
-				writeLiteral(&b, " ", u.partialData(dec))
-			}
-			b.WriteString(")")
-		}
-		if it.body {
-			b.WriteString(" (BODY")
-			writeLiteral(&b, " ", data)
-			b.WriteString(")")
-		}
+		b.Reset()
 	}
 	b.WriteString("\r\n")
 	if _, err := s.conn.Write(b.Bytes()); err != nil {
 		return err
 	}
 	return s.tagged(tag, "OK URLFETCH completed")
+}
+
+// urlFetchItem appends one URL and its data to the URLFETCH response in b.
+func (s *session) urlFetchItem(ctx context.Context, b *bytes.Buffer, it urlFetchItem) error {
+	release, err := acquireRawLoad(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
+	b.WriteString(" " + quoteIMAPString(it.url))
+	u, raw, err := s.urlauthMessage(ctx, it.url)
+	if errors.Is(err, errBadURL) {
+		b.WriteString(" NIL")
+		return nil
+	} else if err != nil {
+		return err
+	}
+	data, section := []byte{}, u.section
+	if section != "" {
+		fieldsSection, fields, ok := parseHeaderFieldsSection(section)
+		if !ok {
+			fieldsSection = section
+		}
+		data = extractBodySection(raw, fieldsSection, fields)
+	} else {
+		data = raw
+	}
+	data = u.partialData(data)
+	if !it.ext {
+		writeLiteral(b, " ", data)
+		return nil
+	}
+	var dec []byte
+	var decErr error
+	if it.binary {
+		dec, decErr = binarySection(raw, section)
+	}
+	if it.bodypart {
+		// With BINARY the structure describes the decoded data the client receives (RFC 5524 3.2).
+		b.WriteString(" (BODYPARTSTRUCTURE " + urlPartStructure(raw, section, it.binary && decErr == nil, dec) + ")")
+	}
+	if it.binary {
+		b.WriteString(" (BINARY")
+		if decErr != nil {
+			b.WriteString(" NIL")
+		} else {
+			writeLiteral(b, " ", u.partialData(dec))
+		}
+		b.WriteString(")")
+	}
+	if it.body {
+		b.WriteString(" (BODY")
+		writeLiteral(b, " ", data)
+		b.WriteString(")")
+	}
+	return nil
 }
 
 // urlauthMessage validates an URLAUTH URL against its owner's mailbox key and this session's

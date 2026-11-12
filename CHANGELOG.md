@@ -54,6 +54,10 @@
 - IMAP FETCH of a whole message (`BODY[]`, `RFC822`, partial) streams it from disk instead of loading
   it; items that parse the message (ENVELOPE, BODYSTRUCTURE, parts) hold at most 16 messages in memory
   at once across all sessions. A client that stops reading responses is disconnected after 5 minutes.
+- IMAP SEARCH, SORT and THREAD no longer load messages: header criteria, SORT and THREAD read only the
+  header block (first 256 KiB), TEXT and BODY scan the message in 64 KiB chunks. URLFETCH and CATENATE
+  URLs share the 16-message bound, and URLFETCH writes its response one URL at a time instead of
+  holding every message it names.
 
 ## 0.4.0
 

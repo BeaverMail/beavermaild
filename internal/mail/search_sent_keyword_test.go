@@ -24,12 +24,12 @@ func TestMatchSearchSentAndKeyword(t *testing.T) {
 		UID:  2,
 		Meta: storage.EmailMeta{Flags: mail.FlagSeen},
 	}}
-	load := func(m mail.Message) ([]byte, error) {
+	load := mail.BytesLoader(func(m mail.Message) ([]byte, error) {
 		if m.UID == 2 {
 			return []byte("Date: Mon, 1 Jan 2020 00:00:00 +0000\r\n\r\n"), nil
 		}
 		return raw, nil
-	}
+	})
 
 	on := time.Date(2024, 6, 10, 0, 0, 0, 0, time.UTC)
 	if n := mail.MatchSearchWithLoader(msgs, mail.SearchCriteria{SentOn: &on}, load); len(n) != 1 {

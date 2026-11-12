@@ -19,7 +19,7 @@ func TestSortMessagesByArrivalAndSubject(t *testing.T) {
 		{UID: 2, Meta: storage.EmailMeta{ReceivedAt: base, Size: 50}},
 		{UID: 3, Meta: storage.EmailMeta{ReceivedAt: base + 1, Size: 200}},
 	}
-	load := mail.RawLoader(func(m mail.Message) ([]byte, error) {
+	load := mail.BytesLoader(func(m mail.Message) ([]byte, error) {
 		switch m.UID {
 		case 1:
 			return []byte("From: a@b\r\nSubject: zebra\r\nDate: Fri, 10 Jan 2025 12:02:00 +0000\r\n\r\n\r\n"), nil
@@ -57,7 +57,7 @@ func TestThreadReferencesLinksReplies(t *testing.T) {
 		{UID: 2, Meta: storage.EmailMeta{ReceivedAt: 2}},
 		{UID: 3, Meta: storage.EmailMeta{ReceivedAt: 3}},
 	}
-	load := mail.RawLoader(func(m mail.Message) ([]byte, error) {
+	load := mail.BytesLoader(func(m mail.Message) ([]byte, error) {
 		switch m.UID {
 		case 1:
 			return []byte("Message-ID: <root@x>\r\n\r\n\r\n"), nil
@@ -118,7 +118,7 @@ func TestSortAddressAndSubjectKeys(t *testing.T) {
 		{UID: 2},
 		{UID: 3, Meta: storage.EmailMeta{ReceivedAt: time.Date(2008, 1, 1, 0, 0, 0, 0, time.UTC).Unix()}},
 	}
-	load := mail.RawLoader(func(m mail.Message) ([]byte, error) { return []byte(raws[m.UID-1]), nil })
+	load := mail.BytesLoader(func(m mail.Message) ([]byte, error) { return []byte(raws[m.UID-1]), nil })
 	expr := mail.SearchExpr{Kind: mail.SearchExprCrit, Crit: mail.SearchCriteria{All: true}}
 	for key, want := range map[mail.SortKey][]uint32{
 		mail.SortFrom:    {3, 2, 1}, // the group name "0-group" is the key, not "z"
@@ -173,7 +173,7 @@ func TestThreadReferencesTree(t *testing.T) {
 		for i := range msgs {
 			msgs[i] = mail.Message{UID: uint32(i + 1), Meta: storage.EmailMeta{ReceivedAt: int64(i)}}
 		}
-		load := mail.RawLoader(func(m mail.Message) ([]byte, error) { return []byte(raws[m.UID-1] + "\r\n\r\n"), nil })
+		load := mail.BytesLoader(func(m mail.Message) ([]byte, error) { return []byte(raws[m.UID-1] + "\r\n\r\n"), nil })
 		var out []string
 		for _, th := range mail.ThreadReferences(msgs, expr, load) {
 			out = append(out, shape(th))

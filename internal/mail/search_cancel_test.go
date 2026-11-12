@@ -13,7 +13,7 @@ func TestSearchSortThreadStopOnCanceledContext(t *testing.T) {
 	expr := SearchExpr{Kind: SearchExprCrit, Crit: SearchCriteria{Text: "x"}}
 	ctx, cancel := context.WithCancel(context.Background())
 	loads := 0
-	load := RawLoader(func(Message) ([]byte, error) {
+	load := BytesLoader(func(Message) ([]byte, error) {
 		loads++
 		cancel() // the client goes away while the first message is loaded
 		return []byte("Subject: x\r\n\r\nx\r\n"), nil
