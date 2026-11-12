@@ -1039,7 +1039,9 @@ func (s *session) cmdBDAT(ctx context.Context, c bdatChunk) error {
 	if !c.last {
 		return s.writef("250 2.0.0 %d octets received", len(c.data))
 	}
-	return s.deliverAfterFilter(ctx, s.bdatBuf)
+	// BDAT is length-framed, so a bare CR cannot end the data; stored, it would still end a header
+	// line for some readers. Same rule as Exim: a continuation in the header, a line end in the body.
+	return s.deliverAfterFilter(ctx, mail.BareCR(s.bdatBuf))
 }
 
 // buildEnvelopeDSN collects MAIL/RCPT DSN parameters for queued remote recipients.

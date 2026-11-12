@@ -244,3 +244,39 @@ func TestSMTPSmugglingThroughBDAT(t *testing.T) {
 		})
 	}
 }
+
+// A bare CR inside a BDAT header line must not start a new field once stored (header injection):
+// as in Exim it becomes a folded continuation. In the body it is a line end.
+func TestBDATBareCRInHeader(t *testing.T) {
+	t.Parallel()
+	conn, read, inbox, dir := rfcDial(t, true)
+	msg := "Subject: hi\rBcc: victim@example.org\r\n\r\nbody\rmore\r\n"
+	send(t, conn, "MAIL FROM:<sender@example.org>")
+	expect(t, read, "250 ")
+	send(t, conn, "RCPT TO:<alice@localhost>")
+	expect(t, read, "250 ")
+	if _, err := io.WriteString(conn, fmt.Sprintf("BDAT %d LAST\r\n%s", len(msg), msg)); err != nil {
+		t.Fatal(err)
+	}
+	expect(t, read, "250 ")
+
+	ctx := context.Background()
+	acc, _, err := dir.ResolveEmail(ctx, "alice@localhost")
+	if err != nil {
+		t.Fatal(err)
+	}
+	msgs, err := inbox.List(ctx, acc.ID, mail.InboxMailboxID)
+	if err != nil || len(msgs) != 1 {
+		t.Fatalf("list: %v %d", err, len(msgs))
+	}
+	raw, err := inbox.LoadMessage(ctx, msgs[0].Meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "Subject: hi\r\n Bcc: victim@example.org\r\n") || strings.Contains(string(raw), "\r\nBcc:") {
+		t.Fatalf("bare CR started a header field: %q", raw)
+	}
+	if !strings.Contains(string(raw), "body\r\nmore\r\n") {
+		t.Fatalf("bare CR in the body is not a line end: %q", raw)
+	}
+}

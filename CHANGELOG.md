@@ -140,6 +140,14 @@
   After a refused MAIL in the same pipelined group, or before TLS on submission, the chunk was
   left unread and parsed as commands (SMTP smuggling through BDAT). A chunk over the size limit
   is read and dropped, answered 552, and the session goes on (it was closed).
+- Line ends, as Dovecot does them: messages stay stored as received (LF from SMTP DATA, CRLF
+  from APPEND and BDAT), and IMAP now serves them with CRLF line ends (RFC 3501 2.3.4).
+  Messages from SMTP used to reach clients with bare LF, and their RFC822.SIZE counted the
+  stored bytes. RFC822.SIZE, SEARCH LARGER/SMALLER and SORT SIZE use the CRLF size, stored with
+  each message and filled in once per mailbox for older ones; quota still counts stored bytes.
+- A bare CR is handled as Exim does: inside the header a folded continuation, in the body a line
+  end, on BDAT and APPEND input and on outbound mail. It can no longer start a header field, and
+  outbound `\r\r\n` no longer becomes an empty line that ended the header early.
   - SEARCH BODY and TEXT also match the decoded text of base64 and quoted-printable parts, and TEXT
     the decoded RFC 2047 header words (no charset conversion: UTF-8 and US-ASCII parts).
 
