@@ -71,11 +71,12 @@ func TestIMAPFetch8BitHeaderTextAsEncodedWords(t *testing.T) {
 	resp := readResponse(t, read)
 	expectPrefix(t, read, "e3 OK")
 	// RFC 3501 4.3.1: 8-bit text only with its charset identified. Go's parsers decode RFC 2047
-	// and RFC 2231, so the server sends the text back as an RFC 2047 word: 7-bit, charset named.
-	if !strings.Contains(resp, `(("=?utf-8?q?Jos=C3=A9?=" NIL "jose" "example.com"))`) {
+	// and RFC 2231; the server sends the name back as an RFC 2047 word and the parameter in its
+	// RFC 2231 form (RFC 2047 5 forbids encoded-words in parameters).
+	if !strings.Contains(resp, `(("=?utf-8?b?Sm9zw6k=?=" NIL "jose" "example.com"))`) {
 		t.Fatalf("envelope name: %q", resp)
 	}
-	if !strings.Contains(resp, `("NAME" "=?utf-8?q?fattura=C3=A0.pdf?=")`) {
+	if !strings.Contains(resp, `("NAME*" "utf-8''fattura%C3%A0.pdf")`) {
 		t.Fatalf("filename: %q", resp)
 	}
 	for i := 0; i < len(resp); i++ {

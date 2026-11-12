@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // formatBodyStructure returns the RFC 3501 BODYSTRUCTURE parenthesized list for raw.
@@ -65,7 +66,22 @@ func formatMIMEPart(mediaType string, params map[string]string, hdr map[string][
 	if major == "multipart" {
 		return formatMultipart(subtype, params, hdr, body, ext, depth)
 	}
-	return formatLeafPart(major, subtype, params, hdr, body, ext, depth)
+	return formatLeafPart(major, subtype, params, hdr, body, ext, depth, false)
+}
+
+// formatDecodedPart is BODYPARTSTRUCTURE for a part URLFETCH returns decoded (RFC 5524 BINARY).
+// Its line count is 0, as Dovecot reports it (imaptest urlauth-binary). shortcut: RFC 5524 does
+// not define lines for decoded data, and counting them would match BODYSTRUCTURE; revisit with
+// the Dovecot team (see .specs/dovecot.md).
+func formatDecodedPart(raw []byte) string {
+	e := splitEntity(raw)
+	hdr, _ := textproto.NewReader(bufio.NewReader(bytes.NewReader(e.header))).ReadMIMEHeader()
+	mt, params := parseMediaType(hdr.Get("Content-Type"))
+	major, subtype, _ := strings.Cut(strings.ToLower(mt), "/")
+	if major == "multipart" {
+		return formatBodyStructure(raw)
+	}
+	return formatLeafPart(major, subtype, params, hdr, e.body, true, 0, true)
 }
 
 func formatMultipart(subtype string, params map[string]string, hdr map[string][]string, body []byte, ext bool, depth int) string {
@@ -101,14 +117,14 @@ func bodyExt(hdr map[string][]string) string {
 	disp := "NIL"
 	if v := mimeGet(hdr, "Content-Disposition"); v != "" {
 		if d, p, err := mime.ParseMediaType(v); err == nil {
-			disp = "(" + quoteHeaderString(strings.ToUpper(d)) + " " + formatIMAPParams(p) + ")"
+			disp = "(" + quoteIMAPString(strings.ToUpper(d)) + " " + formatIMAPParams(p) + ")"
 		}
 	}
 	lang := "NIL"
 	var tags []string
 	for _, t := range strings.Split(mimeGet(hdr, "Content-Language"), ",") {
 		if t = strings.TrimSpace(t); t != "" {
-			tags = append(tags, quoteHeaderString(t))
+			tags = append(tags, quoteIMAPString(t))
 		}
 	}
 	switch len(tags) {
@@ -121,7 +137,7 @@ func bodyExt(hdr map[string][]string) string {
 	return disp + " " + lang + " " + nstring(mimeGet(hdr, "Content-Location"))
 }
 
-func formatLeafPart(major, subtype string, params map[string]string, hdr map[string][]string, body []byte, ext bool, depth int) string {
+func formatLeafPart(major, subtype string, params map[string]string, hdr map[string][]string, body []byte, ext bool, depth int, noLines bool) string {
 	if major == "" {
 		major = "text"
 	}
@@ -132,7 +148,7 @@ func formatLeafPart(major, subtype string, params map[string]string, hdr map[str
 	subtype = strings.ToUpper(subtype)
 	enc := mapEncoding(mimeGet(hdr, "Content-Transfer-Encoding"))
 	id := nstring(mimeGet(hdr, "Content-Id"))
-	desc := nstring(mimeGet(hdr, "Content-Description"))
+	desc := nphrase(mimeGet(hdr, "Content-Description")) // *text: encoded-words allowed
 	size := len(body)
 	paramsStr := formatIMAPParams(params)
 	tail := ")"
@@ -141,6 +157,9 @@ func formatLeafPart(major, subtype string, params map[string]string, hdr map[str
 	}
 	if major == "TEXT" {
 		lines := countLines(body)
+		if noLines {
+			lines = 0
+		}
 		return `("` + major + `" "` + subtype + `" ` + paramsStr + ` ` + id + ` ` + desc + ` "` + enc + `" ` + strconv.Itoa(size) + ` ` + strconv.Itoa(lines) + tail
 	}
 	// body-type-msg: a message/rfc822 part also carries the inner ENVELOPE, BODYSTRUCTURE and line count.
@@ -164,11 +183,35 @@ func formatIMAPParams(params map[string]string) string {
 		if i > 0 {
 			b.WriteByte(' ')
 		}
-		b.WriteString(quoteHeaderString(strings.ToUpper(k)))
+		k, v := strings.ToUpper(k), params[k]
+		if has8bit(v) && utf8.ValidString(v) {
+			// Decoded from RFC 2231 by mime.ParseMediaType: sent back in its extended form, the
+			// only one RFC 2047 5 allows in a parameter.
+			k, v = k+"*", "utf-8''"+rfc2231Escape(v)
+		}
+		b.WriteString(quoteIMAPString(k))
 		b.WriteByte(' ')
-		b.WriteString(quoteHeaderString(params[k]))
+		b.WriteString(quoteIMAPString(v))
 	}
 	b.WriteByte(')')
+	return b.String()
+}
+
+// rfc2231Escape percent-encodes v for an extended parameter value (RFC 2231 7): attribute-chars
+// stay, every other octet becomes %XX.
+func rfc2231Escape(v string) string {
+	const hex = "0123456789ABCDEF"
+	var b strings.Builder
+	for i := 0; i < len(v); i++ {
+		c := v[i]
+		if c > ' ' && c < 0x7f && !strings.ContainsRune(`*'%()<>@,;:\"/[]?=`, rune(c)) {
+			b.WriteByte(c)
+			continue
+		}
+		b.WriteByte('%')
+		b.WriteByte(hex[c>>4])
+		b.WriteByte(hex[c&15])
+	}
 	return b.String()
 }
 

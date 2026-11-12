@@ -112,8 +112,12 @@
   - EXAMINE announces `PERMANENTFLAGS ()`.
   - APPEND keeps keywords, refuses malformed flags, accepts a space-padded day (` 5-Nov-2026`),
     and answers NO for an empty `{0}` message.
-  - ENVELOPE and BODYSTRUCTURE send decoded RFC 2047 / RFC 2231 text as an RFC 2047 word (7-bit,
-    charset named) instead of an 8-bit literal.
+  - ENVELOPE and BODYSTRUCTURE no longer send header text as 8-bit literals without a charset:
+    display names and Content-Description go out as RFC 2047 B-encoded words, MIME parameters
+    (file names) in their RFC 2231 form (`"NAME*" "utf-8''..."`), as RFC 2047 5 requires;
+    addresses are never encoded.
+  - URLFETCH BINARY BODYPARTSTRUCTURE reports 0 lines for decoded data, as Dovecot does
+    (imaptest urlauth-binary); raw parts keep their line count.
   - SEARCH BODY and TEXT also match the decoded text of base64 and quoted-printable parts, and TEXT
     the decoded RFC 2047 header words (no charset conversion: UTF-8 and US-ASCII parts).
 

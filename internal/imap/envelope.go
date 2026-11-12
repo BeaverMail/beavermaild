@@ -187,7 +187,7 @@ func formatMailbox(a *mail.Address) string {
 	if !ok || mailbox == "" || host == "" {
 		return "(NIL NIL NIL NIL)"
 	}
-	return fmt.Sprintf("(%s %s %s %s)", nstring(a.Name), nstring(route), nstring(mailbox), nstring(host))
+	return fmt.Sprintf("(%s %s %s %s)", nphrase(a.Name), nstring(route), nstring(mailbox), nstring(host))
 }
 
 // nstring returns NIL or a quoted IMAP string for envelope and body structure slots.
@@ -196,24 +196,30 @@ func nstring(s string) string {
 	if s == "" {
 		return "NIL"
 	}
-	return quoteHeaderString(s)
+	return quoteIMAPString(s)
 }
 
-// quoteHeaderString is quoteIMAPString for text taken from message headers. Go's parsers decode
-// RFC 2047 names and RFC 2231 parameters into UTF-8, but IMAP4rev1 strings carry 8-bit text only
-// with its charset identified (RFC 3501 4.3.1): valid UTF-8 goes back out as an RFC 2047 word,
-// 7-bit, which clients decode as they would the original header.
-func quoteHeaderString(s string) string {
+// nphrase is nstring for text where RFC 2047 allows encoded-words: a display name (phrase) or a
+// *text field such as Content-Description (RFC 2047 5). Go's parsers decode those words into
+// UTF-8, but IMAP4rev1 strings carry 8-bit text only with its charset identified (RFC 3501
+// 4.3.1): valid UTF-8 goes back out as an encoded-word, 7-bit, charset named. B encoding: its
+// alphabet is all inside the set RFC 2047 5(3) allows in a phrase, Q leaves "," and "." bare.
+// Never for addresses, parameters or other structured text, where RFC 2047 5 forbids them.
+func nphrase(s string) string {
 	s = strings.TrimSpace(s)
+	if s != "" && has8bit(s) && utf8.ValidString(s) {
+		s = mime.BEncoding.Encode("utf-8", s)
+	}
+	return nstring(s)
+}
+
+func has8bit(s string) bool {
 	for i := 0; i < len(s); i++ {
 		if s[i] >= 0x80 {
-			if utf8.ValidString(s) {
-				s = mime.QEncoding.Encode("utf-8", s)
-			}
-			break
+			return true
 		}
 	}
-	return quoteIMAPString(s)
+	return false
 }
 
 // quoteIMAPString encodes an IMAP string for FETCH responses. An empty value is "" (not NIL:

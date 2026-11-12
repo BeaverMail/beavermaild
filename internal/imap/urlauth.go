@@ -285,7 +285,7 @@ func urlPartStructure(raw []byte, section string, decoded bool, data []byte) str
 	}
 	if decoded {
 		hdr := filterHeaderFields(part.header, []string{"Content-Transfer-Encoding"}, false)
-		return formatBodyStructure(append(append([]byte{}, hdr...), data...))
+		return formatDecodedPart(append(append([]byte{}, hdr...), data...))
 	}
 	return formatBodyStructure(append(append([]byte{}, part.header...), part.body...))
 }
