@@ -136,6 +136,10 @@
 - SMTP PIPELINING (RFC 2920): replies to RSET, MAIL and RCPT inside a pipelined group go out in one
   write; MAIL answers `250 2.1.0 Sender ok` and RCPT `250 2.1.5 Recipient ok` instead of
   `250 2.0.0 Ok`, so each reply names its command.
+- SMTP CHUNKING (RFC 3030): a BDAT chunk is always read before the reply, as RFC 3030 requires.
+  After a refused MAIL in the same pipelined group, or before TLS on submission, the chunk was
+  left unread and parsed as commands (SMTP smuggling through BDAT). A chunk over the size limit
+  is read and dropped, answered 552, and the session goes on (it was closed).
   - SEARCH BODY and TEXT also match the decoded text of base64 and quoted-printable parts, and TEXT
     the decoded RFC 2047 header words (no charset conversion: UTF-8 and US-ASCII parts).
 

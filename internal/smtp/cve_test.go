@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"fmt"
 	"io"
 	"net"
 	"strings"
@@ -193,5 +194,53 @@ func TestUnknownCommandFlood(t *testing.T) {
 	}
 	if !strings.HasPrefix(last, "421 ") {
 		t.Fatalf("after %d unknown commands: %q, want 421", smtp.MaxUnknownCommands, last)
+	}
+}
+
+// SMTP smuggling through BDAT (RFC 3030 2: after a failed BDAT the server MUST accept and discard
+// its data before replying). A chunk left unread by an early refusal (sender refused in the same
+// pipelined group, no transaction, chunk over the size limit) was parsed as commands: a relay
+// forwarding attacker-controlled content would run the attacker's transaction as its own.
+func TestSMTPSmugglingThroughBDAT(t *testing.T) {
+	t.Parallel()
+	const smuggled = "RSET\r\nMAIL FROM:<ceo@victim.example>\r\nRCPT TO:<alice@localhost>\r\nDATA\r\nSubject: smuggled\r\n\r\nforged\r\n.\r\n"
+	for name, group := range map[string]string{
+		"failed MAIL in group": "MAIL FROM:<not an address>\r\nRCPT TO:<alice@localhost>\r\nBDAT %d LAST\r\n" + smuggled,
+		"no transaction":       "BDAT %d LAST\r\n" + smuggled,
+		"over the size limit":  "MAIL FROM:<sender@example.org>\r\nRCPT TO:<alice@localhost>\r\nBDAT %d LAST\r\n" + smuggled,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			conn, read, inbox, dir := rfcDial(t, true)
+			size := len(smuggled)
+			if name == "over the size limit" {
+				size = 20 << 20 // past the 10 MiB default: discarded, padding follows the payload
+			}
+			payload := fmt.Sprintf(group, size)
+			if pad := size - len(smuggled); pad > 0 {
+				payload += strings.Repeat("x", pad)
+			}
+			go func() { _, _ = io.WriteString(conn, payload+"NOOP\r\nQUIT\r\n") }()
+			replies := readAll(conn) + drain(read)
+			if !strings.Contains(replies, "\r\n250 2.0.0 Ok\r\n221") {
+				t.Fatalf("session out of step after the chunk: %q", replies)
+			}
+
+			ctx := context.Background()
+			acc, _, err := dir.ResolveEmail(ctx, "alice@localhost")
+			if err != nil {
+				t.Fatal(err)
+			}
+			msgs, err := inbox.List(ctx, acc.ID, mail.InboxMailboxID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, m := range msgs {
+				raw, _ := inbox.LoadRaw(ctx, m.Meta)
+				if strings.Contains(string(raw), "ceo@victim.example") {
+					t.Fatalf("smuggled message delivered; replies %q", replies)
+				}
+			}
+		})
 	}
 }

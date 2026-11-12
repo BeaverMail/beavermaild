@@ -18,3 +18,19 @@ func readBDATChunk(r *bufio.Reader, size int, beforeRead ...func()) ([]byte, err
 	}
 	return buf, nil
 }
+
+// discardBDATChunk reads and drops size bytes: a chunk the server will not keep still has to leave
+// the stream (RFC 3030 2), never held in memory. The deadline is renewed for every MiB.
+func discardBDATChunk(r *bufio.Reader, size int64, beforeRead func()) error {
+	for size > 0 {
+		if beforeRead != nil {
+			beforeRead()
+		}
+		n := min(size, 1<<20)
+		if _, err := io.CopyN(io.Discard, r, n); err != nil {
+			return err
+		}
+		size -= n
+	}
+	return nil
+}

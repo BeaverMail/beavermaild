@@ -256,6 +256,15 @@ func pipelineContinues(cmd string) bool {
 }
 
 func (s *session) dispatch(ctx context.Context, cmd, arg string, mailBlocked bool) (stop, blockMail bool, err error) {
+	// A BDAT chunk leaves the stream before any check can answer: every reply, a refusal
+	// included, comes after the data (RFC 3030 2). Left unread it would be parsed as commands
+	// (SMTP smuggling through BDAT).
+	var chunk bdatChunk
+	if cmd == "BDAT" {
+		if chunk, err = s.consumeBDAT(arg); err != nil {
+			return false, false, err
+		}
+	}
 	// Submission without TLS is of no use (AUTH needs it): like a server that requires TLS, answer
 	// every command but NOOP, EHLO, STARTTLS and QUIT with 530 (RFC 3207 4). AUTH keeps the more
 	// specific 538 5.7.11 of RFC 4954 6.
@@ -302,7 +311,7 @@ func (s *session) dispatch(ctx context.Context, cmd, arg string, mailBlocked boo
 		if mailBlocked {
 			return false, false, s.writef(replyBadSequence)
 		}
-		return false, false, s.cmdBDAT(ctx, arg)
+		return false, false, s.cmdBDAT(ctx, chunk)
 	case "HELP":
 		return false, false, s.cmdHelp(arg)
 	case "VRFY":
@@ -984,32 +993,51 @@ func (s *session) finishDelivery(ctx context.Context, raw []byte) error {
 }
 
 // cmdBDAT receives one binary chunk and delivers the message on the final LAST chunk.
-func (s *session) cmdBDAT(ctx context.Context, arg string) error {
+// bdatChunk is a BDAT command with its data already off the stream.
+type bdatChunk struct {
+	data   []byte
+	last   bool
+	tooBig bool // over MaxMessageBytes: read and dropped
+}
+
+// consumeBDAT parses a BDAT command and reads its chunk: kept in memory when it fits the message
+// limit, discarded otherwise. A size that cannot be parsed leaves no way to find the next command,
+// so the session ends.
+func (s *session) consumeBDAT(arg string) (bdatChunk, error) {
 	size, last, ok := parseBDAT(arg)
 	if !ok {
-		// Chunk length unknown: the stream cannot be resynchronized, so end the session.
 		_ = s.writef(replySyntaxBDAT)
-		return fmt.Errorf("smtp: bdat syntax %q", arg)
+		return bdatChunk{}, fmt.Errorf("smtp: bdat syntax %q", arg)
 	}
+	c := bdatChunk{last: last}
 	if size > s.dataLimits.MaxMessageBytes || len(s.bdatBuf)+size > s.dataLimits.MaxMessageBytes {
-		// Refuse to read an oversized chunk; the bytes in flight leave the stream unusable.
-		_ = s.writef(replyMessageTooLarge)
-		s.reset()
-		return fmt.Errorf("smtp: bdat chunk %d bytes over limit", size)
+		c.tooBig = true
+		if err := discardBDATChunk(s.r, int64(size), s.bumpReadDeadline); err != nil {
+			s.reset()
+			return bdatChunk{}, err
+		}
+		return c, nil
 	}
-	// RFC 3030: the chunk follows the command line immediately and the reply comes only after it.
-	chunk, err := readBDATChunk(s.r, size, s.bumpReadDeadline)
-	if err != nil {
+	var err error
+	if c.data, err = readBDATChunk(s.r, size, s.bumpReadDeadline); err != nil {
 		s.reset()
-		return err
+		return bdatChunk{}, err
 	}
+	return c, nil
+}
+
+func (s *session) cmdBDAT(ctx context.Context, c bdatChunk) error {
 	if !s.inTxn || len(s.rcpt) == 0 {
-		return s.writef(replyBadSequence) // chunk already consumed, session stays in sync
+		return s.writef(replyBadSequence)
+	}
+	if c.tooBig {
+		s.reset() // the message is lost; RSET state, the session goes on (RFC 3030 2)
+		return s.writef(replyMessageTooLarge)
 	}
 	s.bdatUsed = true
-	s.bdatBuf = append(s.bdatBuf, chunk...)
-	if !last {
-		return s.writef("250 2.0.0 %d octets received", size)
+	s.bdatBuf = append(s.bdatBuf, c.data...)
+	if !c.last {
+		return s.writef("250 2.0.0 %d octets received", len(c.data))
 	}
 	return s.deliverAfterFilter(ctx, s.bdatBuf)
 }
