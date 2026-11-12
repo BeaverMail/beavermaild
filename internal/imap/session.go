@@ -19,6 +19,7 @@ import (
 
 	"github.com/BeaverMail/beavermaild/internal/directory"
 	"github.com/BeaverMail/beavermaild/internal/mail"
+	"github.com/BeaverMail/beavermaild/internal/sasl"
 	"github.com/BeaverMail/beavermaild/internal/security"
 	"github.com/BeaverMail/beavermaild/internal/storage"
 	"github.com/BeaverMail/beavermaild/internal/storage/blob"
@@ -514,7 +515,7 @@ func (s *session) cmdAuthenticate(ctx context.Context, tag, arg string) error {
 	}
 	// Acting as another identity needs an authorization rule this server has none of
 	// (RFC 4616 2): only an empty authzid, or the user's own, is accepted.
-	if authzid != "" && !strings.EqualFold(authzid, user) {
+	if !sasl.AuthorizedAs(authzid, user) {
 		return s.tagged(tag, "NO [AUTHORIZATIONFAILED] cannot act as another user")
 	}
 	return s.finishAuth(ctx, tag, user, pass, "OK AUTHENTICATE completed")
