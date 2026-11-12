@@ -148,6 +148,19 @@
 - A bare CR is handled as Exim does: inside the header a folded continuation, in the body a line
   end, on BDAT and APPEND input and on outbound mail. It can no longer start a header field, and
   outbound `\r\r\n` no longer becomes an empty line that ended the header early.
+- Delivery status notifications (RFC 3461, RFC 3464):
+  - No value can add lines to a notification: the remote server's diagnostic, the addresses, ENVID
+    and ORCPT are kept to one line. A remote MX could forge fields such as Final-Recipient in the
+    bounces it caused.
+  - ENVID and ORCPT must be valid xtext decoding to printable ASCII (ENVID up to 100 characters),
+    RET/ENVID/NOTIFY/ORCPT may appear once, NOTIFY needs a value: otherwise 501.
+  - A local delivery with NOTIFY=SUCCESS gets a "delivered" notification (none was sent).
+  - Relaying to a server that offers DSN passes RET, ENVID, NOTIFY and ORCPT as received, and
+    that server reports from there on; to one without DSN, a NOTIFY=SUCCESS recipient gets a
+    "relayed" notification instead of "delivered".
+  - Notifications carry the server's name (Reporting-MTA, From, Message-ID) instead of localhost,
+    ENVID and ORCPT decoded, and only the header (as text/rfc822-headers) unless they report a
+    failure with RET=FULL.
   - SEARCH BODY and TEXT also match the decoded text of base64 and quoted-printable parts, and TEXT
     the decoded RFC 2047 header words (no charset conversion: UTF-8 and US-ASCII parts).
 

@@ -342,6 +342,7 @@ func (a *App) Run(ctx context.Context) error {
 		MaxLifetime:    qt.MaxLifetime,
 		RunDelay:       qt.RunDelay,
 		KeepCompleted:  qt.KeepCompleted,
+		Hostname:       a.cfg.SMTPHostname(),
 	}
 
 	if err := startPprof(ctx, a.log); err != nil {

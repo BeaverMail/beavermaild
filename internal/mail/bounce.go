@@ -20,16 +20,38 @@ type DSNBuildOpts struct {
 	Diagnostic  string
 	QueueID     uint32
 	OriginalRaw []byte
+	Hostname    string // Reporting-MTA and From; "localhost" when unset
+}
+
+// dsnText makes a value safe for one line of the notification: CR, LF and other control
+// characters become spaces. The diagnostic is the remote server's reply and the addresses and
+// ENVID/ORCPT come from clients; a line break in any of them would add fields to the report
+// (a forged Final-Recipient, Action or header of the notification itself).
+func dsnText(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return ' '
+		}
+		return r
+	}, s)
 }
 
 // BuildDSN returns an RFC 3464 multipart/report delivery status notification.
 func BuildDSN(opts DSNBuildOpts) []byte {
+	opts.ReturnPath, opts.FinalRcpt = dsnText(opts.ReturnPath), dsnText(opts.FinalRcpt)
+	opts.Orcpt, opts.Envid = dsnText(opts.Orcpt), dsnText(opts.Envid)
+	opts.Status, opts.Diagnostic = dsnText(opts.Status), dsnText(opts.Diagnostic)
 	boundary := dsnBoundary()
 	subjectAction := dsnSubjectAction(opts.Action)
 	human := dsnHumanText(opts)
 
 	var b strings.Builder
-	b.WriteString("From: Mail Delivery Subsystem <mailer-daemon@localhost>\r\n")
+	host := dsnText(opts.Hostname)
+	if host == "" {
+		host = "localhost"
+	}
+	// RFC 3464 2.1: From is someone responsible for the mail system, reachable for replies.
+	b.WriteString("From: Mail Delivery System <MAILER-DAEMON@" + host + ">\r\n")
 	b.WriteString("To: ")
 	b.WriteString(opts.ReturnPath)
 	b.WriteString("\r\nSubject: Delivery Status Notification (")
@@ -39,7 +61,7 @@ func BuildDSN(opts DSNBuildOpts) []byte {
 	b.WriteString("Auto-Submitted: auto-replied\r\n")
 	b.WriteString("Message-ID: <dsn.")
 	b.WriteString(dsnMessageID())
-	b.WriteString("@localhost>\r\n")
+	b.WriteString("@" + host + ">\r\n")
 	b.WriteString("Content-Type: multipart/report; report-type=delivery-status; boundary=\"")
 	b.WriteString(boundary)
 	b.WriteString("\"\r\n\r\n")
@@ -56,13 +78,17 @@ func BuildDSN(opts DSNBuildOpts) []byte {
 	b.WriteString("--")
 	b.WriteString(boundary)
 	b.WriteString("\r\nContent-Type: message/delivery-status\r\n\r\n")
-	b.WriteString(dsnStatusPart(opts))
+	b.WriteString(dsnStatusPart(opts, host))
 	b.WriteString("\r\n")
 
-	if part := dsnReturnPart(opts); len(part) > 0 {
+	if part, headersOnly := dsnReturnPart(opts); len(part) > 0 {
 		b.WriteString("--")
 		b.WriteString(boundary)
-		b.WriteString("\r\nContent-Type: message/rfc822\r\n\r\n")
+		if headersOnly {
+			b.WriteString("\r\nContent-Type: text/rfc822-headers\r\n\r\n") // RFC 6522 4
+		} else {
+			b.WriteString("\r\nContent-Type: message/rfc822\r\n\r\n")
+		}
 		b.Write(part)
 		if !bytesHasSuffixCRLF(part) {
 			b.WriteString("\r\n")
@@ -94,6 +120,8 @@ func dsnSubjectAction(action DSNAction) string {
 		return "Success"
 	case DSNActionDelayed:
 		return "Delay"
+	case DSNActionRelayed:
+		return "Relayed"
 	default:
 		return "Failure"
 	}
@@ -105,6 +133,8 @@ func dsnHumanText(opts DSNBuildOpts) string {
 		return fmt.Sprintf("Your message was successfully delivered to <%s>.\r\n", opts.FinalRcpt)
 	case DSNActionDelayed:
 		return fmt.Sprintf("Delivery to <%s> has been delayed.\r\n%s\r\n", opts.FinalRcpt, opts.Diagnostic)
+	case DSNActionRelayed:
+		return fmt.Sprintf("Your message was relayed to <%s>; the next server sends no delivery notifications.\r\n", opts.FinalRcpt)
 	default:
 		if opts.QueueID != 0 {
 			return fmt.Sprintf("Your message (queue id %d) could not be delivered to <%s>.\r\n%s\r\n",
@@ -114,17 +144,24 @@ func dsnHumanText(opts DSNBuildOpts) string {
 	}
 }
 
-func dsnStatusPart(opts DSNBuildOpts) string {
+func dsnStatusPart(opts DSNBuildOpts, host string) string {
 	var b strings.Builder
-	b.WriteString("Reporting-MTA: dns; localhost\r\n")
+	// RFC 3461 6.3 (b): "dns" with the fully-qualified name, another type when it is not one.
+	if strings.Contains(host, ".") {
+		b.WriteString("Reporting-MTA: dns; " + host + "\r\n")
+	} else {
+		b.WriteString("Reporting-MTA: x-local-hostname; " + host + "\r\n")
+	}
+	// ENVID and ORCPT arrive as xtext and appear decoded (RFC 3461 6.3 (a), (d)); dsnText already
+	// kept any line break out, and the SMTP server refuses values that decode to one.
 	if opts.Envid != "" {
 		b.WriteString("Original-Envelope-Id: ")
-		b.WriteString(opts.Envid)
+		b.WriteString(dsnText(EnvidText(opts.Envid)))
 		b.WriteString("\r\n")
 	}
 	if opts.Orcpt != "" {
 		b.WriteString("Original-Recipient: ")
-		b.WriteString(opts.Orcpt)
+		b.WriteString(dsnText(OrcptText(opts.Orcpt)))
 		b.WriteString("\r\n")
 	}
 	b.WriteString("Final-Recipient: rfc822; ")
@@ -138,7 +175,7 @@ func dsnStatusPart(opts DSNBuildOpts) string {
 		b.WriteString(opts.Status)
 	} else {
 		switch opts.Action {
-		case DSNActionDelivered:
+		case DSNActionDelivered, DSNActionRelayed:
 			b.WriteString("2.0.0")
 		case DSNActionDelayed:
 			b.WriteString("4.0.0")
@@ -155,14 +192,17 @@ func dsnStatusPart(opts DSNBuildOpts) string {
 	return b.String()
 }
 
-func dsnReturnPart(opts DSNBuildOpts) []byte {
-	switch opts.Ret {
-	case RetFull:
-		return opts.OriginalRaw
-	case RetHdrs:
-		return extractHeaders(opts.OriginalRaw)
+// dsnReturnPart is the copy of the message the notification carries, and whether it is only the
+// header. RET=FULL returns the whole message only with a failure: other notifications SHOULD
+// carry only the header (RFC 3461 6.2).
+func dsnReturnPart(opts DSNBuildOpts) ([]byte, bool) {
+	switch {
+	case opts.Ret == RetFull && opts.Action == DSNActionFailed:
+		return opts.OriginalRaw, false
+	case opts.Ret == RetFull, opts.Ret == RetHdrs:
+		return extractHeaders(opts.OriginalRaw), true
 	default:
-		return nil
+		return nil, false
 	}
 }
 

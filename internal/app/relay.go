@@ -6,6 +6,7 @@ import (
 
 	"github.com/BeaverMail/beavermaild/internal/config"
 	"github.com/BeaverMail/beavermaild/internal/directory"
+	"github.com/BeaverMail/beavermaild/internal/mail"
 	"github.com/BeaverMail/beavermaild/internal/smtp"
 )
 
@@ -37,8 +38,9 @@ func remoteConfigFrom(c *config.Config) smtp.RemoteConfig {
 	}
 }
 
-func (d remoteDeliverer) DeliverRemote(ctx context.Context, mailFrom, rcptTo string, data []byte) (string, error) {
+func (d remoteDeliverer) DeliverRemote(ctx context.Context, mailFrom, rcptTo string, data []byte, dsn *mail.RelayDSN) (string, error) {
 	cfg := d.base
+	cfg.RelayOptions.DSN, cfg.MXOptions.DSN = dsn, dsn
 	if d.dir != nil {
 		if at := strings.LastIndex(mailFrom, "@"); at > 0 && at < len(mailFrom)-1 {
 			if dom, err := d.dir.LookupDomain(ctx, mailFrom[at+1:]); err == nil && strings.TrimSpace(dom.RelayHost) != "" {

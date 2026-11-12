@@ -981,6 +981,7 @@ func (s *session) finishDelivery(ctx context.Context, raw []byte) error {
 			return nil
 		}
 	}
+	s.notifyLocalSuccess(ctx, raw)
 	if s.submission && s.principal.AccountID != 0 {
 		s.sendGate.RecordSend(s.principal.Email())
 	}
@@ -990,6 +991,35 @@ func (s *session) finishDelivery(ctx context.Context, raw []byte) error {
 	}
 	s.reset()
 	return nil
+}
+
+// notifyLocalSuccess issues a "delivered" DSN for each local recipient that asked for one with
+// NOTIFY=SUCCESS (RFC 3461 5.2.3 (a)). The messages are already stored: a failure here is logged.
+// The DSN goes out with a null sender and NOTIFY=NEVER (RFC 3461 6.1).
+func (s *session) notifyLocalSuccess(ctx context.Context, raw []byte) {
+	if s.mailFrom == "" {
+		return
+	}
+	for _, t := range s.rcpt {
+		if t.accountID == 0 || t.report != "" || !mail.NotifyWanted(t.notify, mail.DSNActionDelivered) {
+			continue
+		}
+		dsn := mail.BuildDSN(mail.DSNBuildOpts{
+			ReturnPath: s.mailFrom, FinalRcpt: t.address, Orcpt: t.orcpt, Envid: s.mailEnvid, Ret: s.mailRet,
+			Action: mail.DSNActionDelivered, Status: "2.0.0", OriginalRaw: raw, Hostname: s.hostname,
+		})
+		var err error
+		if acc, _, rerr := s.dir.ResolveEmail(ctx, s.mailFrom); rerr == nil && acc.Active {
+			_, err = s.inbox.Deliver(ctx, acc.ID, dsn)
+		} else if s.queue != nil {
+			_, err = s.queue.EnqueueDSN(ctx, mail.EnvelopeDSN{Recipients: []mail.RcptDSN{{Address: s.mailFrom, Notify: mail.NotifyNever}}}, dsn)
+		} else {
+			err = errors.New("no outbound queue")
+		}
+		if err != nil {
+			s.log.Warn("success dsn failed", "rcpt", t.address, "return_path", s.mailFrom, slog.Any("err", err))
+		}
+	}
 }
 
 // cmdBDAT receives one binary chunk and delivers the message on the final LAST chunk.

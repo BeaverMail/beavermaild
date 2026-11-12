@@ -24,7 +24,7 @@ type stallRemote struct {
 	peak    int // highest stalled seen
 }
 
-func (r *stallRemote) DeliverRemote(ctx context.Context, _, rcptTo string, _ []byte) (string, error) {
+func (r *stallRemote) DeliverRemote(ctx context.Context, _, rcptTo string, _ []byte, _ *mail.RelayDSN) (string, error) {
 	if strings.HasSuffix(rcptTo, "@tarpit.example") {
 		r.mu.Lock()
 		r.stalled++

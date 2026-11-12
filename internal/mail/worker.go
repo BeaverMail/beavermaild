@@ -19,7 +19,9 @@ import (
 // RemoteDeliverer submits mail to remote recipients (relay or MX).
 type RemoteDeliverer interface {
 	// DeliverRemote returns the accepting server's reply on success.
-	DeliverRemote(ctx context.Context, mailFrom, rcptTo string, data []byte) (string, error)
+	// dsn carries the recipient's DSN parameters to a next hop that supports DSN (nil for a
+	// notification, which is sent without them).
+	DeliverRemote(ctx context.Context, mailFrom, rcptTo string, data []byte, dsn *RelayDSN) (string, error)
 }
 
 // OutboundSigner adds DKIM signatures before remote delivery.
@@ -224,7 +226,8 @@ func (w *Worker) deliverEntry(ctx context.Context, e QueueEntry) error {
 			continue
 		}
 		RecordAttempt(&msg, i, now)
-		reply, err := w.deliverTo(ctx, msg.ReturnPath, rcpt.Address, raw)
+		dsn := &RelayDSN{Ret: RetMode(msg.Ret), Envid: msg.Envid, Notify: rcpt.Notify, Orcpt: rcpt.Orcpt}
+		reply, local, err := w.deliverTo(ctx, msg.ReturnPath, rcpt.Address, raw, dsn)
 		if err != nil {
 			w.log.Warn("queue rcpt failed", "queue_id", e.ID, "rcpt", rcpt.Address, slog.Any("err", err))
 			rcpt.LastDiag = err.Error()
@@ -243,7 +246,15 @@ func (w *Worker) deliverEntry(ctx context.Context, e QueueEntry) error {
 		}
 		rcpt.LastDiag = reply
 		MarkDelivered(&msg, i)
-		w.maybeSendDSN(ctx, e.ID, msg, *rcpt, raw, DSNActionDelivered, nil)
+		// RFC 3461 5.2: delivered here → "delivered"; passed to a server that took the DSN
+		// parameters → it reports; passed to one without DSN → "relayed" (only for SUCCESS).
+		switch {
+		case local:
+			w.maybeSendDSN(ctx, e.ID, msg, *rcpt, raw, DSNActionDelivered, nil)
+		case dsn.Passed:
+		default:
+			w.maybeSendDSN(ctx, e.ID, msg, *rcpt, raw, DSNActionRelayed, nil)
+		}
 		changed = true
 	}
 
@@ -315,6 +326,7 @@ func (w *Worker) maybeSendDSN(ctx context.Context, queueID uint32, msg storage.Q
 		Diagnostic:  diag,
 		QueueID:     queueID,
 		OriginalRaw: raw,
+		Hostname:    w.policy.Hostname,
 	}
 	bounce := BuildDSN(opts)
 	if err := w.deliverBounce(ctx, returnPath, bounce); err != nil {
@@ -324,7 +336,7 @@ func (w *Worker) maybeSendDSN(ctx context.Context, queueID uint32, msg storage.Q
 
 func dsnStatusFor(action DSNAction, err error) string {
 	switch action {
-	case DSNActionDelivered:
+	case DSNActionDelivered, DSNActionRelayed:
 		return "2.0.0"
 	case DSNActionDelayed:
 		if err != nil {
@@ -356,29 +368,32 @@ func (w *Worker) deliverBounce(ctx context.Context, returnPath string, raw []byt
 	if w.remote == nil {
 		return errors.New("mail: no remote delivery for bounce")
 	}
-	_, err := w.remote.DeliverRemote(ctx, "", returnPath, raw)
+	_, err := w.remote.DeliverRemote(ctx, "", returnPath, raw, nil)
 	return err
 }
 
-// deliverTo returns a short delivery record on success (local mailbox or the remote server's reply).
-func (w *Worker) deliverTo(ctx context.Context, returnPath, rcpt string, raw []byte) (string, error) {
+// deliverTo returns a short delivery record on success (local mailbox or the remote server's reply)
+// and whether it was delivered here. For a remote delivery, dsn records whether the next hop took
+// the DSN parameters.
+func (w *Worker) deliverTo(ctx context.Context, returnPath, rcpt string, raw []byte, dsn *RelayDSN) (reply string, local bool, err error) {
 	acc, _, err := w.dir.ResolveEmail(ctx, rcpt)
 	if err == nil {
 		if !acc.Active {
-			return "", directory.ErrInactive
+			return "", false, directory.ErrInactive
 		}
 		if _, err = w.inbox.Deliver(ctx, acc.ID, raw); err != nil {
-			return "", err
+			return "", false, err
 		}
-		return "delivered to local mailbox", nil
+		return "delivered to local mailbox", true, nil
 	}
 	if !errors.Is(err, directory.ErrNotFound) {
-		return "", err
+		return "", false, err
 	}
 	if w.remote == nil {
-		return "", errors.New("mail: no remote delivery configured")
+		return "", false, errors.New("mail: no remote delivery configured")
 	}
-	return w.remote.DeliverRemote(ctx, returnPath, rcpt, raw)
+	reply, err = w.remote.DeliverRemote(ctx, returnPath, rcpt, raw, dsn)
+	return reply, false, err
 }
 
 func (w *Worker) hasPendingRemote(ctx context.Context, msg storage.QueueMessage) bool {

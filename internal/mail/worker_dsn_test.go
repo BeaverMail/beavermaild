@@ -20,7 +20,7 @@ type stubRemote struct {
 	ok  bool
 }
 
-func (s stubRemote) DeliverRemote(ctx context.Context, mailFrom, rcptTo string, data []byte) (string, error) {
+func (s stubRemote) DeliverRemote(ctx context.Context, mailFrom, rcptTo string, data []byte, _ *mail.RelayDSN) (string, error) {
 	if s.ok {
 		return "250 OK", nil
 	}
@@ -170,7 +170,8 @@ func TestWorkerSuccessDSN(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(body), "Action: delivered") {
+	// The stub server offers no DSN: the message was relayed, not delivered (RFC 3461 5.2.2 (b)).
+	if !strings.Contains(string(body), "Action: relayed") {
 		t.Fatalf("body %q", body)
 	}
 }

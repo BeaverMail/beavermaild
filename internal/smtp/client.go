@@ -53,6 +53,9 @@ type ClientOptions struct {
 	// RejectPrivate refuses to connect to loopback, private, link-local or unspecified addresses (MX
 	// delivery: a remote domain must not make us talk to our own network).
 	RejectPrivate bool
+	// DSN carries the recipient's DSN parameters (RFC 3461 5.2.1); the client sets DSN.Passed when
+	// the server offered DSN and received them.
+	DSN *mail.RelayDSN
 }
 
 var (
@@ -168,6 +171,23 @@ func SendReply(ctx context.Context, addr, mailFrom, rcptTo string, data []byte, 
 	tc.d = clientDataTimeout
 	mailLine := mailFromLine(mailFrom, data, caps, opts.User != "" && opts.Password != "")
 	rcptLine := fmt.Sprintf("RCPT TO:<%s>", rcptTo)
+	// RFC 3461 5.2.1: to a server with DSN, the parameters received go along unchanged, and only
+	// those received; it reports from there on. Without DSN none is sent (5.2.2 (a)).
+	if d := opts.DSN; d != nil && caps.DSN {
+		if d.Ret != mail.RetNone {
+			mailLine += " RET=" + string(d.Ret)
+		}
+		if d.Envid != "" {
+			mailLine += " ENVID=" + d.Envid
+		}
+		if kw := mail.NotifyKeyword(d.Notify); kw != "" {
+			rcptLine += " NOTIFY=" + kw
+		}
+		if d.Orcpt != "" {
+			rcptLine += " ORCPT=" + d.Orcpt
+		}
+		d.Passed = true
+	}
 
 	if caps.Pipelining {
 		return sendPipelined(conn, r, mailLine, rcptLine, data, caps)
@@ -305,6 +325,7 @@ type clientCaps struct {
 	EightBitMIME bool
 	Chunking     bool
 	Pipelining   bool
+	DSN          bool
 	Auth         []string
 }
 
@@ -347,6 +368,8 @@ func readEHLOCaps(r *bufio.Reader) (clientCaps, error) {
 				caps.Chunking = true
 			case "PIPELINING":
 				caps.Pipelining = true
+			case "DSN":
+				caps.DSN = true
 			case "AUTH":
 				for _, m := range fields[1:] {
 					caps.Auth = append(caps.Auth, strings.ToUpper(m))

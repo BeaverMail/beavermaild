@@ -24,27 +24,11 @@ type RcptParams struct {
 	Unsupported string
 }
 
-// validXtext reports whether v is an xtext (RFC 3461 4): characters "!" to "~" except "+" and
-// "=", or "+" followed by two upper-case hex digits.
+// validXtext reports whether v is an xtext (RFC 3461 4).
 func validXtext(v string) bool {
-	if v == "" {
-		return false
-	}
-	for i := 0; i < len(v); i++ {
-		switch c := v[i]; {
-		case c == '+':
-			if i+2 >= len(v) || !isUpperHex(v[i+1]) || !isUpperHex(v[i+2]) {
-				return false
-			}
-			i += 2
-		case c < '!' || c > '~' || c == '=':
-			return false
-		}
-	}
-	return true
+	_, ok := mail.DecodeXtext(v)
+	return ok
 }
-
-func isUpperHex(c byte) bool { return '0' <= c && c <= '9' || 'A' <= c && c <= 'F' }
 
 // parseMailArg extracts the envelope sender, SIZE, and DSN parameters from MAIL FROM.
 func parseMailArg(arg string) (address string, declaredSize int, params MailParams, ok bool) {
@@ -57,9 +41,15 @@ func parseMailArg(arg string) (address string, declaredSize int, params MailPara
 		return "", 0, MailParams{}, false
 	}
 	address = normalizeEnvelopeAddress(path)
+	seen := map[string]bool{}
 	for _, field := range strings.Fields(rest) {
 		upper := strings.ToUpper(field)
 		key, val, hasVal := strings.Cut(upper, "=")
+		// RET and ENVID at most once each (RFC 3461 4.5): 501.
+		if (key == "RET" || key == "ENVID") && seen[key] {
+			return "", 0, MailParams{}, false
+		}
+		seen[key] = true
 		if !hasVal {
 			if key == "SMTPUTF8" {
 				params.SMTPUTF8 = true
@@ -82,7 +72,10 @@ func parseMailArg(arg string) (address string, declaredSize int, params MailPara
 			}
 			params.Ret = ret
 		case "ENVID":
-			params.Envid = field[len(key)+1:]
+			// Kept as received (xtext): relayed identical (RFC 3461 5.2.1), decoded only for the DSN.
+			if params.Envid = field[len(key)+1:]; !mail.ValidEnvid(params.Envid) {
+				return "", 0, MailParams{}, false
+			}
 		case "BODY":
 			params.Body = val
 		case "AUTH":
@@ -112,10 +105,16 @@ func parseRcptArg(arg string) (address string, params RcptParams, ok bool) {
 		return "", RcptParams{}, false
 	}
 	address = normalizeEnvelopeAddress(path)
-	params.Notify = mail.NotifyDefault
+	params.Notify = 0 // no NOTIFY: the default applies, and none is passed on (RFC 3461 5.2.1 (c))
+	seen := map[string]bool{}
 	for _, field := range strings.Fields(rest) {
 		upper := strings.ToUpper(field)
 		key, val, hasVal := strings.Cut(upper, "=")
+		// NOTIFY and ORCPT at most once each (RFC 3461 4.5): 501.
+		if (key == "NOTIFY" || key == "ORCPT") && seen[key] {
+			return "", RcptParams{}, false
+		}
+		seen[key] = true
 		if !hasVal {
 			params.Unsupported = replyParamUnknown // RFC 5321 4.1.1.11
 			continue
@@ -123,12 +122,14 @@ func parseRcptArg(arg string) (address string, params RcptParams, ok bool) {
 		switch key {
 		case "NOTIFY":
 			notify, okNotify := mail.ParseNotify(val)
-			if !okNotify {
+			if !okNotify || val == "" { // NOTIFY MUST have a value (RFC 3461 4.1)
 				return "", RcptParams{}, false
 			}
 			params.Notify = notify
 		case "ORCPT":
-			params.Orcpt = field[len(key)+1:]
+			if params.Orcpt = field[len(key)+1:]; !mail.ValidOrcpt(params.Orcpt) {
+				return "", RcptParams{}, false
+			}
 		case "BY":
 			params.Unsupported = replyParamNotSupported
 		case "MT-PRIORITY":

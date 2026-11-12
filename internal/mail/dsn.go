@@ -53,6 +53,7 @@ const (
 	DSNActionFailed    DSNAction = "failed"
 	DSNActionDelayed   DSNAction = "delayed"
 	DSNActionDelivered DSNAction = "delivered"
+	DSNActionRelayed   DSNAction = "relayed" // passed to a server that does not issue DSNs (RFC 3461 5.2.2)
 )
 
 // ParseNotify parses NOTIFY= values (FAILURE, DELAY, SUCCESS, NEVER).
@@ -98,8 +99,45 @@ func ParseRet(s string) (RetMode, bool) {
 	}
 }
 
-// NotifyWanted reports whether the recipient requested this DSN action.
+// RelayDSN carries a recipient's DSN parameters to the SMTP client relaying it (RFC 3461 5.2.1):
+// values as received (xtext for ENVID and ORCPT), Notify in its stored form where 0 means "no
+// NOTIFY was given". The client sets Passed when the next server offered DSN and took them, so the
+// notifications are its job from there on.
+type RelayDSN struct {
+	Ret    RetMode
+	Envid  string
+	Notify uint8
+	Orcpt  string
+	Passed bool
+}
+
+// NotifyKeyword is the NOTIFY value for a stored notify mask ("" when none was given).
+func NotifyKeyword(stored uint8) string {
+	if stored == 0 {
+		return ""
+	}
+	n := NotifyFlagsFromStorage(stored)
+	if n&NotifyNever != 0 {
+		return "NEVER"
+	}
+	var kw []string
+	for _, f := range []struct {
+		bit  NotifyFlags
+		name string
+	}{{NotifySuccess, "SUCCESS"}, {NotifyFailure, "FAILURE"}, {NotifyDelay, "DELAY"}} {
+		if n&f.bit != 0 {
+			kw = append(kw, f.name)
+		}
+	}
+	return strings.Join(kw, ",")
+}
+
+// NotifyWanted reports whether the recipient requested this DSN action. A recipient without
+// NOTIFY (0) gets the default, FAILURE and DELAY (RFC 3461 4.1).
 func NotifyWanted(n NotifyFlags, action DSNAction) bool {
+	if n == 0 {
+		n = NotifyDefault
+	}
 	if n&NotifyNever != 0 {
 		return false
 	}
@@ -108,7 +146,7 @@ func NotifyWanted(n NotifyFlags, action DSNAction) bool {
 		return n&NotifyFailure != 0
 	case DSNActionDelayed:
 		return n&NotifyDelay != 0
-	case DSNActionDelivered:
+	case DSNActionDelivered, DSNActionRelayed:
 		return n&NotifySuccess != 0
 	default:
 		return false
@@ -159,4 +197,90 @@ func MarkDelayNotified(msg *storage.QueueMessage, i int) {
 // DelayNotified reports whether a DELAY DSN was already sent for this recipient.
 func DelayNotified(rcpt storage.QueueRecipient) bool {
 	return rcpt.Flags&rcptDelayNotifiedFlag != 0
+}
+
+// DecodeXtext decodes an xtext (RFC 3461 4): characters "!" to "~" except "+" and "=" stand for
+// themselves, "+" and two upper-case hex digits for any octet. ok is false for anything else.
+func DecodeXtext(s string) (string, bool) {
+	if s == "" {
+		return "", false
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; {
+		case c == '+':
+			if i+2 >= len(s) || !isUpperHex(s[i+1]) || !isUpperHex(s[i+2]) {
+				return "", false
+			}
+			b.WriteByte(unhex(s[i+1])<<4 | unhex(s[i+2]))
+			i += 2
+		case c < '!' || c > '~' || c == '=':
+			return "", false
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return b.String(), true
+}
+
+func isUpperHex(c byte) bool { return '0' <= c && c <= '9' || 'A' <= c && c <= 'F' }
+
+func unhex(c byte) byte {
+	if c <= '9' {
+		return c - '0'
+	}
+	return c - 'A' + 10
+}
+
+// printableASCII reports whether s is printable US-ASCII (graphic and space), what ENVID and
+// ORCPT must decode to (RFC 3461 4.2, 4.4): nothing that could break a notification line.
+func printableASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < ' ' || s[i] > '~' {
+			return false
+		}
+	}
+	return true
+}
+
+// ValidEnvid reports whether v is a valid ENVID value: xtext of at most 100 printable characters
+// once decoded (RFC 3461 4.4).
+func ValidEnvid(v string) bool {
+	d, ok := DecodeXtext(v)
+	return ok && len(d) <= 100 && printableASCII(d)
+}
+
+// ValidOrcpt reports whether v is a valid ORCPT value: addr-type ";" xtext, at most 500
+// characters with "ORCPT=", decoding to printable text (RFC 3461 4.2).
+func ValidOrcpt(v string) bool {
+	typ, addr, ok := strings.Cut(v, ";")
+	if !ok || typ == "" || len("ORCPT=")+len(v) > 500 {
+		return false
+	}
+	for i := 0; i < len(typ); i++ {
+		if c := typ[i]; !('a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || c == '-') {
+			return false
+		}
+	}
+	d, ok := DecodeXtext(addr)
+	return ok && printableASCII(d)
+}
+
+// OrcptText is the Original-Recipient field value for an ORCPT parameter: its addr-type and the
+// decoded address (RFC 3461 6.3 (d)).
+func OrcptText(v string) string {
+	typ, addr, _ := strings.Cut(v, ";")
+	d, ok := DecodeXtext(addr)
+	if !ok {
+		d = addr
+	}
+	return typ + ";" + d
+}
+
+// EnvidText is the Original-Envelope-Id field value: the ENVID decoded from xtext (RFC 3461 6.3 (a)).
+func EnvidText(v string) string {
+	if d, ok := DecodeXtext(v); ok {
+		return d
+	}
+	return v
 }

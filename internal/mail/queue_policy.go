@@ -23,6 +23,7 @@ type QueuePolicy struct {
 	RunDelay         time.Duration
 	DelayNotifyAfter time.Duration // 0 = notify on first transient failure
 	KeepCompleted    time.Duration // how long finished entries stay listed; 0 = delete at once
+	Hostname         string        // this server's name in the notifications it issues (Reporting-MTA, From)
 }
 
 // DefaultQueuePolicy returns production defaults (3d message lifetime).
