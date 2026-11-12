@@ -92,6 +92,7 @@ type Mailbox struct {
 	UIDValidity   uint32 `msgpack:"uv"`
 	HighestModSeq uint64 `msgpack:"hm,omitempty"`
 	UIDSeqInit    bool   `msgpack:"ui,omitempty"` // true once per-mailbox IMAP UID backfill completed
+	VSizeInit     bool   `msgpack:"vi,omitempty"` // true once every message has EmailMeta.VSize
 	MessageCount  uint32 `msgpack:"mc,omitempty"` // denormalized messages in folder; 0 until first sync/bump
 	Subscribed    bool   `msgpack:"sub,omitempty"`
 	SubSet        bool   `msgpack:"ss,omitempty"` // true once SUBSCRIBE/UNSUBSCRIBE touched this folder
@@ -104,7 +105,8 @@ type EmailMeta struct {
 	MailboxID  uint32   `msgpack:"mb"`
 	ThreadID   uint32   `msgpack:"th"`
 	ReceivedAt int64    `msgpack:"rcv"`
-	Size       uint32   `msgpack:"sz"`
+	Size       uint32   `msgpack:"sz"`           // stored bytes: what quota counts
+	VSize      uint32   `msgpack:"vs,omitempty"` // bytes with CRLF line ends (IMAP RFC822.SIZE); 0 until computed
 	Flags      uint32   `msgpack:"fl"`
 	ModSeq     uint64   `msgpack:"ms,omitempty"`
 	IMAPUID    uint32   `msgpack:"iu,omitempty"` // IMAP UID in MailboxID; 0 until assigned or legacy backfill

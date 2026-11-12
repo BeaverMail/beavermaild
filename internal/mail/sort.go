@@ -103,7 +103,7 @@ func matchSortRows(ctx context.Context, msgs []Message, expr SearchExpr, load Ra
 func loadSortFields(m Message, load RawLoader) sortFields {
 	f := sortFields{
 		arrival: m.Meta.ReceivedAt,
-		size:    m.Meta.Size,
+		size:    RFC822Size(m.Meta), // RFC 5256 SIZE is RFC822.SIZE
 		date:    time.Unix(m.Meta.ReceivedAt, 0),
 	}
 	if load == nil {

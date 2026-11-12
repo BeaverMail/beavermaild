@@ -158,10 +158,10 @@ func matchSearchOne(m Message, pos searchPos, c SearchCriteria, load RawLoader) 
 			return false
 		}
 	}
-	if c.Larger != nil && m.Meta.Size <= *c.Larger {
+	if c.Larger != nil && RFC822Size(m.Meta) <= *c.Larger {
 		return false
 	}
-	if c.Smaller != nil && m.Meta.Size >= *c.Smaller {
+	if c.Smaller != nil && RFC822Size(m.Meta) >= *c.Smaller {
 		return false
 	}
 	if c.Since != nil || c.Before != nil || c.On != nil {

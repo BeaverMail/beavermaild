@@ -45,7 +45,16 @@ func (ib *Inbox) List(ctx context.Context, accountID, mailboxID uint32) ([]Messa
 			return nil, err
 		}
 	}
-	return ib.listFromMailboxIndex(ctx, accountID, mailboxID)
+	msgs, err := ib.listFromMailboxIndex(ctx, accountID, mailboxID)
+	if err != nil {
+		return nil, err
+	}
+	if mbox, err := ib.mailboxRecord(ctx, accountID, mailboxID); err == nil && !mbox.VSizeInit {
+		if err := ib.backfillVSize(ctx, accountID, mailboxID, msgs); err != nil {
+			return nil, err
+		}
+	}
+	return msgs, nil
 }
 
 // LoadRaw returns the RFC 5322 bytes for meta (blob hash required).
