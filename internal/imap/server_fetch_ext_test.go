@@ -35,7 +35,7 @@ func readResponse(t *testing.T, r *bufio.Reader) string {
 
 // TestIMAPFetch8BitStringsAsLiterals: decoded non-ASCII names and filenames must not be sent
 // as quoted strings (7-bit only in IMAP4rev1).
-func TestIMAPFetch8BitStringsAsLiterals(t *testing.T) {
+func TestIMAPFetch8BitHeaderTextAsEncodedWords(t *testing.T) {
 	t.Parallel()
 
 	ctx, accID, inbox, ln, cleanup := startIMAPTestServer(t)
@@ -70,11 +70,18 @@ func TestIMAPFetch8BitStringsAsLiterals(t *testing.T) {
 	send(t, conn, "e3 FETCH 1 (ENVELOPE BODYSTRUCTURE)")
 	resp := readResponse(t, read)
 	expectPrefix(t, read, "e3 OK")
-	if !strings.Contains(resp, "(({5}\r\nJosé NIL \"jose\" \"example.com\"))") {
-		t.Fatalf("envelope name not a literal: %q", resp)
+	// RFC 3501 4.3.1: 8-bit text only with its charset identified. Go's parsers decode RFC 2047
+	// and RFC 2231, so the server sends the text back as an RFC 2047 word: 7-bit, charset named.
+	if !strings.Contains(resp, `(("=?utf-8?q?Jos=C3=A9?=" NIL "jose" "example.com"))`) {
+		t.Fatalf("envelope name: %q", resp)
 	}
-	if !strings.Contains(resp, "(\"NAME\" {13}\r\nfatturaà.pdf)") {
-		t.Fatalf("filename not a literal: %q", resp)
+	if !strings.Contains(resp, `("NAME" "=?utf-8?q?fattura=C3=A0.pdf?=")`) {
+		t.Fatalf("filename: %q", resp)
+	}
+	for i := 0; i < len(resp); i++ {
+		if resp[i] >= 0x80 {
+			t.Fatalf("8-bit byte in the response: %q", resp)
+		}
 	}
 }
 

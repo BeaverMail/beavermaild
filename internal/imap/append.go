@@ -2,6 +2,7 @@
 package imap
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -18,17 +19,52 @@ import (
 type appendSpec struct {
 	flags        uint32
 	internalDate int64
+	keywords     []string // set on the new message after it is stored
 	size         int
 	nonsync      bool
 	binary       bool // literal8 (~{n}, RFC 3516)
 	catenate     bool
 }
 
+// errNULLiteral refuses NUL in a plain literal: a literal is CHAR8 (RFC 3501 9); binary content
+// goes in a literal8 (~{n}, RFC 3516), which APPEND accepts.
+const errNULLiteral = "BAD NUL in a literal: send binary content as literal8 (~{n})"
+
+// maxMailboxLiteralBytes bounds a mailbox name sent as a literal to APPEND.
+const maxMailboxLiteralBytes = 1 << 10
+
 // cmdAppend appends one message, or several with MULTIAPPEND (RFC 3502): all of them or none.
 // Literals may be literal8 (~{n}, RFC 3516 BINARY); a message may be built with CATENATE.
 func (s *session) cmdAppend(ctx context.Context, tag, arg string) error {
 	if s.principal.AccountID == 0 {
 		return s.rejectCommand(tag, arg, "NO LOGIN required")
+	}
+	// The mailbox may itself be a literal ("APPEND {5}", then "INBOX (\Seen) {310}"): read that one
+	// here; the message literals are read below, under MaxAppendBytes.
+	if t := strings.TrimSpace(arg); strings.HasPrefix(t, "{") && !strings.Contains(t, " ") {
+		if n, nonSync, isLit := literalMarker(t); isLit {
+			if n > maxMailboxLiteralBytes {
+				if nonSync {
+					_ = s.untagged("BYE [TOOBIG] mailbox name too long")
+					return errLiteralTooLarge
+				}
+				return s.tagged(tag, "BAD mailbox name too long")
+			}
+			if !nonSync {
+				if err := s.continuation(); err != nil {
+					return err
+				}
+			}
+			lit, err := s.readLiteral(n)
+			if err != nil {
+				return err
+			}
+			line, err := s.readLine()
+			if err != nil {
+				return err
+			}
+			arg = t + "\r\n" + string(lit) + line
+		}
 	}
 	mboxName, cur, ok := parseAppendMailboxToken(strings.TrimSpace(arg))
 	if !ok {
@@ -61,11 +97,16 @@ func (s *session) cmdAppend(ctx context.Context, tag, arg string) error {
 			if raw, ok, err = s.readAppendLiteral(tag, spec, &total); !ok || err != nil {
 				return err
 			}
-			if spec.binary {
-				raw = base64NULParts(raw)
-			}
 			if cur, err = s.readLine(); err != nil {
 				return err
+			}
+			if len(raw) == 0 { // {0} is valid syntax; there is no message to store
+				return s.rejectCommand(tag, cur, "NO [CANNOT] empty message")
+			}
+			if spec.binary {
+				raw = base64NULParts(raw)
+			} else if bytes.IndexByte(raw, 0) >= 0 {
+				return s.rejectCommand(tag, cur, errNULLiteral)
 			}
 		} else if raw, cur, ok, err = s.readCatenate(ctx, tag, after, &total); !ok || err != nil {
 			return err
@@ -79,6 +120,11 @@ func (s *session) cmdAppend(ctx context.Context, tag, arg string) error {
 	var ids, uids []uint32
 	for i, raw := range raws {
 		emailID, err := s.inbox.Append(ctx, s.principal.AccountID, mbox.ID, raw, specs[i].flags, specs[i].internalDate)
+		if err == nil && len(specs[i].keywords) > 0 {
+			if _, err = s.inbox.SetFlagsMany(ctx, s.principal.AccountID, []uint32{emailID}, 0, 0, specs[i].keywords, nil, 0); err != nil {
+				ids = append(ids, emailID) // stored: undone with the others below
+			}
+		}
 		if err == nil {
 			var meta storage.EmailMeta
 			if meta, err = s.inbox.GetMeta(ctx, s.principal.AccountID, emailID); err == nil {
@@ -101,8 +147,13 @@ func (s *session) cmdAppend(ctx context.Context, tag, arg string) error {
 
 // readAppendLiteral reads the message literal spec announces, counting it in *total. ok is false
 // when the command was refused instead (the reply or BYE is already sent).
+// appendMessageCost is what each message of a MULTIAPPEND counts toward MaxAppendBytes besides its
+// bytes: the per-message bookkeeping is ~100 bytes, so a million 1-byte messages would otherwise
+// hold far more memory than the cap (CVE-2024-34055 class). It bounds a command to 8192 messages.
+const appendMessageCost = 4 << 10
+
 func (s *session) readAppendLiteral(tag string, spec appendSpec, total *int) (raw []byte, ok bool, err error) {
-	if *total += spec.size; *total > mail.MaxAppendBytes {
+	if *total += spec.size + appendMessageCost; *total > mail.MaxAppendBytes {
 		if spec.nonsync {
 			// The client is already sending the bytes, which would otherwise be read as commands
 			// (RFC 7888 4): say why and hang up rather than read megabytes to throw away.
@@ -125,6 +176,9 @@ func (s *session) readAppendLiteral(tag string, spec appendSpec, total *int) (ra
 // "CATENATE (": TEXT literals and URLs of messages this user may read. It returns the line left
 // after the closing parenthesis; ok is false when the command was refused.
 func (s *session) readCatenate(ctx context.Context, tag, rest string, total *int) (msg []byte, tail string, ok bool, err error) {
+	if *total += appendMessageCost; *total > mail.MaxAppendBytes {
+		return nil, "", false, s.rejectCommand(tag, rest, "NO [TOOBIG] message too large")
+	}
 	for {
 		rest = strings.TrimLeft(rest, " ")
 		word, arg, _ := strings.Cut(rest, " ")
@@ -167,6 +221,9 @@ func (s *session) readCatenate(ctx context.Context, tag, rest string, total *int
 			msg = append(msg, data...)
 			if rest, err = s.readLine(); err != nil {
 				return nil, "", false, err
+			}
+			if bytes.IndexByte(data, 0) >= 0 {
+				return nil, "", false, s.rejectCommand(tag, rest, errNULLiteral)
 			}
 		default:
 			return nil, "", false, s.rejectCommand(tag, rest, "BAD CATENATE syntax")
@@ -241,7 +298,12 @@ func parseAppendHead(rest string) (spec appendSpec, after string, ok bool) {
 		if end < 0 {
 			return spec, "", false
 		}
-		spec.flags = parseAppendFlags(rest[:end+1])
+		// The same flag list as STORE (RFC 3501 6.3.11: the flags SHOULD be set): keywords kept,
+		// \Recent ignored, a malformed flag refused.
+		var kwOK bool
+		if spec.flags, spec.keywords, kwOK = parseIMAPFlagList(rest[:end+1]); !kwOK {
+			return spec, "", false
+		}
 		rest = strings.TrimSpace(rest[end+1:])
 	}
 	if strings.HasPrefix(rest, "\"") {
@@ -262,7 +324,7 @@ func parseAppendHead(rest string) (spec appendSpec, after string, ok bool) {
 		return spec, after, found
 	}
 	n, nonsync, found := literalMarker(rest)
-	if !found || n <= 0 {
+	if !found {
 		return spec, "", false
 	}
 	lit := rest[:strings.LastIndexByte(rest, '{')]
@@ -277,7 +339,8 @@ func parseIMAPInternalDate(s string) (time.Time, bool) {
 	if s == "" {
 		return time.Time{}, false
 	}
-	t, err := time.Parse("02-Jan-2006 15:04:05 -0700", s)
+	// date-day-fixed is (SP DIGIT) / 2DIGIT (RFC 3501 9): "_2" takes " 5", "5" and "05".
+	t, err := time.Parse("_2-Jan-2006 15:04:05 -0700", s)
 	if err != nil {
 		return time.Time{}, false
 	}
@@ -285,35 +348,5 @@ func parseIMAPInternalDate(s string) (time.Time, bool) {
 }
 
 func parseAppendMailboxToken(rest string) (name string, tail string, ok bool) {
-	rest = strings.TrimSpace(rest)
-	if rest == "" {
-		return "", "", false
-	}
-	if rest[0] == '"' {
-		name, tail, ok = parseQuoted(rest)
-		return name, tail, ok
-	}
-	i := strings.IndexByte(rest, ' ')
-	if i < 0 {
-		return rest, "", true
-	}
-	return rest[:i], rest[i+1:], true
-}
-
-func parseAppendFlags(s string) uint32 {
-	s = strings.TrimSpace(s)
-	if len(s) < 2 || s[0] != '(' || s[len(s)-1] != ')' {
-		return 0
-	}
-	inner := strings.TrimSpace(s[1 : len(s)-1])
-	if inner == "" {
-		return 0
-	}
-	var bits uint32
-	for _, f := range strings.Fields(inner) {
-		if b, ok := mail.ParseIMAPFlagName(f); ok {
-			bits |= b
-		}
-	}
-	return bits
+	return cutAString(rest)
 }

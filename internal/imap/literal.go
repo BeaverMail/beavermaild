@@ -1,4 +1,4 @@
-// Literals ({n} / {n+}) inside SEARCH, SORT and THREAD command lines.
+// Literals ({n} / {n+}) inside command lines.
 package imap
 
 import (
@@ -7,30 +7,31 @@ import (
 	"strings"
 )
 
-// maxCommandLiteralBytes caps the literal bytes one search command may carry.
-const maxCommandLiteralBytes = 64 << 10
+// maxCommandLiteralBytes caps the literal bytes one command may carry (APPEND reads its messages
+// itself, under MaxAppendBytes). Before login a client only needs room for a user name and a
+// password, so an anonymous connection cannot make the server hold more than a few KiB.
+const (
+	maxCommandLiteralBytes = 64 << 10
+	maxPreAuthLiteralBytes = 8 << 10
+)
 
 // errLiteralTooLarge ends a connection whose non-synchronizing literal is refused.
 var errLiteralTooLarge = errors.New("imap: literal too large")
 
-// takesSearchLiterals reports whether cmd (with arg) is a search command whose strings may be literals.
-func takesSearchLiterals(cmd, arg string) bool {
-	if cmd == "UID" {
-		cmd, _ = splitCommand(arg)
-	}
-	switch cmd {
-	case "SEARCH", "SORT", "THREAD":
-		return true
-	}
-	return false
-}
+// readsOwnLiterals reports whether cmd reads its literals itself: APPEND streams its messages under
+// MaxAppendBytes. Every other command gets its literals read here, whatever it is: a literal left
+// unread would be taken for the next command (command smuggling).
+func readsOwnLiterals(cmd string) bool { return cmd == "APPEND" }
 
 // readCommandLiterals completes a command line ending in a literal marker: it sends the
 // continuation for synchronizing literals, reads the literal bytes and the following line,
 // and repeats. Each literal stays in arg as "{n}\r\n" plus its bytes, which tokenizeSearchArg
 // reads back. ok is false when the command was refused (the tagged reply is already sent).
 func (s *session) readCommandLiterals(tag, arg string) (out string, ok bool, err error) {
-	total := 0
+	total, limit := 0, maxCommandLiteralBytes
+	if s.principal.AccountID == 0 {
+		limit = maxPreAuthLiteralBytes
+	}
 	line := arg
 	for {
 		n, nonSync, found := literalMarker(line)
@@ -38,7 +39,7 @@ func (s *session) readCommandLiterals(tag, arg string) (out string, ok bool, err
 			return arg, true, nil
 		}
 		total += n
-		if total > maxCommandLiteralBytes {
+		if total > limit {
 			if nonSync {
 				// The client is already sending the bytes: there is no way to resync.
 				_ = s.untagged("BYE [TOOBIG] command literal too large")

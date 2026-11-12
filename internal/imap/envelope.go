@@ -4,9 +4,11 @@ package imap
 import (
 	"bytes"
 	"fmt"
+	"mime"
 	"net/mail"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // formatEnvelope builds the ten-slot ENVELOPE structure from RFC 822 headers.
@@ -188,11 +190,28 @@ func formatMailbox(a *mail.Address) string {
 	return fmt.Sprintf("(%s %s %s %s)", nstring(a.Name), nstring(route), nstring(mailbox), nstring(host))
 }
 
-// nstring returns NIL or a quoted IMAP string for envelope slots.
+// nstring returns NIL or a quoted IMAP string for envelope and body structure slots.
 func nstring(s string) string {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return "NIL"
+	}
+	return quoteHeaderString(s)
+}
+
+// quoteHeaderString is quoteIMAPString for text taken from message headers. Go's parsers decode
+// RFC 2047 names and RFC 2231 parameters into UTF-8, but IMAP4rev1 strings carry 8-bit text only
+// with its charset identified (RFC 3501 4.3.1): valid UTF-8 goes back out as an RFC 2047 word,
+// 7-bit, which clients decode as they would the original header.
+func quoteHeaderString(s string) string {
+	s = strings.TrimSpace(s)
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 0x80 {
+			if utf8.ValidString(s) {
+				s = mime.QEncoding.Encode("utf-8", s)
+			}
+			break
+		}
 	}
 	return quoteIMAPString(s)
 }

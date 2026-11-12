@@ -71,18 +71,23 @@ func parseSearchTokens(tokens []string) (mail.SearchExpr, searchParseStatus) {
 	if len(tokens) == 0 {
 		return mail.SearchExpr{}, searchSyntaxError
 	}
-	expr, rest, ok := parseSearchCriteriaList(tokens)
+	expr, rest, ok := parseSearchCriteriaList(tokens, 0)
 	if !ok || len(rest) != 0 {
 		return mail.SearchExpr{}, searchSyntaxError
 	}
 	return expr, searchParsed
 }
 
-// parseSearchCriteriaList parses one-or-more search-keys ANDed together.
-func parseSearchCriteriaList(tokens []string) (mail.SearchExpr, []string, bool) {
+// maxSearchDepth bounds nesting of parentheses, NOT and OR. Parsing and matching recurse once per
+// level: 30000 levels in one 64 KiB line grew the goroutine stack by ~120 MB. Real clients nest a
+// handful of levels.
+const maxSearchDepth = 100
+
+// parseSearchCriteriaList parses one-or-more search-keys ANDed together, depth levels deep.
+func parseSearchCriteriaList(tokens []string, depth int) (mail.SearchExpr, []string, bool) {
 	var parts []*mail.SearchExpr
 	for len(tokens) > 0 && tokens[0] != ")" {
-		key, rest, ok := parseSearchKey(tokens)
+		key, rest, ok := parseSearchKey(tokens, depth)
 		if !ok {
 			return mail.SearchExpr{}, nil, false
 		}
@@ -99,29 +104,29 @@ func parseSearchCriteriaList(tokens []string) (mail.SearchExpr, []string, bool) 
 }
 
 // parseSearchKey parses a single search-key (atom, NOT, OR, or parenthesized list).
-func parseSearchKey(tokens []string) (*mail.SearchExpr, []string, bool) {
-	if len(tokens) == 0 {
+func parseSearchKey(tokens []string, depth int) (*mail.SearchExpr, []string, bool) {
+	if len(tokens) == 0 || depth >= maxSearchDepth {
 		return nil, nil, false
 	}
 	switch strings.ToUpper(tokens[0]) {
 	case "(":
-		inner, rest, ok := parseSearchCriteriaList(tokens[1:])
+		inner, rest, ok := parseSearchCriteriaList(tokens[1:], depth+1)
 		if !ok || len(rest) == 0 || rest[0] != ")" {
 			return nil, nil, false
 		}
 		return &inner, rest[1:], true
 	case "NOT":
-		child, rest, ok := parseSearchKey(tokens[1:])
+		child, rest, ok := parseSearchKey(tokens[1:], depth+1)
 		if !ok {
 			return nil, nil, false
 		}
 		return &mail.SearchExpr{Kind: mail.SearchExprNot, Not: child}, rest, true
 	case "OR":
-		left, rest, ok := parseSearchKey(tokens[1:])
+		left, rest, ok := parseSearchKey(tokens[1:], depth+1)
 		if !ok {
 			return nil, nil, false
 		}
-		right, rest, ok := parseSearchKey(rest)
+		right, rest, ok := parseSearchKey(rest, depth+1)
 		if !ok {
 			return nil, nil, false
 		}

@@ -71,18 +71,21 @@ func base64NULParts(raw []byte) []byte {
 	var edits []edit
 	// Every entity is a reslice of raw, so its offset is the capacity it lost.
 	offset := func(sub []byte) int { return cap(raw) - cap(sub) }
-	var walk func(e mimeEntity)
-	walk = func(e mimeEntity) {
+	var walk func(e mimeEntity, depth int)
+	walk = func(e mimeEntity, depth int) {
 		mt, params := e.mediaType()
+		if depth >= maxMIMEDepth && opaqueTooDeep(mt) {
+			mt = "application/octet-stream" // a leaf, as BODYSTRUCTURE shows it
+		}
 		switch {
 		case strings.HasPrefix(mt, "multipart/"):
 			for _, child := range splitMultipart(e.body, params["boundary"]) {
 				ce := splitEntity(child)
 				ce.inDigest = mt == "multipart/digest"
-				walk(ce)
+				walk(ce, depth+1)
 			}
 		case mt == "message/rfc822":
-			walk(splitEntity(e.body))
+			walk(splitEntity(e.body), depth+1)
 		case bytes.IndexByte(e.body, 0) >= 0 && len(e.header) > 0:
 			hdr := filterHeaderFields(e.header, []string{"Content-Transfer-Encoding"}, false)
 			repl := append(hdr[:len(hdr)-2:len(hdr)-2], "Content-Transfer-Encoding: base64\r\n\r\n"...)
@@ -96,7 +99,7 @@ func base64NULParts(raw []byte) []byte {
 			edits = append(edits, edit{start, start + len(e.header) + len(e.body), repl})
 		}
 	}
-	walk(splitEntity(raw))
+	walk(splitEntity(raw), 0)
 	var out []byte
 	last := 0
 	for _, ed := range edits {

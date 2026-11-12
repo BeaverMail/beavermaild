@@ -38,13 +38,15 @@ type session struct {
 
 	condstore bool
 
-	principal   directory.Principal
-	authGate    security.AuthGate
-	readTimeout time.Duration
-	selected    bool
-	readOnly    bool
-	mbox        mail.Mailbox
-	messages    []mail.Message
+	principal directory.Principal
+	authGate  security.AuthGate
+	// releasePreAuth frees this connection's per-address pre-login slot (set by the server).
+	releasePreAuth func()
+	readTimeout    time.Duration
+	selected       bool
+	readOnly       bool
+	mbox           mail.Mailbox
+	messages       []mail.Message
 	// recent holds the messages this session saw as \Recent when it selected the mailbox. SELECT
 	// clears the flag in storage so no other session sees it, but this session keeps reporting it.
 	recent   map[uint32]struct{} // EmailID set
@@ -135,6 +137,15 @@ func (s *session) serveCommands(ctx context.Context) error {
 		}
 		tag, cmd, arg := parseTagged(line)
 		if tag == "" {
+			// A tag with no command is a syntax error (RFC 3501 2.2.1): answer it, or the client
+			// waits for a reply that never comes.
+			resp := "* BAD missing command"
+			if t := strings.TrimSpace(line); validIMAPTag(t) {
+				resp = t + " BAD missing command"
+			}
+			if _, err := fmt.Fprintf(s.conn, "%s\r\n", resp); err != nil {
+				return err
+			}
 			continue
 		}
 		if !validIMAPTag(tag) {
@@ -143,7 +154,7 @@ func (s *session) serveCommands(ctx context.Context) error {
 			}
 			continue
 		}
-		if takesSearchLiterals(cmd, arg) {
+		if !readsOwnLiterals(cmd) {
 			var ok bool
 			if arg, ok, err = s.readCommandLiterals(tag, arg); err != nil {
 				return err
@@ -157,6 +168,13 @@ func (s *session) serveCommands(ctx context.Context) error {
 			if sub, _, _ := strings.Cut(arg, " "); sub != "" {
 				s.lastCmd += " " + strings.ToUpper(sub)
 			}
+		}
+		// LOGIN, AUTHENTICATE and STARTTLS belong to the not-authenticated state (RFC 3501 6.2).
+		if s.principal.AccountID != 0 && (cmd == "LOGIN" || cmd == "AUTHENTICATE" || cmd == "STARTTLS") {
+			if err := s.tagged(tag, "BAD already authenticated"); err != nil {
+				return err
+			}
+			continue
 		}
 		switch cmd {
 		case "CAPABILITY":
@@ -417,11 +435,20 @@ func (s *session) serveCommands(ctx context.Context) error {
 }
 
 func (s *session) capabilityLine() string {
-	caps := []string{"IMAP4rev1", "MOVE", "LITERAL+", "SASL-IR", "AUTH=PLAIN", "QRESYNC", "ID"}
-	if s.tls != nil && !s.secure {
+	// Login capabilities only before login (RFC 3501 6.2): STARTTLS and AUTH= are refused once
+	// authenticated. Without TLS where it is required, PLAIN is refused too, so it is not offered
+	// (the RFC 3501 examples list AUTH=PLAIN only after STARTTLS).
+	preAuth := s.principal.AccountID == 0
+	plainOK := !s.tlsRequired || s.secure
+	caps := []string{"IMAP4rev1", "MOVE", "LITERAL+"}
+	if preAuth && plainOK {
+		caps = append(caps, "SASL-IR", "AUTH=PLAIN")
+	}
+	caps = append(caps, "QRESYNC", "ID")
+	if preAuth && s.tls != nil && !s.secure {
 		caps = append(caps, "STARTTLS")
 	}
-	if s.tlsRequired && !s.secure {
+	if preAuth && !plainOK {
 		caps = append(caps, "LOGINDISABLED")
 	}
 	if s.principal.AccountID != 0 {
@@ -449,6 +476,9 @@ func (s *session) finishAuth(ctx context.Context, tag, user, pass, resp string) 
 		return err
 	}
 	s.authGate.RecordAuthSuccess(ip, user)
+	if s.releasePreAuth != nil {
+		s.releasePreAuth()
+	}
 	s.principal = p
 	s.selected = false
 	s.messages = nil
@@ -463,22 +493,29 @@ func (s *session) cmdAuthenticate(ctx context.Context, tag, arg string) error {
 	}
 	mech, initial := splitCommand(arg)
 	if !strings.EqualFold(mech, "PLAIN") {
-		return s.tagged(tag, "BAD unsupported mechanism")
+		return s.tagged(tag, "NO unsupported authentication mechanism") // RFC 3501 6.2.2: NO
 	}
 	cred := strings.TrimSpace(initial)
 	if cred == "" {
-		if err := s.continuation(); err != nil {
+		if _, err := fmt.Fprintf(s.conn, "+ \r\n"); err != nil { // empty challenge (RFC 4616)
 			return err
 		}
 		line, err := s.readLine()
 		if err != nil {
 			return err
 		}
-		cred = line
+		if cred = strings.TrimSpace(line); cred == "*" {
+			return s.tagged(tag, "BAD AUTHENTICATE cancelled")
+		}
 	}
-	user, pass, ok := decodeAuthPlain(cred)
+	authzid, user, pass, ok := decodeAuthPlain(cred)
 	if !ok {
-		return s.tagged(tag, "BAD invalid credentials")
+		return s.tagged(tag, "BAD invalid SASL PLAIN response")
+	}
+	// Acting as another identity needs an authorization rule this server has none of
+	// (RFC 4616 2): only an empty authzid, or the user's own, is accepted.
+	if authzid != "" && !strings.EqualFold(authzid, user) {
+		return s.tagged(tag, "NO [AUTHORIZATIONFAILED] cannot act as another user")
 	}
 	return s.finishAuth(ctx, tag, user, pass, "OK AUTHENTICATE completed")
 }
@@ -520,10 +557,23 @@ func (s *session) cmdRename(ctx context.Context, tag, arg string) error {
 		if errors.Is(err, mail.ErrSystemMailbox) {
 			return s.tagged(tag, "NO cannot rename mailbox")
 		}
+		if errors.Is(err, mail.ErrMailboxLimit) {
+			return s.tagged(tag, "NO [LIMIT] mailbox name too long or too deep")
+		}
+		if errors.Is(err, mail.ErrInvalidMailboxName) {
+			return s.tagged(tag, "NO [CANNOT] invalid new name, or a mailbox moved under itself")
+		}
 		return err
 	}
-	if s.selected && strings.EqualFold(s.mbox.Name, oldName) {
-		s.mbox = renamed
+	// The selected mailbox keeps its identity: renamed itself or as a child of the renamed one, it
+	// takes the new name; INBOX stays INBOX (its messages left, and are reported as expunged).
+	if s.selected && s.mbox.ID != mail.InboxMailboxID {
+		oldKey, cur := mail.MailboxKey(oldName), mail.MailboxKey(s.mbox.Name)
+		if cur == oldKey {
+			s.mbox = renamed
+		} else if strings.HasPrefix(cur, oldKey+"/") {
+			s.mbox.Name = renamed.Name + s.mbox.Name[len(oldName):]
+		}
 	}
 	return s.tagged(tag, "OK RENAME completed")
 }
@@ -656,6 +706,9 @@ func (s *session) cmdFetch(ctx context.Context, tag, arg string, byUID bool) err
 	if err != nil {
 		return s.tagged(tag, "BAD FETCH syntax")
 	}
+	if !byUID && !set.withinCount(uint32(len(s.messages))) {
+		return s.tagged(tag, "BAD no such message")
+	}
 	if items.vanished {
 		// Only UID FETCH, and only once QRESYNC is enabled (RFC 7162 3.2.6).
 		if !byUID || !s.qresync {
@@ -737,6 +790,9 @@ func (s *session) cmdStore(ctx context.Context, tag, arg string, byUID bool) err
 	setParsed, err := parseSeqSet(setStr)
 	if err != nil {
 		return s.tagged(tag, "BAD STORE syntax")
+	}
+	if !byUID && !setParsed.withinCount(uint32(len(s.messages))) {
+		return s.tagged(tag, "BAD no such message")
 	}
 	indices := s.resolveIndices(setParsed, byUID)
 	var unchanged uint64
@@ -906,6 +962,13 @@ func (s *session) cmdCreate(ctx context.Context, tag, arg string) error {
 		if errors.Is(err, mail.ErrMailboxExists) {
 			return s.tagged(tag, "NO mailbox already exists")
 		}
+		if errors.Is(err, mail.ErrMailboxLimit) {
+			return s.tagged(tag, "NO [LIMIT] mailbox name too long or too deep, or too many mailboxes")
+		}
+		if errors.Is(err, mail.ErrInvalidMailboxName) {
+			// RFC 3501 5.1.3: 8-bit names and malformed modified UTF-7 are refused.
+			return s.tagged(tag, "NO [CANNOT] mailbox names must be 7-bit, international ones in modified UTF-7")
+		}
 		return err
 	}
 	return s.tagged(tag, "OK CREATE completed")
@@ -968,6 +1031,9 @@ func (s *session) cmdCopy(ctx context.Context, tag, arg string, byUID bool) erro
 	if err != nil {
 		return s.tagged(tag, "BAD COPY syntax")
 	}
+	if !byUID && !set.withinCount(uint32(len(s.messages))) {
+		return s.tagged(tag, "BAD no such message")
+	}
 	ids := s.emailIDsFromIndices(s.resolveIndices(set, byUID))
 	srcUIDs := s.imapUIDsFromIndices(s.resolveIndices(set, byUID))
 	_, destUIDs, err := s.inbox.CopyMessages(ctx, s.principal.AccountID, ids, dest.ID)
@@ -977,6 +1043,9 @@ func (s *session) cmdCopy(ctx context.Context, tag, arg string, byUID bool) erro
 	}
 	if err != nil {
 		return err
+	}
+	if len(destUIDs) == 0 { // UID COPY naming no message: COPYUID needs non-empty sets (RFC 4315 3)
+		return s.tagged(tag, "OK COPY completed")
 	}
 	return s.tagged(tag, fmt.Sprintf("OK [%s] COPY completed", formatCopyUID(dest.UIDValidity, srcUIDs, destUIDs)))
 }
@@ -1005,6 +1074,9 @@ func (s *session) cmdMove(ctx context.Context, tag, arg string, byUID bool) erro
 	set, err := parseSeqSet(setStr)
 	if err != nil {
 		return s.tagged(tag, "BAD MOVE syntax")
+	}
+	if !byUID && !set.withinCount(uint32(len(s.messages))) {
+		return s.tagged(tag, "BAD no such message")
 	}
 	indices := s.resolveIndices(set, byUID)
 	ids := s.emailIDsFromIndices(indices)
@@ -1094,6 +1166,9 @@ func (s *session) trackKeywords(msgs []mail.Message) bool {
 	added := false
 	for _, m := range msgs {
 		for _, kw := range m.Meta.Keywords {
+			if !mail.ValidKeyword(kw) {
+				continue // stored before validation; FETCH FLAGS leaves it out too
+			}
 			if _, ok := s.keywords[kw]; !ok {
 				s.keywords[kw] = struct{}{}
 				added = true
@@ -1127,6 +1202,9 @@ func (s *session) flagsLine() string {
 // permanentFlags lists the announced keywords too: clients (and imaptest) take a keyword missing
 // from PERMANENTFLAGS for a session-only one, despite \*.
 func (s *session) permanentFlags() string {
+	if s.readOnly {
+		return "()" // nothing can be changed in a read-only mailbox (RFC 3501 7.1, EXAMINE example)
+	}
 	kws := slices.Sorted(maps.Keys(s.keywords))
 	if len(kws) == 0 {
 		return mail.IMAPPermanentFlags
@@ -1275,7 +1353,7 @@ func (s *session) writeFetchWithLiterals(seq int, parts []string, sections []bod
 			}
 		default:
 			if _, err = fmt.Fprintf(s.conn, "%s%s {%d}\r\n", sep, bs.responseName(), len(data)); err == nil {
-				_, err = s.conn.Write(data)
+				_, err = s.conn.Write(maskNUL(data))
 			}
 		}
 		if err != nil {
@@ -1314,7 +1392,7 @@ func (s *session) writeFetchStreamed(ctx context.Context, seq int, parts []strin
 		if _, err := fmt.Fprintf(s.conn, "%s%s {%d}\r\n", sep, bs.responseName(), n); err != nil {
 			return err
 		}
-		if _, err := io.Copy(s.conn, io.NewSectionReader(f, off, n)); err != nil {
+		if _, err := io.Copy(nulMaskWriter{s.conn}, io.NewSectionReader(f, off, n)); err != nil {
 			return err
 		}
 	}
@@ -1361,19 +1439,12 @@ func formatSearch(nums []uint32) string {
 	return "SEARCH " + strings.Join(parts, " ")
 }
 
-func formatListMailbox(name string) string {
-	if strings.EqualFold(name, "INBOX") {
-		return "INBOX"
-	}
-	return `"` + strings.ReplaceAll(name, `"`, `\"`) + `"`
-}
+func formatListMailbox(name string) string { return quoteMailbox(name) }
 
+// parseMailboxName reads arg as one mailbox astring; "" when it is not exactly one.
 func parseMailboxName(arg string) string {
-	arg = strings.TrimSpace(arg)
-	if len(arg) >= 2 && arg[0] == '"' && arg[len(arg)-1] == '"' {
-		return arg[1 : len(arg)-1]
-	}
-	return arg
+	name, _ := onlyAString(arg)
+	return name
 }
 
 // splitCommand splits off the first word. The rest keeps trailing bytes, which may belong to a literal.
@@ -1433,10 +1504,19 @@ func (s *session) bumpReadDeadline() {
 		_ = s.conn.SetReadDeadline(time.Now())
 		return
 	}
-	if s.readTimeout > 0 {
-		_ = s.conn.SetReadDeadline(time.Now().Add(s.readTimeout))
+	d := s.readTimeout
+	if s.principal.AccountID == 0 && (d <= 0 || d > preAuthTimeout) {
+		d = preAuthTimeout
+	}
+	if d > 0 {
+		_ = s.conn.SetReadDeadline(time.Now().Add(d))
 	}
 }
+
+// preAuthTimeout ends a connection that has not logged in after this long without a command.
+// RFC 3501 5.4 asks for at least 30 minutes only once authenticated; before that an idle
+// connection just holds a slot (slowloris). Clients log in right after the greeting.
+var preAuthTimeout = time.Minute
 
 func (s *session) readLine() (string, error) {
 	s.bumpReadDeadline()
@@ -1485,70 +1565,25 @@ func parseTagged(line string) (tag, cmd, arg string) {
 }
 
 func parseLogin(arg string) (user, pass string, ok bool) {
-	arg = strings.TrimSpace(arg)
-	if arg == "" {
+	user, rest, ok := cutAString(arg)
+	if !ok || rest == "" {
 		return "", "", false
 	}
-	var rest string
-	if arg[0] == '"' {
-		var found bool
-		if user, rest, found = parseQuoted(arg); !found {
-			return "", "", false
-		}
-		user = unescapeQuoted(user)
-	} else {
-		i := strings.IndexByte(arg, ' ')
-		if i < 0 {
-			return "", "", false
-		}
-		user, rest = arg[:i], arg[i+1:]
+	if rest[0] == '"' || rest[0] == '{' {
+		pass, ok = onlyAString(rest)
+		return user, pass, ok
 	}
-	rest = strings.TrimSpace(rest)
-	if rest == "" {
-		return "", "", false
-	}
-	// A quoted password is unquoted whatever the user form (clients send `alice "pass word"`).
-	if rest[0] == '"' {
-		pass, _, found := parseQuoted(rest)
-		if !found {
-			return "", "", false
-		}
-		return user, unescapeQuoted(pass), true
-	}
+	// An atom password keeps the rest of the line: some clients send a bare password with spaces.
 	return user, rest, true
 }
 
-// unescapeQuoted resolves the \" and \\ escapes of an IMAP quoted string (RFC 3501 §4.3).
-func unescapeQuoted(s string) string {
-	if !strings.Contains(s, `\`) {
-		return s
-	}
-	var b strings.Builder
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\\' && i+1 < len(s) {
-			i++
-		}
-		b.WriteByte(s[i])
-	}
-	return b.String()
-}
-
+// parseQuoted parses a leading quoted string with its escapes resolved; rest is trimmed.
 func parseQuoted(s string) (val, rest string, ok bool) {
-	if len(s) < 2 || s[0] != '"' {
+	if !strings.HasPrefix(s, `"`) {
 		return "", "", false
 	}
-	end := 1
-	for end < len(s) {
-		if s[end] == '\\' && end+1 < len(s) {
-			end += 2
-			continue
-		}
-		if s[end] == '"' {
-			return s[1:end], strings.TrimSpace(s[end+1:]), true
-		}
-		end++
-	}
-	return "", "", false
+	val, rest, ok = cutQuotedString(s)
+	return val, strings.TrimSpace(rest), ok
 }
 
 type fetchItems struct {
@@ -1600,6 +1635,9 @@ func parseFetchItems(rest string) (fetchItems, bool) {
 	items.flags = strings.Contains(upper, "FLAGS")
 	items.size = strings.Contains(upper, "RFC822.SIZE")
 	items.bodySections = parseAllBodyFetches(rest)
+	if slices.ContainsFunc(items.bodySections, func(bs bodySectionFetch) bool { return bs.invalid }) {
+		return items, false // e.g. BODY[0]: part numbers start at 1 (RFC 3501 9)
+	}
 	items.envelope = strings.Contains(upper, "ENVELOPE")
 	items.bodystructure = strings.Contains(upper, "BODYSTRUCTURE")
 	items.internalDate = strings.Contains(upper, "INTERNALDATE")
@@ -1713,16 +1751,18 @@ func parseIMAPFlagList(s string) (uint32, []string, bool) {
 	var bits uint32
 	var keywords []string
 	for _, f := range strings.Fields(s) {
-		if b, known := mail.ParseIMAPFlagName(f); known && mail.IsStoreableFlag(b) {
-			bits |= b
+		if b, known := mail.ParseIMAPFlagName(f); known {
+			if mail.IsStoreableFlag(b) {
+				bits |= b
+			} // \Recent is the server's: ignored
 			continue
 		}
-		if _, known := mail.ParseIMAPFlagName(f); known {
-			continue
+		// An unknown \flag is a flag-extension, which a server MUST NOT generate (RFC 3501 9);
+		// a keyword must be an atom. Either way the command is malformed.
+		if !mail.ValidKeyword(f) {
+			return 0, nil, false
 		}
-		if kw := mail.NormalizeKeyword(f); kw != "" {
-			keywords = append(keywords, kw)
-		}
+		keywords = append(keywords, f)
 	}
 	return bits, keywords, true
 }
@@ -1732,20 +1772,9 @@ func parseStatusArg(arg string) (name string, fields []string, ok bool) {
 	if arg == "" {
 		return "", nil, false
 	}
-	var rest string
-	if arg[0] == '"' {
-		var okQuote bool
-		name, rest, okQuote = parseQuoted(arg)
-		if !okQuote {
-			return "", nil, false
-		}
-	} else {
-		i := strings.IndexByte(arg, ' ')
-		if i < 0 {
-			return "", nil, false
-		}
-		name = parseMailboxName(strings.TrimSpace(arg[:i]))
-		rest = strings.TrimSpace(arg[i+1:])
+	name, rest, ok := cutAString(arg)
+	if !ok {
+		return "", nil, false
 	}
 	rest = strings.TrimSpace(rest)
 	if len(rest) < 2 || rest[0] != '(' || rest[len(rest)-1] != ')' {
@@ -1791,46 +1820,19 @@ func formatStatus(name string, fields []string, st mail.MailboxStatus) string {
 }
 
 func parseSeqSetAndMailbox(arg string) (setStr, mboxName string, ok bool) {
-	arg = strings.TrimSpace(arg)
-	i := strings.LastIndexByte(arg, ' ')
-	if i < 0 {
+	setStr, rest, found := strings.Cut(strings.TrimSpace(arg), " ")
+	if !found {
 		return "", "", false
 	}
-	return strings.TrimSpace(arg[:i]), parseMailboxName(arg[i+1:]), true
+	mboxName, ok = onlyAString(rest)
+	return setStr, mboxName, ok
 }
 
 func parseRenameArg(arg string) (oldName, newName string, ok bool) {
-	arg = strings.TrimSpace(arg)
-	if arg == "" {
+	oldName, rest, ok := cutAString(arg)
+	if !ok {
 		return "", "", false
 	}
-	var rest string
-	if arg[0] == '"' {
-		oldName, rest, ok = parseQuoted(arg)
-		if !ok {
-			return "", "", false
-		}
-	} else {
-		i := strings.IndexByte(arg, ' ')
-		if i < 0 {
-			return "", "", false
-		}
-		oldName = arg[:i]
-		rest = arg[i+1:]
-	}
-	rest = strings.TrimSpace(rest)
-	if rest == "" {
-		return "", "", false
-	}
-	if rest[0] == '"' {
-		newName, tail, ok := parseQuoted(rest)
-		if !ok || strings.TrimSpace(tail) != "" {
-			return "", "", false
-		}
-		return oldName, newName, true
-	}
-	if strings.Contains(rest, " ") {
-		return "", "", false
-	}
-	return oldName, rest, true
+	newName, ok = onlyAString(rest)
+	return oldName, newName, ok
 }

@@ -130,8 +130,9 @@ func TestIMAPRename(t *testing.T) {
 	expectPrefix(t, read, "* 0 RECENT")
 	expectSelectOK(t, read)
 	expectPrefix(t, read, "r4 OK")
+	// RFC 3501 6.3.5: renaming INBOX is permitted; INBOX stays, emptied.
 	send(t, conn, "r5 RENAME INBOX Archive")
-	expectPrefix(t, read, "r5 NO")
+	expectPrefix(t, read, "r5 OK")
 }
 
 func TestIMAPAppendLiteralPlus(t *testing.T) {

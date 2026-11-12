@@ -73,17 +73,20 @@ func TestParseListOptions(t *testing.T) {
 func TestMailboxHasChildren(t *testing.T) {
 	t.Parallel()
 
-	names := []string{"INBOX", "Work", "Work/Projects", "Archive"}
-	if !mailboxHasChildren("Work", names) {
+	parents := newParentSet([]string{"INBOX", "Work", "Work/Projects", "Archive", "Deep/a/b"})
+	if !parents.has("Work") {
 		t.Fatal("Work should have children")
 	}
-	if mailboxHasChildren("Work/Projects", names) {
+	if parents.has("Work/Projects") {
 		t.Fatal("leaf should have no children")
 	}
-	if mailboxHasChildren("INBOX", names) {
+	if parents.has("INBOX") {
 		t.Fatal("INBOX has no child mailboxes in this set")
 	}
-	if !mailboxHasChildren("work", names) {
+	if !parents.has("work") {
 		t.Fatal("case-insensitive parent should see children")
+	}
+	if !parents.has("Deep") || !parents.has("Deep/a") || parents.has("Deep/a/b") {
+		t.Fatal("every superior of a nested folder has children")
 	}
 }

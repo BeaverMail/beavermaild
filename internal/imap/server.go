@@ -44,7 +44,13 @@ type Server struct {
 	readTimeout    time.Duration
 	status         *servicestatus.Registry
 	sessions       connset.Set
+	preAuth        *security.IPLimiter
 }
+
+// maxPreAuthPerIP caps the unauthenticated connections of one client network (IPv4 address or
+// IPv6 /64). Without it, 200 idle connections from one address filled the listener and locked
+// everybody out; a logged-in session no longer counts, so NAT-ed offices are not limited.
+const maxPreAuthPerIP = 10
 
 // NewServer returns an IMAP server bound to plainAddr; tlsAddr enables implicit TLS on :993.
 func NewServer(log *slog.Logger, plainAddr string, dir *directory.Local, inbox *mail.Inbox, opts Options) *Server {
@@ -64,6 +70,7 @@ func NewServer(log *slog.Logger, plainAddr string, dir *directory.Local, inbox *
 		maxConnections: opts.MaxConnections,
 		readTimeout:    opts.ReadTimeout,
 		status:         opts.Status,
+		preAuth:        security.NewIPLimiter(maxPreAuthPerIP),
 	}
 }
 
@@ -160,7 +167,15 @@ func (s *Server) serve(ctx context.Context, slots []listenerSlot) error {
 
 func (s *Server) serveConn(ctx context.Context, conn net.Conn, secure bool, lim *security.ConnLimiter) {
 	defer lim.Release()
+	releasePreAuth, ok := s.preAuth.Acquire(security.ClientIP(conn))
+	if !ok {
+		_, _ = conn.Write([]byte("* BYE [UNAVAILABLE] Too many connections from your address\r\n"))
+		_ = conn.Close()
+		return
+	}
+	defer releasePreAuth()
 	sess := newSession(s.log, conn, s.dir, s.inbox, s.certs, secure, s.tlsRequired, s.authGate, s.readTimeout)
+	sess.releasePreAuth = releasePreAuth
 	sess.stopping = &s.sessions.Stopping
 	s.sessions.Add(sess, conn)
 	defer s.sessions.Remove(sess)

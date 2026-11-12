@@ -58,6 +58,64 @@
   header block (first 256 KiB), TEXT and BODY scan the message in 64 KiB chunks. URLFETCH and CATENATE
   URLs share the 16-message bound, and URLFETCH writes its response one URL at a time instead of
   holding every message it names.
+- IMAP security fixes from the RFC 3501 audit, each with a regression test:
+  - BODYSTRUCTURE of a message with very many MIME parameters no longer takes quadratic CPU
+    (minutes for one message reachable by SMTP; CVE-2026-27859 class).
+  - A MIME boundary matches only a whole delimiter line (RFC 2046 5.1.1): boundary `b1` no longer
+    splits on `--b10`.
+  - A failed login costs one password hash whether the account exists or not: response time no
+    longer reveals which addresses have accounts (IMAP and SMTP AUTH).
+  - MULTIAPPEND counts 4 KiB per message toward the 32 MB cap, so a flood of tiny literals cannot
+    hold gigabytes (CVE-2024-34055 class).
+  - SEARCH nesting (parentheses, NOT, OR) is limited to 100 levels.
+  - LIST/LSUB patterns treat every character but `*` and `%` literally: `?` no longer matches
+    anything and `"a???*"` no longer kills the session.
+  - Keywords must be IMAP atoms and unknown `\` flags are refused (BAD); keywords holding NUL,
+    `]`, `"` or `{` are no longer stored or echoed to other sessions. `Seen` without backslash is
+    a keyword of its own, no longer `\Seen`.
+  - MIME nesting is limited to 100 levels (multipart and message/rfc822) in BODYSTRUCTURE, BODY[section]
+    and BINARY; deeper parts show as one application/octet-stream leaf. A deeply nested message
+    from any sender cost quadratic CPU per FETCH (CVE-2020-12100 class); BODYSTRUCTURE no longer
+    copies the body of each message/rfc822 level.
+  - Every IMAP command takes its string arguments as literals (RFC 3501 4.3). Only SEARCH, SORT and
+    THREAD read them before: in any other command the literal bytes ran as the next command, before
+    login too. LOGIN accepts a literal password (needed for passwords with `"`, `\` or 8-bit bytes);
+    APPEND accepts a literal mailbox name. Before login a command may carry at most 8 KiB of
+    literals.
+  - Quoted strings resolve their `\"` and `\\` escapes in every command, and LIST, LSUB and STATUS
+    escape mailbox names the same way (a name with `\` came back as a malformed string); a name with
+    8-bit bytes comes back as a literal.
+  - At most 10 connections per client address (IPv4, or IPv6 /64) may wait unauthenticated, and an
+    unauthenticated connection is dropped after 1 minute without a command (30 minutes once logged
+    in, as before). 200 idle connections from one address used to lock everybody out of IMAP.
+  - NUL bytes never go out in a plain literal: FETCH and URLFETCH send them as 0x80 (lengths
+    unchanged), only BINARY literal8 carries NUL. APPEND refuses NUL in a plain literal (BAD); a
+    literal8 (`~{n}`) is still accepted.
+  - Mailbox names: at most 1024 bytes and 32 levels, at most 10000 folders per account (NO [LIMIT]);
+    folders made before keep working. LIST, LSUB and NOTIFY find children in linear time: LIST of
+    3000 folders went from 14 s to 0.07 s.
+- IMAP conformance fixes from the RFC 3501 audit:
+  - LOGIN, AUTHENTICATE and STARTTLS are refused (BAD) once logged in; CAPABILITY drops STARTTLS,
+    AUTH= and SASL-IR after login, and offers AUTH=PLAIN only where it is accepted (not with
+    LOGINDISABLED).
+  - AUTHENTICATE PLAIN: the response must be base64 of three fields (RFC 4616); an authorization
+    identity other than the user is refused with NO [AUTHORIZATIONFAILED] (it was ignored, logging
+    in as the user); an unknown mechanism gets NO; the empty challenge is `+ `.
+  - A line with a tag and no command is answered BAD instead of being ignored.
+  - FETCH, STORE, COPY and MOVE with a sequence number past the last message (or `*` in an empty
+    mailbox) get BAD; UID COPY that copies nothing no longer sends an empty COPYUID; `BODY[0]` and
+    other malformed sections get BAD.
+  - RENAME moves the folders under the renamed one and creates missing superiors; RENAME INBOX
+    moves INBOX's messages to the new folder and keeps INBOX (it was refused).
+  - Mailbox names: modified UTF-7 segments are compared exactly (`&ZeVnLIqe-` is not `&ZEVNLIQE-`),
+    new 8-bit names or malformed `&` sequences are refused, leading and trailing spaces are kept.
+  - EXAMINE announces `PERMANENTFLAGS ()`.
+  - APPEND keeps keywords, refuses malformed flags, accepts a space-padded day (` 5-Nov-2026`),
+    and answers NO for an empty `{0}` message.
+  - ENVELOPE and BODYSTRUCTURE send decoded RFC 2047 / RFC 2231 text as an RFC 2047 word (7-bit,
+    charset named) instead of an 8-bit literal.
+  - SEARCH BODY and TEXT also match the decoded text of base64 and quoted-printable parts, and TEXT
+    the decoded RFC 2047 header words (no charset conversion: UTF-8 and US-ASCII parts).
 
 ## 0.4.0
 

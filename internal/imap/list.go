@@ -112,8 +112,8 @@ func parseListPatterns(arg string) (pats []string, rest string, ok bool) {
 			return pats, strings.TrimSpace(arg[1:]), len(pats) > 0
 		}
 		var tok string
-		if strings.HasPrefix(arg, `"`) {
-			if tok, arg, ok = parseQuoted(arg); !ok {
+		if strings.HasPrefix(arg, `"`) || strings.HasPrefix(arg, "{") {
+			if tok, arg, ok = cutAString(arg); !ok {
 				return nil, "", false
 			}
 		} else {
@@ -132,57 +132,37 @@ func parseListToken(arg string) (tok, rest string, ok bool) {
 	if arg == "" {
 		return "", "", false
 	}
-	if arg[0] == '"' {
-		tok, rest, ok = parseQuoted(arg)
-		return tok, rest, ok
-	}
-	i := strings.IndexByte(arg, ' ')
-	if i < 0 {
-		return arg, "", true
-	}
-	return arg[:i], strings.TrimSpace(arg[i+1:]), true
+	return cutAString(arg)
 }
 
 // compileListPattern builds a matcher for IMAP LIST wildcards (* and %).
+// Pattern and names are compared as mail.MailboxKey, the server's case rule for names.
 func compileListPattern(pattern string) func(string) bool {
-	pattern = strings.TrimSpace(pattern)
-	if len(pattern) >= 2 && pattern[0] == '"' && pattern[len(pattern)-1] == '"' {
-		pattern = pattern[1 : len(pattern)-1]
-	}
+	pattern = mail.MailboxKey(pattern)
 	if !strings.ContainsAny(pattern, "*%") {
-		return func(name string) bool {
-			return strings.EqualFold(pattern, name)
-		}
+		return func(name string) bool { return mail.MailboxKey(name) == pattern }
 	}
 	var b strings.Builder
-	b.WriteString("(?i)^")
+	b.WriteString("^")
 	for i := 0; i < len(pattern); i++ {
 		switch pattern[i] {
 		case '*':
 			b.WriteString(".*")
 		case '%':
 			b.WriteString("[^/]*")
-		case '.', '+', '(', ')', '[', ']', '{', '}', '|', '^', '$', '\\':
-			b.WriteString(`\`)
-			b.WriteByte(pattern[i])
-		default:
-			b.WriteByte(pattern[i])
+		default: // only * and % are wildcards: everything else matches itself (RFC 3501 6.3.8)
+			b.WriteString(regexp.QuoteMeta(pattern[i : i+1]))
 		}
 	}
 	b.WriteString("$")
 	re := regexp.MustCompile(b.String())
-	return func(name string) bool {
-		if re.MatchString(name) {
-			return true
-		}
-		return strings.EqualFold(name, "INBOX") && re.MatchString("INBOX")
-	}
+	return func(name string) bool { return re.MatchString(mail.MailboxKey(name)) }
 }
 
 // listMailboxAttrs returns IMAP LIST attributes for one folder (RFC 3501 + SPECIAL-USE).
-func listMailboxAttrs(mb mail.Mailbox, allNames []string, markSubscribed bool) string {
+func listMailboxAttrs(mb mail.Mailbox, parents parentSet, markSubscribed bool) string {
 	childAttr := `\HasNoChildren`
-	if mailboxHasChildren(mb.Name, allNames) {
+	if parents.has(mb.Name) {
 		childAttr = `\HasChildren`
 	}
 	attrs := childAttr
@@ -222,14 +202,14 @@ type listCandidate struct {
 func listCandidates(mboxes []mail.Mailbox) []listCandidate {
 	seen := make(map[string]bool, len(mboxes))
 	for _, mb := range mboxes {
-		seen[strings.ToUpper(mb.Name)] = true
+		seen[mail.MailboxKey(mb.Name)] = true
 	}
 	out := make([]listCandidate, 0, len(mboxes))
 	for _, mb := range mboxes {
 		for i := strings.IndexByte(mb.Name, '/'); i >= 0; i = nextSlash(mb.Name, i) {
 			parent := mb.Name[:i]
-			if parent != "" && !seen[strings.ToUpper(parent)] {
-				seen[strings.ToUpper(parent)] = true
+			if parent != "" && !seen[mail.MailboxKey(parent)] {
+				seen[mail.MailboxKey(parent)] = true
 				out = append(out, listCandidate{mb: mail.Mailbox{Name: parent}, virtual: true})
 			}
 		}
@@ -256,18 +236,28 @@ func isJunkMailbox(name string) bool {
 	}
 }
 
-// mailboxHasChildren reports whether any listed folder name is a direct or nested child.
-func mailboxHasChildren(parent string, allNames []string) bool {
-	parent = strings.TrimSpace(parent)
-	if parent == "" {
-		return false
+// parentSet holds, upper-cased, every name that some folder lies under. Built once per LIST in
+// O(folders x depth): asking every folder about every other one made LIST quadratic (2000
+// nested folders took 12 s per LIST, 25 s per LSUB).
+type parentSet map[string]bool
+
+func newParentSet(names []string) parentSet {
+	p := parentSet{}
+	for _, n := range names {
+		p.addAncestors(n)
 	}
-	prefix := strings.ToUpper(parent) + "/"
-	for _, name := range allNames {
-		upper := strings.ToUpper(strings.TrimSpace(name))
-		if len(upper) > len(prefix) && strings.HasPrefix(upper, prefix) {
-			return true
+	return p
+}
+
+// addAncestors records every proper superior of name ("a" and "a/b" for "a/b/c").
+func (p parentSet) addAncestors(name string) {
+	key := mail.MailboxKey(name)
+	for i := strings.IndexByte(key, '/'); i >= 0; i = nextSlash(key, i) {
+		if i > 0 {
+			p[key[:i]] = true
 		}
 	}
-	return false
 }
+
+// has reports whether some folder lies under name.
+func (p parentSet) has(name string) bool { return p[mail.MailboxKey(name)] }

@@ -192,7 +192,7 @@ func (s *session) urlFetchItem(ctx context.Context, b *bytes.Buffer, it urlFetch
 	}
 	data = u.partialData(data)
 	if !it.ext {
-		writeLiteral(b, " ", data)
+		writeLiteral(b, " ", data, false)
 		return nil
 	}
 	var dec []byte
@@ -209,13 +209,13 @@ func (s *session) urlFetchItem(ctx context.Context, b *bytes.Buffer, it urlFetch
 		if decErr != nil {
 			b.WriteString(" NIL")
 		} else {
-			writeLiteral(b, " ", u.partialData(dec))
+			writeLiteral(b, " ", u.partialData(dec), true)
 		}
 		b.WriteString(")")
 	}
 	if it.body {
 		b.WriteString(" (BODY")
-		writeLiteral(b, " ", data)
+		writeLiteral(b, " ", data, false)
 		b.WriteString(")")
 	}
 	return nil
@@ -290,10 +290,13 @@ func urlPartStructure(raw []byte, section string, decoded bool, data []byte) str
 	return formatBodyStructure(append(append([]byte{}, part.header...), part.body...))
 }
 
-// writeLiteral appends sep and data as a literal, literal8 when it holds NUL.
-func writeLiteral(b *bytes.Buffer, sep string, data []byte) {
+// writeLiteral appends sep and data as a literal. Only binary (decoded) data may carry NUL, in a
+// literal8 (RFC 3516 4.3); elsewhere NUL is masked like every other non-BINARY response.
+func writeLiteral(b *bytes.Buffer, sep string, data []byte, binary bool) {
 	b.WriteString(sep)
-	if bytes.IndexByte(data, 0) >= 0 {
+	if !binary {
+		data = maskNUL(data)
+	} else if bytes.IndexByte(data, 0) >= 0 {
 		b.WriteByte('~')
 	}
 	fmt.Fprintf(b, "{%d}\r\n", len(data))

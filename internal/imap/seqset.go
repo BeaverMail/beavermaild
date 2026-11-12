@@ -66,6 +66,18 @@ func parseSeqToken(tok string) (uint32, error) {
 	return uint32(n), nil
 }
 
+// withinCount reports whether every sequence number in ss names a message of a mailbox holding
+// count: RFC 3501 9 (seq-number) asks for BAD otherwise, "*" on an empty mailbox included.
+// UID sets are not checked: a UID that names no message is not an error.
+func (ss seqSet) withinCount(count uint32) bool {
+	for _, r := range ss.ranges {
+		if count == 0 || r.lo > count || r.hi > count {
+			return false
+		}
+	}
+	return true
+}
+
 // expandSeq returns 1-based sequence numbers in ascending order without duplicates.
 func (ss seqSet) expandSeq(count uint32) []uint32 {
 	if count == 0 {

@@ -44,15 +44,22 @@ func TestParseAppendArg(t *testing.T) {
 	}
 }
 
+// APPEND takes the same flag list as STORE: system flags, keywords, nothing malformed.
 func TestParseAppendFlags(t *testing.T) {
 	t.Parallel()
 
-	flags := parseAppendFlags(`(\Seen \Draft)`)
-	if flags == 0 {
-		t.Fatal("expected flags")
+	spec, _, ok := parseAppendHead(`(\Seen \Draft $Label NonJunk Seen) {3}`)
+	if !ok || spec.flags == 0 || len(spec.keywords) != 3 {
+		t.Fatalf("flags %b keywords %q ok %v", spec.flags, spec.keywords, ok)
 	}
-	if parseAppendFlags(`(NonJunk)`) != 0 {
-		t.Fatal("unknown flag ignored")
+	if _, _, ok := parseAppendHead(`(\Bogus) {3}`); ok {
+		t.Fatal("unknown system flag accepted")
+	}
+	if spec, _, ok := parseAppendHead(`" 5-Nov-2026 10:00:00 +0000" {3}`); !ok || spec.internalDate == 0 {
+		t.Fatal("space-padded day refused (RFC 3501 9 date-day-fixed)")
+	}
+	if spec, _, ok := parseAppendHead(`{0}`); !ok || spec.size != 0 {
+		t.Fatal("{0} is a valid literal")
 	}
 }
 

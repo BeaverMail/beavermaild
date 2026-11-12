@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/BeaverMail/beavermaild/internal/mail"
@@ -102,15 +101,30 @@ func (s *session) cmdMailboxList(ctx context.Context, tag, arg, cmd string, subs
 	for i, mb := range mboxes {
 		names[i] = mb.Name
 	}
+	parents := newParentSet(names)
 	cands := listCandidates(mboxes)
 	if filterSubscribed {
 		orphans, err := s.inbox.ListOrphanSubscriptions(ctx, s.principal.AccountID)
 		if err != nil {
 			return err
 		}
+		listed := make(map[string]bool, len(cands))
+		for _, c := range cands {
+			listed[mail.MailboxKey(c.mb.Name)] = true
+		}
 		for _, name := range orphans {
-			if !slices.ContainsFunc(cands, func(c listCandidate) bool { return strings.EqualFold(c.mb.Name, name) }) {
+			if !listed[mail.MailboxKey(name)] {
 				cands = append(cands, listCandidate{mb: mail.Mailbox{Name: name, Subscribed: true}, nonexistent: true})
+			}
+		}
+	}
+	// RFC 5258 §3 RECURSIVEMATCH and RFC 3501 §6.3.9 LSUB "%" both report parents of descendants
+	// that meet the selection but not the pattern: collect those parents once.
+	childInfoOf := parentSet{}
+	if opt.recursiveMatch || cmd == "LSUB" {
+		for _, d := range cands {
+			if selected(d) && !match(d.mb.Name) {
+				childInfoOf.addAncestors(d.mb.Name)
 			}
 		}
 	}
@@ -118,22 +132,11 @@ func (s *session) cmdMailboxList(ctx context.Context, tag, arg, cmd string, subs
 		if !match(c.mb.Name) {
 			continue
 		}
-		// RFC 5258 §3 RECURSIVEMATCH and RFC 3501 §6.3.9 LSUB "%" both report parents of
-		// descendants that meet the selection but not the pattern.
-		childInfo := false
-		if opt.recursiveMatch || cmd == "LSUB" {
-			prefix := strings.ToUpper(c.mb.Name) + "/"
-			for _, d := range cands {
-				if strings.HasPrefix(strings.ToUpper(d.mb.Name), prefix) && selected(d) && !match(d.mb.Name) {
-					childInfo = true
-					break
-				}
-			}
-		}
+		childInfo := childInfoOf.has(c.mb.Name)
 		if !selected(c) && !childInfo {
 			continue
 		}
-		attrs := listMailboxAttrs(c.mb, names, filterSubscribed || opt.markSubscribed)
+		attrs := listMailboxAttrs(c.mb, parents, filterSubscribed || opt.markSubscribed)
 		switch {
 		case c.nonexistent && cmd == "LSUB":
 			attrs = `\Noselect`

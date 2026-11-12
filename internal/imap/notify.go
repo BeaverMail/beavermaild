@@ -218,6 +218,7 @@ func (s *session) notifyPoll(ctx context.Context, inIdle bool) error {
 	for i, mb := range mboxes {
 		names[i] = mb.Name
 	}
+	parents := newParentSet(names)
 	for _, mb := range mboxes {
 		seen[mb.ID] = true
 		old, known := st.mboxes[mb.ID]
@@ -225,15 +226,15 @@ func (s *session) notifyPoll(ctx context.Context, inIdle bool) error {
 		oldEv := st.eventsFor(old, s.selectedID())
 		switch {
 		case !known && ev.mailboxName:
-			if err := s.untagged(fmt.Sprintf(`LIST (%s) "/" %s`, listMailboxAttrs(mb, names, true), formatListMailbox(mb.Name))); err != nil {
+			if err := s.untagged(fmt.Sprintf(`LIST (%s) "/" %s`, listMailboxAttrs(mb, parents, true), formatListMailbox(mb.Name))); err != nil {
 				return err
 			}
 		case known && old.Name != mb.Name && (ev.mailboxName || oldEv.mailboxName):
-			if err := s.untagged(fmt.Sprintf(`LIST (%s) "/" %s ("OLDNAME" (%s))`, listMailboxAttrs(mb, names, true), formatListMailbox(mb.Name), formatListMailbox(old.Name))); err != nil {
+			if err := s.untagged(fmt.Sprintf(`LIST (%s) "/" %s ("OLDNAME" (%s))`, listMailboxAttrs(mb, parents, true), formatListMailbox(mb.Name), formatListMailbox(old.Name))); err != nil {
 				return err
 			}
 		case known && old.Subscribed != mb.Subscribed && ev.subscriptionChange:
-			if err := s.untagged(fmt.Sprintf(`LIST (%s) "/" %s`, listMailboxAttrs(mb, names, true), formatListMailbox(mb.Name))); err != nil {
+			if err := s.untagged(fmt.Sprintf(`LIST (%s) "/" %s`, listMailboxAttrs(mb, parents, true), formatListMailbox(mb.Name))); err != nil {
 				return err
 			}
 		}

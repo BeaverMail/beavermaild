@@ -6,29 +6,16 @@ import (
 	"strings"
 )
 
-// decodeAuthPlain decodes a PLAIN SASL initial response (base64 or raw).
-func decodeAuthPlain(line string) (user, pass string, ok bool) {
-	line = strings.TrimSpace(line)
-	if line == "" {
-		return "", "", false
-	}
-	raw, err := base64.StdEncoding.DecodeString(line)
+// decodeAuthPlain decodes a PLAIN response: base64 (RFC 3501 6.2.2) of
+// [authzid] NUL authcid NUL passwd (RFC 4616 2). Anything else is malformed.
+func decodeAuthPlain(line string) (authzid, user, pass string, ok bool) {
+	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(line))
 	if err != nil {
-		raw = []byte(line)
+		return "", "", "", false
 	}
 	parts := strings.Split(string(raw), "\x00")
-	switch len(parts) {
-	case 3:
-		user = strings.TrimSpace(parts[1])
-		pass = parts[2]
-	case 2:
-		user = strings.TrimSpace(parts[0])
-		pass = parts[1]
-	default:
-		return "", "", false
+	if len(parts) != 3 || parts[1] == "" {
+		return "", "", "", false
 	}
-	if user == "" {
-		return "", "", false
-	}
-	return user, pass, true
+	return parts[0], parts[1], parts[2], true
 }

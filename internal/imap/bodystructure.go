@@ -4,30 +4,29 @@ package imap
 import (
 	"bufio"
 	"bytes"
-	"io"
+	"maps"
 	"mime"
 	"net/mail"
 	"net/textproto"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 )
 
 // formatBodyStructure returns the RFC 3501 BODYSTRUCTURE parenthesized list for raw.
-func formatBodyStructure(raw []byte) string { return formatBodyPart(raw, true) }
+func formatBodyStructure(raw []byte) string { return formatBodyPart(raw, true, 0) }
 
 // formatBody is the non-extensible BODY form: BODYSTRUCTURE without extension data.
-func formatBody(raw []byte) string { return formatBodyPart(raw, false) }
+func formatBody(raw []byte) string { return formatBodyPart(raw, false, 0) }
 
-func formatBodyPart(raw []byte, ext bool) string {
-	msg, err := mail.ReadMessage(bytes.NewReader(raw))
-	if err != nil {
-		return `("TEXT" "PLAIN" NIL NIL NIL "7BIT" 0 0)`
-	}
-	body, _ := io.ReadAll(msg.Body)
-	ct := msg.Header.Get("Content-Type")
-	mediaType, params := parseMediaType(ct)
-	return formatMIMEPart(mediaType, params, msg.Header, body, ext)
+// formatBodyPart describes the message raw, depth levels of nesting down. Header and body are
+// slices of raw, never copies: a message/rfc822 chain would otherwise hold one copy per level.
+func formatBodyPart(raw []byte, ext bool, depth int) string {
+	e := splitEntity(raw)
+	hdr, _ := textproto.NewReader(bufio.NewReader(bytes.NewReader(e.header))).ReadMIMEHeader()
+	mediaType, params := parseMediaType(hdr.Get("Content-Type"))
+	return formatMIMEPart(mediaType, params, hdr, e.body, ext, depth)
 }
 
 func mimeGet(hdr map[string][]string, key string) string {
@@ -58,15 +57,18 @@ func parseMediaType(ct string) (mediaType string, params map[string]string) {
 	return mt, p
 }
 
-func formatMIMEPart(mediaType string, params map[string]string, hdr map[string][]string, body []byte, ext bool) string {
+func formatMIMEPart(mediaType string, params map[string]string, hdr map[string][]string, body []byte, ext bool, depth int) string {
 	major, subtype, _ := strings.Cut(strings.ToLower(mediaType), "/")
-	if major == "multipart" {
-		return formatMultipart(subtype, params, hdr, body, ext)
+	if depth >= maxMIMEDepth && opaqueTooDeep(major+"/"+subtype) {
+		major, subtype, params = "application", "octet-stream", nil
 	}
-	return formatLeafPart(major, subtype, params, hdr, body, ext)
+	if major == "multipart" {
+		return formatMultipart(subtype, params, hdr, body, ext, depth)
+	}
+	return formatLeafPart(major, subtype, params, hdr, body, ext, depth)
 }
 
-func formatMultipart(subtype string, params map[string]string, hdr map[string][]string, body []byte, ext bool) string {
+func formatMultipart(subtype string, params map[string]string, hdr map[string][]string, body []byte, ext bool, depth int) string {
 	boundary := params["boundary"]
 	if boundary == "" {
 		return `(("TEXT" "PLAIN" NIL NIL NIL "7BIT" 0 0) "` + strings.ToUpper(subtype) + `" NIL)`
@@ -77,7 +79,7 @@ func formatMultipart(subtype string, params map[string]string, hdr map[string][]
 		e := splitEntity(child)
 		hdr, _ := textproto.NewReader(bufio.NewReader(bytes.NewReader(e.header))).ReadMIMEHeader()
 		mt, pr := entityMediaType(hdr.Get("Content-Type"), strings.EqualFold(subtype, "digest"))
-		parts = append(parts, formatMIMEPart(mt, pr, hdr, e.body, ext))
+		parts = append(parts, formatMIMEPart(mt, pr, hdr, e.body, ext, depth+1))
 	}
 	if len(parts) == 0 {
 		parts = append(parts, `("TEXT" "PLAIN" NIL NIL NIL "7BIT" 0 0)`)
@@ -99,14 +101,14 @@ func bodyExt(hdr map[string][]string) string {
 	disp := "NIL"
 	if v := mimeGet(hdr, "Content-Disposition"); v != "" {
 		if d, p, err := mime.ParseMediaType(v); err == nil {
-			disp = "(" + quoteIMAPString(strings.ToUpper(d)) + " " + formatIMAPParams(p) + ")"
+			disp = "(" + quoteHeaderString(strings.ToUpper(d)) + " " + formatIMAPParams(p) + ")"
 		}
 	}
 	lang := "NIL"
 	var tags []string
 	for _, t := range strings.Split(mimeGet(hdr, "Content-Language"), ",") {
 		if t = strings.TrimSpace(t); t != "" {
-			tags = append(tags, quoteIMAPString(t))
+			tags = append(tags, quoteHeaderString(t))
 		}
 	}
 	switch len(tags) {
@@ -119,7 +121,7 @@ func bodyExt(hdr map[string][]string) string {
 	return disp + " " + lang + " " + nstring(mimeGet(hdr, "Content-Location"))
 }
 
-func formatLeafPart(major, subtype string, params map[string]string, hdr map[string][]string, body []byte, ext bool) string {
+func formatLeafPart(major, subtype string, params map[string]string, hdr map[string][]string, body []byte, ext bool, depth int) string {
 	if major == "" {
 		major = "text"
 	}
@@ -144,7 +146,7 @@ func formatLeafPart(major, subtype string, params map[string]string, hdr map[str
 	// body-type-msg: a message/rfc822 part also carries the inner ENVELOPE, BODYSTRUCTURE and line count.
 	if major == "MESSAGE" && subtype == "RFC822" {
 		return `("` + major + `" "` + subtype + `" ` + paramsStr + ` ` + id + ` ` + desc + ` "` + enc + `" ` + strconv.Itoa(size) +
-			` ` + formatEnvelope(body) + ` ` + formatBodyPart(body, ext) + ` ` + strconv.Itoa(countLines(body)) + tail
+			` ` + formatEnvelope(body) + ` ` + formatBodyPart(body, ext, depth+1) + ` ` + strconv.Itoa(countLines(body)) + tail
 	}
 	return `("` + major + `" "` + subtype + `" ` + paramsStr + ` ` + id + ` ` + desc + ` "` + enc + `" ` + strconv.Itoa(size) + tail
 }
@@ -153,27 +155,18 @@ func formatIMAPParams(params map[string]string) string {
 	if len(params) == 0 {
 		return "NIL"
 	}
-	keys := make([]string, 0, len(params))
-	for k := range params {
-		keys = append(keys, k)
-	}
-	// ponytail: stable order not required by RFC; sort for tests
-	for i := 0; i < len(keys); i++ {
-		for j := i + 1; j < len(keys); j++ {
-			if strings.ToUpper(keys[i]) > strings.ToUpper(keys[j]) {
-				keys[i], keys[j] = keys[j], keys[i]
-			}
-		}
-	}
+	// mime.ParseMediaType returns lower-case attribute names; a stable order keeps output and tests
+	// deterministic. Sorted in O(n log n): a message may carry any number of parameters.
+	keys := slices.Sorted(maps.Keys(params))
 	var b strings.Builder
 	b.WriteByte('(')
 	for i, k := range keys {
 		if i > 0 {
 			b.WriteByte(' ')
 		}
-		b.WriteString(quoteIMAPString(strings.ToUpper(k)))
+		b.WriteString(quoteHeaderString(strings.ToUpper(k)))
 		b.WriteByte(' ')
-		b.WriteString(quoteIMAPString(params[k]))
+		b.WriteString(quoteHeaderString(params[k]))
 	}
 	b.WriteByte(')')
 	return b.String()

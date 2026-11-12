@@ -61,11 +61,7 @@ func parseQuotaMailboxArg(arg string) (name string, ok bool) {
 	if arg == "" {
 		return "", false
 	}
-	if arg[0] == '"' {
-		name, _, ok = parseQuoted(arg)
-		return name, ok
-	}
-	return arg, true
+	return onlyAString(arg)
 }
 
 func parseQuotaRootArg(arg string) (root string, ok bool) {
@@ -73,11 +69,7 @@ func parseQuotaRootArg(arg string) (root string, ok bool) {
 	if arg == "" {
 		return "", false
 	}
-	if arg[0] == '"' {
-		root, rest, ok := parseQuoted(arg)
-		return root, ok && strings.TrimSpace(rest) == ""
-	}
-	return arg, true
+	return onlyAString(arg)
 }
 
 func formatQuotaRoot(root string) string {

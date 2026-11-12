@@ -17,6 +17,7 @@ type bodySectionFetch struct {
 	setsSeen  bool     // BODY[...] without PEEK, RFC822, RFC822.TEXT: fetching sets \Seen
 	binary    bool     // BINARY[...]: the part decoded from its transfer encoding (RFC 3516)
 	sizeOnly  bool     // BINARY.SIZE[...]: only the decoded size
+	invalid   bool     // the section does not match the grammar: the FETCH is answered BAD
 
 	// partial is set for BODY[...]<origin.count>: only count bytes from origin are sent.
 	partial bool
@@ -113,17 +114,14 @@ func parseAllBodyFetches(rest string) []bodySectionFetch {
 		var bs bodySectionFetch
 		if kind.binary {
 			// BINARY takes a part number only, no HEADER/TEXT/MIME (RFC 3516).
-			if _, ok := parseSectionPath(spec); !ok {
-				pos = next
-				continue
-			}
-			bs = bodySectionFetch{itemName: item, section: spec, binary: true, sizeOnly: kind.size}
+			_, ok := parseSectionPath(spec)
+			bs = bodySectionFetch{itemName: item, section: spec, binary: true, sizeOnly: kind.size, invalid: !ok}
 		} else if spec == "" {
 			bs = bodySectionFetch{itemName: item, section: ""}
 		} else if section, fields, ok := parseHeaderFieldsSection(spec); ok {
 			bs = bodySectionFetch{itemName: item, section: section, hdrFields: fields}
 		} else {
-			bs = bodySectionFetch{itemName: item, section: spec}
+			bs = bodySectionFetch{itemName: item, section: spec, invalid: !validSectionSpec(spec)}
 		}
 		bs.setsSeen = !peek
 		if origin, count, n, ok := parsePartial(rest, next); ok && !bs.sizeOnly {
@@ -165,6 +163,25 @@ var bracketItems = []bracketItem{
 	{prefix: "BINARY.PEEK[", peek: true, binary: true},
 	{prefix: "BINARY.SIZE[", peek: true, binary: true, size: true},
 	{prefix: "BINARY[", binary: true},
+}
+
+// validSectionSpec reports whether spec (not HEADER.FIELDS, parsed apart) is a section-spec of
+// RFC 3501 9: part numbers from 1, then HEADER or TEXT, or MIME after a part number.
+func validSectionSpec(spec string) bool {
+	upper := strings.ToUpper(spec)
+	path, text := upper, ""
+	if i := strings.LastIndexByte(upper, '.'); i >= 0 {
+		if last := upper[i+1:]; last == "HEADER" || last == "TEXT" || last == "MIME" {
+			path, text = upper[:i], last
+		}
+	} else if upper == "HEADER" || upper == "TEXT" {
+		path, text = "", upper
+	}
+	if text == "MIME" && path == "" {
+		return false
+	}
+	_, ok := parseSectionPath(path)
+	return ok
 }
 
 // parseHeaderFieldsSection parses "[path.]HEADER.FIELDS[.NOT] (f1 f2)" and returns the section
@@ -286,13 +303,31 @@ func messageText(e mimeEntity, text string, fields []string) []byte {
 	return []byte{}
 }
 
+// maxMIMEDepth bounds how many multipart and message/rfc822 levels any MIME walk enters (the
+// Dovecot limit since CVE-2020-12100). Each level scans its whole body for its boundary, so an
+// unbounded walk costs O(depth x size): a 1.8 MB message nested 24000 deep took 12.8 s per
+// BODYSTRUCTURE, and any SMTP sender can deliver one. Deeper parts are one opaque leaf.
+const maxMIMEDepth = 100
+
+// opaqueTooDeep reports whether a part of media type mt, found at maxMIMEDepth, is shown as an
+// application/octet-stream leaf instead of being entered.
+func opaqueTooDeep(mt string) bool {
+	return strings.HasPrefix(mt, "multipart/") || mt == "message/rfc822"
+}
+
 // findPart walks a part path: numbers index multipart children; a non-multipart message has a
 // single part 1 (itself); a message/rfc822 part continues into the message it encapsulates.
 func findPart(raw []byte, path []int) (mimeEntity, bool) {
-	cur, isMessage := splitEntity(raw), true
+	// depth counts levels as BODYSTRUCTURE does: +1 into a multipart child, +1 into the message a
+	// message/rfc822 part encapsulates. Past maxMIMEDepth both show and treat a part as a leaf.
+	cur, isMessage, depth := splitEntity(raw), true, 0
 	for i, n := range path {
 		var part mimeEntity
+		partDepth := depth
 		mt, params := cur.mediaType()
+		if depth >= maxMIMEDepth && opaqueTooDeep(mt) {
+			mt = "application/octet-stream"
+		}
 		switch {
 		case strings.HasPrefix(mt, "multipart/"):
 			children := splitMultipart(cur.body, params["boundary"])
@@ -301,6 +336,7 @@ func findPart(raw []byte, path []int) (mimeEntity, bool) {
 			}
 			part = splitEntity(children[n-1])
 			part.inDigest = mt == "multipart/digest"
+			partDepth = depth + 1
 		case isMessage && n == 1:
 			part = cur
 		default:
@@ -309,10 +345,10 @@ func findPart(raw []byte, path []int) (mimeEntity, bool) {
 		if i == len(path)-1 {
 			return part, true
 		}
-		if pt, _ := part.mediaType(); pt == "message/rfc822" {
-			cur, isMessage = splitEntity(part.body), true
+		if pt, _ := part.mediaType(); pt == "message/rfc822" && partDepth < maxMIMEDepth {
+			cur, isMessage, depth = splitEntity(part.body), true, partDepth+1
 		} else {
-			cur, isMessage = part, false
+			cur, isMessage, depth = part, false, partDepth
 		}
 	}
 	return mimeEntity{}, false
@@ -331,6 +367,10 @@ func splitMultipart(body []byte, boundary string) [][]byte {
 		i := indexLineStart(body, pos, delim)
 		if i < 0 {
 			return parts
+		}
+		if !delimiterEnds(body[i+len(delim):]) {
+			pos = i + 1 // "--b10" is not the delimiter of boundary "b1"
+			continue
 		}
 		if start >= 0 {
 			end := i
@@ -352,6 +392,16 @@ func splitMultipart(body []byte, boundary string) [][]byte {
 		start = after + nl + 1
 		pos = start
 	}
+}
+
+// delimiterEnds reports whether rest, the bytes after "--boundary", completes a delimiter line:
+// "--" (close delimiter) or optional linear white space up to the end of the line (RFC 2046 5.1.1).
+func delimiterEnds(rest []byte) bool {
+	if bytes.HasPrefix(rest, []byte("--")) {
+		return true
+	}
+	line, _, _ := bytes.Cut(rest, []byte("\n"))
+	return len(bytes.Trim(line, " \t\r")) == 0
 }
 
 // indexLineStart finds sep at the start of a line at or after from.
