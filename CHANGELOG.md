@@ -133,6 +133,9 @@
 - SMTP STARTTLS (RFC 3207): `STARTTLS` with a parameter gets 501. Submission before TLS answers
   530 5.7.0 to every command but NOOP, EHLO, STARTTLS and QUIT (AUTH keeps 538 5.7.11); HELO,
   RSET, VRFY and HELP used to answer in clear.
+- SMTP PIPELINING (RFC 2920): replies to RSET, MAIL and RCPT inside a pipelined group go out in one
+  write; MAIL answers `250 2.1.0 Sender ok` and RCPT `250 2.1.5 Recipient ok` instead of
+  `250 2.0.0 Ok`, so each reply names its command.
   - SEARCH BODY and TEXT also match the decoded text of base64 and quoted-printable parts, and TEXT
     the decoded RFC 2047 header words (no charset conversion: UTF-8 and US-ASCII parts).
 

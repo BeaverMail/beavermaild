@@ -3,6 +3,7 @@ package smtp
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -66,7 +67,8 @@ type session struct {
 
 	mailFrom  string // "" is the null reverse-path (bounces); inTxn tells whether MAIL was accepted
 	inTxn     bool
-	txnRcpts  int // RCPT commands accepted in this transaction
+	held      *bytes.Buffer // replies RFC 2920 3.2 (2) lets go out together; nil when not holding
+	txnRcpts  int           // RCPT commands accepted in this transaction
 	mailRet   mail.RetMode
 	mailEnvid string
 	mailBody  string
@@ -157,15 +159,25 @@ func (s *session) run(ctx context.Context) error {
 			return err
 		}
 		mailBlocked := false
-		for _, c := range cmds {
+		for i, c := range cmds {
 			// Never keep other arguments: AUTH carries credentials.
 			s.curCmd = c.cmd
 			if c.cmd == "MAIL" || c.cmd == "RCPT" {
 				s.curCmd = c.cmd + " " + c.arg
 			}
+			// RFC 2920 3.2 (2): replies to RSET, MAIL and RCPT inside a group go out together; any
+			// other command, and the end of the group, sends them first (5)-(7).
+			if groupedReply(c.cmd) && i < len(cmds)-1 {
+				s.holdReplies()
+			} else if err := s.flushReplies(); err != nil {
+				return err
+			}
 			stop, blockMail, err := s.dispatch(ctx, c.cmd, c.arg, mailBlocked)
 			if blockMail {
 				mailBlocked = true
+			}
+			if err != nil || stop {
+				_ = s.flushReplies() // what was answered still reaches the client
 			}
 			if errors.Is(err, errCloseSession) {
 				return nil
@@ -177,7 +189,35 @@ func (s *session) run(ctx context.Context) error {
 				return nil
 			}
 		}
+		if err := s.flushReplies(); err != nil {
+			return err
+		}
 	}
+}
+
+// groupedReply reports the commands whose replies RFC 2920 3.2 (2) lets a server hold and send
+// together with the rest of the group.
+func groupedReply(cmd string) bool { return cmd == "RSET" || cmd == "MAIL" || cmd == "RCPT" }
+
+// holdReplies makes writef collect replies instead of writing them, until flushReplies.
+func (s *session) holdReplies() {
+	if s.held == nil {
+		s.held = new(bytes.Buffer)
+	}
+}
+
+// flushReplies writes the held replies in one write and stops holding.
+func (s *session) flushReplies() error {
+	if s.held == nil {
+		return nil
+	}
+	held := s.held
+	s.held = nil
+	if held.Len() == 0 {
+		return nil
+	}
+	_, err := s.conn.Write(held.Bytes())
+	return err
 }
 
 func (s *session) readCommandBatch() ([]smtpCommand, error) {
@@ -360,7 +400,7 @@ func (s *session) handleMail(ctx context.Context, arg string) (blockMail bool, e
 		}
 		return true, s.writef(reply)
 	}
-	return false, s.writef(replyOK)
+	return false, s.writef(replyMailOK)
 }
 
 func (s *session) handleRcpt(ctx context.Context, arg string, mailBlocked bool) error {
@@ -511,7 +551,7 @@ func (s *session) addRcpt(ctx context.Context, addr string, targets ...rcptTarge
 	}
 	s.txnRcpts++
 	s.goodRcpts++
-	return s.writef(replyOK)
+	return s.writef(replyRcptOK)
 }
 
 // unknownRcpt answers an unknown recipient; a session that mostly probes unknown addresses is closed
@@ -1026,6 +1066,10 @@ func (s *session) writef(format string, args ...any) error {
 	// Rejections are otherwise invisible to the operator (greylist, unknown user, filter, auth).
 	if line[0] == '4' || line[0] == '5' {
 		s.log.Info("smtp reply", "ip", s.clientIP(), "cmd", s.curCmd, "from", s.mailFrom, "reply", strings.TrimRight(line, "\r\n"), "submission", s.submission)
+	}
+	if s.held != nil {
+		s.held.WriteString(line)
+		return nil
 	}
 	_, err := io.WriteString(s.conn, line)
 	return err

@@ -3,6 +3,8 @@ package smtp
 
 const (
 	replyOK                  = "250 2.0.0 Ok"
+	replyMailOK              = "250 2.1.0 Sender ok"    // RFC 2920 3.2 (10): the text names the command
+	replyRcptOK              = "250 2.1.5 Recipient ok" // (RFC 3463 X.1.0, X.1.5)
 	replyDataStart           = "354 2.0.0 Start mail input; end with <CRLF>.<CRLF>"
 	replyBye                 = "221 2.0.0 Bye"
 	replyTLSReady            = "220 2.0.0 Ready to start TLS"
