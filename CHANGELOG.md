@@ -46,6 +46,14 @@
 - Direct MX delivery refuses loopback, private and link-local addresses (a domain's MX could point at
   our own network); `smtp.outbound_allow_private` turns this off for LAN setups.
 - Null-sender mail from submission is DKIM-signed as the authenticated user instead of going out unsigned.
+- The queue worker no longer waits for a whole pass to finish: a delivery stuck on a slow server holds
+  only its own slot, new messages go out on the next pass, and one destination domain takes at most
+  4 of the 16 slots.
+- MTA-STS policy downloads refuse internal addresses (like MX delivery) and no longer follow redirects
+  (RFC 8461 3.3). The internal-address filter also covers CGNAT (`100.64.0.0/10`).
+- IMAP FETCH of a whole message (`BODY[]`, `RFC822`, partial) streams it from disk instead of loading
+  it; items that parse the message (ENVELOPE, BODYSTRUCTURE, parts) hold at most 16 messages in memory
+  at once across all sessions. A client that stops reading responses is disconnected after 5 minutes.
 
 ## 0.4.0
 

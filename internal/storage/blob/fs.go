@@ -94,6 +94,18 @@ func (f *FS) Get(ctx context.Context, hash [storage.Blake3DigestLen]byte) ([]byt
 	return data, err
 }
 
+// Open returns the blob for streaming; the caller closes it.
+func (f *FS) Open(ctx context.Context, hash [storage.Blake3DigestLen]byte) (*os.File, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	file, err := os.Open(f.path(hash))
+	if os.IsNotExist(err) {
+		return nil, ErrNotFound
+	}
+	return file, err
+}
+
 // Path returns the on-disk path for hash (for tests and diagnostics).
 func (f *FS) Path(hash [storage.Blake3DigestLen]byte) string {
 	return f.path(hash)

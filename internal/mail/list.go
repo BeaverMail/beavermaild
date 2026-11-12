@@ -4,6 +4,7 @@ package mail
 import (
 	"context"
 	"errors"
+	"os"
 	"slices"
 
 	"github.com/BeaverMail/beavermaild/internal/storage"
@@ -53,6 +54,14 @@ func (ib *Inbox) LoadRaw(ctx context.Context, meta storage.EmailMeta) ([]byte, e
 		return nil, storage.ErrNotFound
 	}
 	return ib.blobs.Get(ctx, meta.BlobHash)
+}
+
+// OpenRaw opens the stored message for streaming (the same bytes LoadRaw returns); the caller closes it.
+func (ib *Inbox) OpenRaw(ctx context.Context, meta storage.EmailMeta) (*os.File, error) {
+	if !meta.HasBlob() {
+		return nil, storage.ErrNotFound
+	}
+	return ib.blobs.Open(ctx, meta.BlobHash)
 }
 
 // SetFlags updates persisted flag bits for one message (set OR clear) and bumps MODSEQ when flags change.

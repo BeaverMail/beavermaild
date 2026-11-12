@@ -46,6 +46,24 @@ func parsePartial(s string, pos int) (origin, count, n int, ok bool) {
 }
 
 // partialData returns the bytes of data a BODY[...]<origin.count> fetch sends.
+// wholeMessage reports a section that is the stored message as is (BODY[], RFC822, with or without
+// <origin.count>), which FETCH can stream from the file.
+func (bs bodySectionFetch) wholeMessage() bool {
+	return strings.TrimSpace(bs.section) == "" && !bs.binary && !bs.sizeOnly && bs.hdrFields == nil
+}
+
+// partialRange is partialData as an offset and length into a message of size bytes.
+func (bs bodySectionFetch) partialRange(size int64) (off, n int64) {
+	if !bs.partial {
+		return 0, size
+	}
+	off = int64(bs.origin)
+	if off >= size {
+		return size, 0
+	}
+	return off, min(int64(bs.count), size-off)
+}
+
 func (bs bodySectionFetch) partialData(data []byte) []byte {
 	if !bs.partial {
 		return data

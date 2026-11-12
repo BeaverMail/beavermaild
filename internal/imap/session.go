@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"maps"
 	"net"
@@ -63,13 +64,29 @@ type session struct {
 	stopping        *atomic.Bool // server shutdown flag (nil when not served by a Server)
 }
 
+// writeTimeout bounds each write to the client: one that stops reading (slowloris on responses) is
+// cut off instead of holding its session, its locks and its rawLoads slot forever.
+const writeTimeout = 5 * time.Minute
+
+// writeDeadlineConn renews the write deadline on every Write; a slow client that keeps reading is fine.
+// STARTTLS wraps this conn, so TLS writes are covered too.
+type writeDeadlineConn struct {
+	net.Conn
+	d time.Duration
+}
+
+func (c *writeDeadlineConn) Write(p []byte) (int, error) {
+	_ = c.Conn.SetWriteDeadline(time.Now().Add(c.d))
+	return c.Conn.Write(p)
+}
+
 func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *mail.Inbox, certs *tlsload.Certs, secure, tlsRequired bool, gate security.AuthGate, readTimeout time.Duration) *session {
 	if gate == nil {
 		gate = security.NopGate{}
 	}
 	return &session{
 		log:         log,
-		conn:        conn,
+		conn:        &writeDeadlineConn{Conn: conn, d: writeTimeout},
 		r:           bufio.NewReader(conn),
 		dir:         dir,
 		inbox:       inbox,
@@ -1158,10 +1175,20 @@ func (s *session) resolveIndices(set seqSet, byUID bool) []int {
 }
 
 func (s *session) writeFetch(ctx context.Context, seq int, msg mail.Message, items fetchItems, byUID bool) error {
-	needRaw := len(items.bodySections) > 0 || items.envelope || items.bodystructure || items.body
+	// The whole message (BODY[], RFC822, also partial) is streamed from its file and never loaded;
+	// anything that must parse it (ENVELOPE, BODYSTRUCTURE, parts) loads it within rawLoads.
+	stream := len(items.bodySections) > 0 && !items.envelope && !items.bodystructure && !items.body
+	for _, bs := range items.bodySections {
+		stream = stream && bs.wholeMessage()
+	}
+	needRaw := !stream && (len(items.bodySections) > 0 || items.envelope || items.bodystructure || items.body)
 	var raw []byte
 	if needRaw {
-		var err error
+		release, err := acquireRawLoad(ctx)
+		if err != nil {
+			return err
+		}
+		defer release()
 		raw, err = s.inbox.LoadRaw(ctx, msg.Meta)
 		if err != nil {
 			return err
@@ -1204,6 +1231,9 @@ func (s *session) writeFetch(ctx context.Context, seq int, msg mail.Message, ite
 	if len(items.bodySections) == 0 {
 		return s.untagged(fmt.Sprintf("%d FETCH (%s)", seq, strings.Join(parts, " ")))
 	}
+	if stream {
+		return s.writeFetchStreamed(ctx, seq, parts, items.bodySections, msg)
+	}
 	// One FETCH response per message, literals after the other items (as Dovecot/Gmail do):
 	// a UID FETCH response must carry UID, so splitting the literals into a second response
 	// left them without one and strict clients dropped the headers.
@@ -1242,9 +1272,13 @@ func (s *session) writeFetchWithLiterals(seq int, parts []string, sections []bod
 			_, err = fmt.Fprintf(s.conn, "%s%s %d", sep, bs.itemName, len(data))
 		case bs.binary && bytes.IndexByte(data, 0) >= 0:
 			// NUL fits only a literal8 (RFC 3516 4.3).
-			_, err = fmt.Fprintf(s.conn, "%s%s ~{%d}\r\n%s", sep, bs.responseName(), len(data), data)
+			if _, err = fmt.Fprintf(s.conn, "%s%s ~{%d}\r\n", sep, bs.responseName(), len(data)); err == nil {
+				_, err = s.conn.Write(data)
+			}
 		default:
-			_, err = fmt.Fprintf(s.conn, "%s%s {%d}\r\n%s", sep, bs.responseName(), len(data), data)
+			if _, err = fmt.Fprintf(s.conn, "%s%s {%d}\r\n", sep, bs.responseName(), len(data)); err == nil {
+				_, err = s.conn.Write(data)
+			}
 		}
 		if err != nil {
 			return err
@@ -1253,6 +1287,57 @@ func (s *session) writeFetchWithLiterals(seq int, parts []string, sections []bod
 	}
 	_, err := fmt.Fprintf(s.conn, ")\r\n")
 	return err
+}
+
+// writeFetchStreamed is writeFetchWithLiterals for whole-message sections, copied from the stored file.
+func (s *session) writeFetchStreamed(ctx context.Context, seq int, parts []string, sections []bodySectionFetch, msg mail.Message) error {
+	f, err := s.inbox.OpenRaw(ctx, msg.Meta)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	prefix := ""
+	if len(parts) > 0 {
+		prefix = strings.Join(parts, " ") + " "
+	}
+	if _, err := fmt.Fprintf(s.conn, "* %d FETCH (%s", seq, prefix); err != nil {
+		return err
+	}
+	for i, bs := range sections {
+		off, n := bs.partialRange(st.Size())
+		sep := ""
+		if i > 0 {
+			sep = " "
+		}
+		if _, err := fmt.Fprintf(s.conn, "%s%s {%d}\r\n", sep, bs.responseName(), n); err != nil {
+			return err
+		}
+		if _, err := io.Copy(s.conn, io.NewSectionReader(f, off, n)); err != nil {
+			return err
+		}
+	}
+	_, err = fmt.Fprintf(s.conn, ")\r\n")
+	return err
+}
+
+// rawLoads bounds how many messages FETCH holds in memory at once across all sessions: memory stays
+// under rawLoadLimit x the largest message, whatever the number of clients.
+var rawLoads = make(chan struct{}, rawLoadLimit)
+
+const rawLoadLimit = 16
+
+// acquireRawLoad waits for a rawLoads slot (or ctx) and returns its release.
+func acquireRawLoad(ctx context.Context) (func(), error) {
+	select {
+	case rawLoads <- struct{}{}:
+		return func() { <-rawLoads }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 func formatSearch(nums []uint32) string {
