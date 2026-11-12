@@ -223,14 +223,4 @@ func TestMXDeliveryRefusesPrivateAddresses(t *testing.T) {
 	if mx.accepted() {
 		t.Fatal("connected to the loopback MX")
 	}
-	for _, a := range []string{"127.0.0.1:25", "10.1.2.3:25", "172.16.0.1:25", "192.168.1.1:25", "169.254.1.1:25", "[::1]:25", "[fd00::1]:25", "[fe80::1]:25", "0.0.0.0:25"} {
-		if err := rejectPrivateAddr("tcp", a, nil); !errors.Is(err, errPrivateAddr) {
-			t.Errorf("%s allowed", a)
-		}
-	}
-	for _, a := range []string{"192.0.2.10:25", "[2001:db8::1]:25"} {
-		if err := rejectPrivateAddr("tcp", a, nil); err != nil {
-			t.Errorf("%s refused: %v", a, err)
-		}
-	}
 }

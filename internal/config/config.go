@@ -852,7 +852,7 @@ func (c *Config) NewMTASTSResolver() *mtasts.Resolver {
 	if c.SMTP.MTASTS.Disable {
 		return nil
 	}
-	return mtasts.NewResolver()
+	return mtasts.NewResolver().WithAllowPrivate(c.SMTP.OutboundAllowPrivate)
 }
 
 // NewDKIMSigner loads the outbound DKIM signer when selector and key path are set.

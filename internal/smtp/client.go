@@ -10,10 +10,10 @@ import (
 	"fmt"
 	"net"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/BeaverMail/beavermaild/internal/mail"
+	"github.com/BeaverMail/beavermaild/internal/security"
 )
 
 // RFC 5321 4.5.3.2: "a timer is set for each SMTP command and for each buffer of the data transfer",
@@ -79,22 +79,7 @@ func relaySecurity(opts ClientOptions, preTLSCaps clientCaps, conn net.Conn) err
 }
 
 // errPrivateAddr: the target resolved to an address of our own network (see ClientOptions.RejectPrivate).
-var errPrivateAddr = errors.New("smtp client: refusing to connect to a loopback, private or link-local address")
-
-// rejectPrivateAddr runs at connect time, after DNS, so a hostname that resolves (or rebinds) to an
-// internal address is caught too.
-func rejectPrivateAddr(_, address string, _ syscall.RawConn) error {
-	host, _, err := net.SplitHostPort(address)
-	if err != nil {
-		return err
-	}
-	ip := net.ParseIP(host)
-	if ip == nil || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-		ip.IsUnspecified() || ip.IsMulticast() || ip.IsInterfaceLocalMulticast() {
-		return fmt.Errorf("%w: %s", errPrivateAddr, host)
-	}
-	return nil
-}
+var errPrivateAddr = security.ErrPrivateAddr
 
 // IsLoopbackAddr reports whether host:port (or host) names the loopback interface.
 func IsLoopbackAddr(addr string) bool {
@@ -130,7 +115,7 @@ func SendReply(ctx context.Context, addr, mailFrom, rcptTo string, data []byte, 
 
 	dialer := net.Dialer{Timeout: clientDialTimeout}
 	if opts.RejectPrivate {
-		dialer.Control = rejectPrivateAddr
+		dialer.Control = security.RejectInternalDial
 	}
 	raw, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {

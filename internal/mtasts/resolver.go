@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/BeaverMail/beavermaild/internal/security"
 )
 
 const (
@@ -45,7 +47,7 @@ func NewResolver() *Resolver {
 	return &Resolver{
 		byDomain: make(map[string]*cacheEntry),
 		lookup:   net.DefaultResolver.LookupTXT,
-		fetch:    defaultPolicyFetch,
+		fetch:    httpsFetcher(false),
 		now:      time.Now,
 	}
 }
@@ -55,6 +57,20 @@ func (r *Resolver) WithTXTLookup(fn TXTLookup) *Resolver {
 	if fn != nil {
 		r.lookup = fn
 	}
+	return r
+}
+
+// httpsFetcher fetches https://mta-sts.<domain>/.well-known/mta-sts.txt.
+func httpsFetcher(allowPrivate bool) PolicyFetcher {
+	client := policyClient(allowPrivate)
+	return func(ctx context.Context, domain string) ([]byte, error) {
+		return fetchPolicy(ctx, client, "https://mta-sts."+domain+policyPath)
+	}
+}
+
+// WithAllowPrivate lets policy hosts resolve to internal addresses (smtp.outbound_allow_private).
+func (r *Resolver) WithAllowPrivate(allow bool) *Resolver {
+	r.fetch = httpsFetcher(allow)
 	return r
 }
 
@@ -140,28 +156,28 @@ func (r *Resolver) expired(ent *cacheEntry) bool {
 	return r.now().Sub(ent.fetched) >= ttl
 }
 
-func defaultPolicyFetch(ctx context.Context, domain string) ([]byte, error) {
-	url := "https://mta-sts." + domain + policyPath
+// policyClient is the HTTPS client for policy files. It never follows redirects (RFC 8461 3.3: "HTTP
+// 3xx redirects MUST NOT be followed") and, unless allowPrivate, never connects to an internal address:
+// mta-sts.<domain> is chosen by whoever controls the recipient domain's DNS (SSRF).
+func policyClient(allowPrivate bool) *http.Client {
+	dialer := &net.Dialer{Timeout: fetchTimeout}
+	if !allowPrivate {
+		dialer.Control = security.RejectInternalDial
+	}
+	return &http.Client{
+		Timeout:   fetchTimeout,
+		Transport: &http.Transport{DialContext: dialer.DialContext, Proxy: nil},
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse // the 3xx is then rejected as a non-200 status
+		},
+	}
+}
+
+// fetchPolicy downloads url with client: only a 200 is a policy (RFC 8461 3.3).
+func fetchPolicy(ctx context.Context, client *http.Client, url string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
-	}
-	client := &http.Client{
-		Timeout: fetchTimeout,
-		Transport: &http.Transport{
-			TLSClientConfig: nil, // default verify with ServerName from URL host
-		},
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 5 {
-				return fmt.Errorf("mta-sts: too many redirects")
-			}
-			// RFC: redirects must stay on mta-sts.<domain>.
-			wantHost := "mta-sts." + domain
-			if req.URL.Host != wantHost {
-				return fmt.Errorf("mta-sts: redirect to %s", req.URL.Host)
-			}
-			return nil
-		},
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -171,9 +187,5 @@ func defaultPolicyFetch(ctx context.Context, domain string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("mta-sts: fetch %s: status %d", url, resp.StatusCode)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, defaultMaxBody))
-	if err != nil {
-		return nil, err
-	}
-	return body, nil
+	return io.ReadAll(io.LimitReader(resp.Body, defaultMaxBody))
 }
