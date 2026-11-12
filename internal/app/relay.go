@@ -30,8 +30,9 @@ func remoteConfigFrom(c *config.Config) smtp.RemoteConfig {
 			User:                  c.SMTPRelayUser(),
 			Password:              c.SMTPRelayPassword(),
 			HeloName:              helo,
+			AllowPlainAuth:        smtp.IsLoopbackAddr(c.SMTPRelay()),
 		},
-		MXOptions: smtp.ClientOptions{TLSInsecureSkipVerify: tlsSkip, HeloName: helo},
+		MXOptions: smtp.ClientOptions{TLSInsecureSkipVerify: tlsSkip, HeloName: helo, RejectPrivate: !c.SMTPOutboundAllowPrivate()},
 		MTASTS:    c.NewMTASTSResolver(),
 	}
 }
@@ -45,6 +46,7 @@ func (d remoteDeliverer) DeliverRemote(ctx context.Context, mailFrom, rcptTo str
 				cfg.RelayOptions.User = dom.RelayUser
 				cfg.RelayOptions.Password = dom.RelayPassword
 				cfg.RelayOptions.STARTTLS = dom.RelayStartTLS
+				cfg.RelayOptions.AllowPlainAuth = smtp.IsLoopbackAddr(cfg.Relay)
 			}
 		}
 	}

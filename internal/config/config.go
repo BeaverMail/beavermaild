@@ -132,6 +132,7 @@ type SMTPConfig struct {
 	RelayUser               string                    `json:"relay_user"`
 	RelayPassword           string                    `json:"relay_password"`
 	OutboundTLSInsecureSkip bool                      `json:"outbound_tls_insecure_skip_verify"` // dev/self-signed relay or MX; default verify
+	OutboundAllowPrivate    bool                      `json:"outbound_allow_private"`            // MX delivery may reach loopback/private addresses; default refuse
 	MTASTS                  MTASTSConfig              `json:"mta_sts"`
 	DKIMSign                DKIMSignConfig            `json:"dkim_sign"`
 	Greylist                GreylistConfig            `json:"greylist"`
@@ -551,6 +552,11 @@ func (c *Config) SMTPRelayStartTLS() bool {
 // SMTPOutboundTLSInsecureSkip reports whether outbound relay/MX skips TLS cert verify.
 func (c *Config) SMTPOutboundTLSInsecureSkip() bool {
 	return c.SMTP.OutboundTLSInsecureSkip
+}
+
+// SMTPOutboundAllowPrivate reports whether direct MX delivery may connect to loopback or private addresses.
+func (c *Config) SMTPOutboundAllowPrivate() bool {
+	return c.SMTP.OutboundAllowPrivate
 }
 
 // SMTPMaxMessageBytes returns the inbound DATA size cap (0 lets smtp use its default).

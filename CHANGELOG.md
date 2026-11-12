@@ -25,10 +25,27 @@
 - Outbound delivery to a domain with a null MX (`MX 0 .`, RFC 7505) fails permanently at once; it used
   to try localhost. A domain with no MX but an address record is delivered to directly (implicit MX,
   RFC 5321 5.1) instead of bouncing. MX hosts of equal preference are tried in random order.
-- The outbound SMTP client times out per read/write (5 minutes, 10 once the transaction starts) instead
-  of after 30 seconds for the whole session, so large messages and slow servers no longer fail.
+- The outbound SMTP client times out per command and per data buffer (5 minutes, 10 once the
+  transaction starts) instead of after 30 seconds for the whole session, so large messages and slow
+  servers no longer fail; a server that dribbles its replies still times out.
 - SMTP DATA lines are read with bounded memory; an IPv6 client address in `Received` carries the
   `IPv6:` tag (RFC 5321 4.1.3).
+- Security: SMTP smuggling (CVE-2023-51764 class) is blocked in both directions. A bare CR or LF in
+  DATA, or a DATA line over the limit, gets an error reply and the connection is closed; the `\n.\r\n` variant used to let the text after it run
+  as a new transaction. Outgoing mail has every bare CR/LF turned into CRLF. Regression tests name
+  each CVE (`internal/smtp/cve_test.go`).
+- Security: at most 1000 recipients per transaction (452); a session that sends 10 unknown recipients,
+  more than its valid ones, or 10 unknown commands is closed (421).
+- A recipient refused by the filter plugin at RCPT no longer receives the message anyway.
+- Queue ids are allocated atomically: messages queued at the same moment (several SMTP sessions, the
+  worker's DSNs, the CLI) could get the same id and overwrite each other.
+- The queue worker delivers up to 16 messages in parallel, so a slow remote server no longer holds back
+  every other outbound message.
+- Relay security: with `relay_starttls` a relay that does not offer STARTTLS is an error instead of a
+  plaintext session, and `relay_user`/`relay_password` are only sent over TLS (or to a loopback relay).
+- Direct MX delivery refuses loopback, private and link-local addresses (a domain's MX could point at
+  our own network); `smtp.outbound_allow_private` turns this off for LAN setups.
+- Null-sender mail from submission is DKIM-signed as the authenticated user instead of going out unsigned.
 
 ## 0.4.0
 

@@ -34,6 +34,10 @@ const (
 	replyNestedMail          = "503 5.5.1 Sender already given"
 	replyUnrecognized        = "500 5.5.2 Command unrecognized"
 	replyLineTooLong         = "500 5.5.2 Line too long"
+	replyBareCRLF            = "554 5.6.0 Bare CR or LF in message data, closing connection"
+	replyTooManyRcpts        = "452 4.5.3 Too many recipients"
+	replyTooManyBadRcpts     = "421 4.7.0 Too many invalid recipients, closing connection"
+	replyTooManyUnknown      = "421 4.7.0 Too many unrecognized commands, closing connection"
 	replyLocalError          = "451 4.3.0 Local error in processing"
 	replyOutboundUnavailable = "451 4.3.0 Outbound delivery unavailable"
 	replySendRateLimited     = "452 4.7.0 Message rate limit exceeded, try again later"
@@ -41,4 +45,14 @@ const (
 	replyFilterTempfail      = "451 4.7.0 Message temporarily rejected"
 	replyConnectionRejected  = "554 5.7.1 Connection refused"
 	replyMailboxFull         = "552 5.2.2 Mailbox full"
+)
+
+// Abuse limits (RFC 5321 7.8). Postfix and Exim use the same orders of magnitude.
+const (
+	// MaxRecipients caps RCPT per transaction; more get 452 4.5.3 (RFC 5321 4.5.3.1.10 floor is 100).
+	MaxRecipients = 1000
+	// MaxBadRecipients unknown recipients in a session, when they outnumber the good ones, end it (harvesting).
+	MaxBadRecipients = 10
+	// MaxUnknownCommands unrecognized commands in a session end it.
+	MaxUnknownCommands = 10
 )

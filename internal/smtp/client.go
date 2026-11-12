@@ -6,36 +6,35 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/BeaverMail/beavermaild/internal/mail"
 )
 
-// RFC 5321 4.5.3.2: per-command timeouts, never one for the whole transaction. Every read and write
-// gets its own deadline: 5 minutes for the greeting and commands (4.5.3.2.1-3), 10 minutes once the
-// transaction starts, which covers each data block and the wait after the final "." (4.5.3.2.6).
+// RFC 5321 4.5.3.2: "a timer is set for each SMTP command and for each buffer of the data transfer",
+// never one for the whole transaction. The timer starts when we write (a command or a data buffer) and
+// the whole reply must arrive before it fires: 5 minutes for the greeting and commands (4.5.3.2.1-3),
+// 10 minutes once the transaction starts, which covers the wait after the final "." (4.5.3.2.6).
+// Reads never renew it, so a server that dribbles its reply cannot hold the (sequential) queue worker.
 const (
 	clientDialTimeout    = 30 * time.Second
 	clientCommandTimeout = 5 * time.Minute
 	clientDataTimeout    = 10 * time.Minute
 )
 
-// timeoutConn renews the deadline on every Read and Write, so a slow but live peer never times out.
+// timeoutConn starts a fresh timer on every Write (one command or data buffer); Reads run against it.
 type timeoutConn struct {
 	net.Conn
 	d time.Duration
 }
 
-func (c *timeoutConn) Read(p []byte) (int, error) {
-	_ = c.Conn.SetReadDeadline(time.Now().Add(c.d))
-	return c.Conn.Read(p)
-}
-
 func (c *timeoutConn) Write(p []byte) (int, error) {
-	_ = c.Conn.SetWriteDeadline(time.Now().Add(c.d))
+	_ = c.Conn.SetDeadline(time.Now().Add(c.d))
 	return c.Conn.Write(p)
 }
 
@@ -48,6 +47,66 @@ type ClientOptions struct {
 	User                  string
 	Password              string
 	HeloName              string // EHLO name; should match the sending IP's PTR (default "localhost")
+	// AllowPlainAuth lets User/Password go out without TLS; only for a relay on the loopback interface
+	// (see IsLoopbackAddr), where nothing can sniff or strip STARTTLS.
+	AllowPlainAuth bool
+	// RejectPrivate refuses to connect to loopback, private, link-local or unspecified addresses (MX
+	// delivery: a remote domain must not make us talk to our own network).
+	RejectPrivate bool
+}
+
+var (
+	// errStartTLSMissing: STARTTLS was configured for the relay but not offered, the sign of a
+	// downgrade (STARTTLS stripping); carrying on would send the session, and maybe AUTH, in clear.
+	errStartTLSMissing = errors.New("smtp client: STARTTLS is required for this relay but the server does not offer it")
+	// errPlainAuth: credentials would travel in clear (RFC 4954 4 / 14).
+	errPlainAuth = errors.New("smtp client: refusing to send AUTH credentials without TLS")
+)
+
+// relaySecurity checks, before AUTH, what the relay policy needs from the session so far: offered
+// caps are those of the first EHLO.
+func relaySecurity(opts ClientOptions, preTLSCaps clientCaps, conn net.Conn) error {
+	if opts.STARTTLS && !preTLSCaps.StartTLS {
+		return errStartTLSMissing
+	}
+	if opts.User == "" || opts.Password == "" || opts.AllowPlainAuth {
+		return nil
+	}
+	if _, ok := conn.(*tls.Conn); !ok {
+		return errPlainAuth
+	}
+	return nil
+}
+
+// errPrivateAddr: the target resolved to an address of our own network (see ClientOptions.RejectPrivate).
+var errPrivateAddr = errors.New("smtp client: refusing to connect to a loopback, private or link-local address")
+
+// rejectPrivateAddr runs at connect time, after DNS, so a hostname that resolves (or rebinds) to an
+// internal address is caught too.
+func rejectPrivateAddr(_, address string, _ syscall.RawConn) error {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return err
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+		ip.IsUnspecified() || ip.IsMulticast() || ip.IsInterfaceLocalMulticast() {
+		return fmt.Errorf("%w: %s", errPrivateAddr, host)
+	}
+	return nil
+}
+
+// IsLoopbackAddr reports whether host:port (or host) names the loopback interface.
+func IsLoopbackAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // Send submits one message to addr (relay or MX host:port).
@@ -70,6 +129,9 @@ func SendReply(ctx context.Context, addr, mailFrom, rcptTo string, data []byte, 
 	}
 
 	dialer := net.Dialer{Timeout: clientDialTimeout}
+	if opts.RejectPrivate {
+		dialer.Control = rejectPrivateAddr
+	}
 	raw, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return "", fmt.Errorf("smtp client dial: %w", err)
@@ -77,6 +139,7 @@ func SendReply(ctx context.Context, addr, mailFrom, rcptTo string, data []byte, 
 	defer raw.Close()
 	defer context.AfterFunc(ctx, func() { _ = raw.Close() })() // shutdown must not wait for the timeouts
 	tc := &timeoutConn{Conn: raw, d: clientCommandTimeout}
+	_ = raw.SetDeadline(time.Now().Add(clientCommandTimeout)) // the 220 greeting (4.5.3.2.1)
 	var conn net.Conn = tc
 
 	r := bufio.NewReader(conn)
@@ -91,6 +154,7 @@ func SendReply(ctx context.Context, addr, mailFrom, rcptTo string, data []byte, 
 	if err != nil {
 		return "", err
 	}
+	preTLSCaps := caps
 	if wantSTARTTLS(opts) && caps.StartTLS {
 		conn, err = startTLS(conn, r, host, opts.TLSInsecureSkipVerify)
 		if err != nil {
@@ -106,6 +170,9 @@ func SendReply(ctx context.Context, addr, mailFrom, rcptTo string, data []byte, 
 		}
 	} else if opts.MTASTSRequireTLS {
 		return "", &DeliveryError{Err: fmt.Errorf("mta-sts: STARTTLS required but not advertised"), Permanent: true}
+	}
+	if err := relaySecurity(opts, preTLSCaps, conn); err != nil {
+		return "", err
 	}
 	if opts.User != "" && opts.Password != "" {
 		if err := authPlain(conn, r, caps, opts.User, opts.Password); err != nil {

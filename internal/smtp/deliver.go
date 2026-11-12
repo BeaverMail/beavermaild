@@ -75,6 +75,7 @@ func mxOptionsForPolicy(base ClientOptions, policy *mtasts.Policy) ClientOptions
 		OpportunisticSTARTTLS: true,
 		TLSInsecureSkipVerify: base.TLSInsecureSkipVerify,
 		HeloName:              base.HeloName,
+		RejectPrivate:         base.RejectPrivate,
 	}
 	if policy != nil && policy.Enforce() {
 		opts.MTASTSRequireTLS = true
@@ -89,11 +90,13 @@ func deliverMX(ctx context.Context, hosts []string, mailFrom, rcptTo string, dat
 		mxOpts.OpportunisticSTARTTLS = true
 	}
 	var last error
+	allPrivate := true
 	for _, host := range hosts {
 		reply, err := SendReply(ctx, host, mailFrom, rcptTo, data, mxOpts)
 		if err == nil {
 			return host + ": " + reply, nil
 		}
+		allPrivate = allPrivate && errors.Is(err, errPrivateAddr)
 		if deliveryPermanent(err) {
 			return "", err
 		}
@@ -102,6 +105,10 @@ func deliverMX(ctx context.Context, hosts []string, mailFrom, rcptTo string, dat
 			continue
 		}
 		return "", err
+	}
+	if last != nil && allPrivate {
+		// Every MX is on our own network: retrying will not change the DNS answer we refuse.
+		return "", &DeliveryError{Err: last, Permanent: true}
 	}
 	if last != nil {
 		return "", last

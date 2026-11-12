@@ -4,6 +4,7 @@ package smtp
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -199,6 +200,7 @@ func probeConnect(ctx context.Context, addr string, opts ClientOptions) (steps [
 	steps = append(steps, ProbeStep{Name: "ehlo", OK: true})
 
 	conn = raw
+	preTLSCaps := caps
 	if wantSTARTTLS(opts) && caps.StartTLS {
 		conn, err = startTLS(conn, r, host, opts.TLSInsecureSkipVerify)
 		if err != nil {
@@ -224,6 +226,15 @@ func probeConnect(ctx context.Context, addr string, opts ClientOptions) (steps [
 		steps = append(steps, ProbeStep{Name: "starttls", OK: true, Detail: "not offered"})
 	}
 
+	if err := relaySecurity(opts, preTLSCaps, conn); err != nil {
+		_ = conn.Close()
+		name := "auth"
+		if errors.Is(err, errStartTLSMissing) {
+			name = "starttls"
+		}
+		steps = append(steps, ProbeStep{Name: name, OK: false, Error: err.Error()})
+		return steps, nil, nil, caps, false
+	}
 	if opts.User != "" && opts.Password != "" {
 		if err := authPlain(conn, r, caps, opts.User, opts.Password); err != nil {
 			_ = conn.Close()

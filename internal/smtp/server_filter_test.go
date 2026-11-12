@@ -520,3 +520,45 @@ func TestSMTPLoopDetectionAndReturnPath(t *testing.T) {
 		t.Fatalf("stored message:\n%s", got)
 	}
 }
+
+// A recipient the rcpt-phase filter refuses must not stay in the transaction: the client got a 5xx,
+// so the message must not reach that mailbox anyway.
+func TestSMTPFilterRejectAtRcptDropsRecipient(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	_, inbox, dir := openSMTPTestStore(t, ctx)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := smtp.NewServer(log.New("error"), ln.Addr().String(), dir, inbox, nil, "", "", smtp.Options{
+		Filter: phaseFilter{phase: smtp.FilterPhaseRcpt},
+	})
+	sctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() { _ = srv.ServeListener(sctx, ln) }()
+	time.Sleep(20 * time.Millisecond)
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	read := bufio.NewReader(conn)
+	expect(t, read, "220")
+	send(t, conn, "HELO test")
+	expect(t, read, "250")
+	send(t, conn, "MAIL FROM:<sender@example.com>")
+	expect(t, read, "250")
+	send(t, conn, "RCPT TO:<alice@localhost>")
+	expectPrefix(t, read, "550")
+	send(t, conn, "DATA")
+	expect(t, read, "503")
+
+	acc, _, err := dir.ResolveEmail(ctx, "alice@localhost")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msgs, err := inbox.List(ctx, acc.ID, mail.InboxMailboxID); err != nil || len(msgs) != 0 {
+		t.Fatalf("inbox %d, %v", len(msgs), err)
+	}
+}

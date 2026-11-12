@@ -2,12 +2,16 @@ package smtp
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"net"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/BeaverMail/beavermaild/internal/directory"
+	"github.com/BeaverMail/beavermaild/internal/storage/sqlite"
 )
 
 // RFC 5321 5.1 and RFC 7505 on canned DNS answers.
@@ -65,25 +69,81 @@ func TestReceivedFieldIPv6(t *testing.T) {
 	}
 }
 
-// RFC 5321 4.5.3.2: the timeout is per operation, so a slow but steady peer never trips it.
-func TestTimeoutConnPerOperation(t *testing.T) {
+// RFC 5321 4.5.3.2: the timer runs per command. A reply that arrives in time passes; a server that
+// dribbles a reply byte by byte cannot stretch it (the queue worker is sequential), and the next
+// command gets a fresh timer.
+func TestTimeoutConnPerCommand(t *testing.T) {
 	t.Parallel()
 	server, client := net.Pipe()
 	defer server.Close()
-	tc := &timeoutConn{Conn: client, d: 100 * time.Millisecond}
+	tc := &timeoutConn{Conn: client, d: 200 * time.Millisecond}
 	go func() {
-		for range 5 { // 5 x 60ms: well past one timeout in total, never past it between reads
-			time.Sleep(60 * time.Millisecond)
-			_, _ = server.Write([]byte("x"))
+		buf := make([]byte, 64)
+		_, _ = server.Read(buf) // command 1
+		_, _ = server.Write([]byte("250 ok\r\n"))
+		_, _ = server.Read(buf) // command 2: dribble the reply, 80ms a byte
+		for _, b := range []byte("250 slow reply\r\n") {
+			time.Sleep(80 * time.Millisecond)
+			if _, err := server.Write([]byte{b}); err != nil {
+				return
+			}
 		}
 	}()
-	buf := make([]byte, 1)
-	for i := range 5 {
-		if _, err := tc.Read(buf); err != nil {
-			t.Fatalf("read %d: %v", i, err)
-		}
+	r := bufio.NewReader(tc)
+	if _, err := tc.Write([]byte("NOOP\r\n")); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := tc.Read(buf); err == nil {
-		t.Fatal("idle peer: want a timeout")
+	if line, err := r.ReadString('\n'); err != nil || line != "250 ok\r\n" {
+		t.Fatalf("command 1: %q, %v", line, err)
+	}
+	if _, err := tc.Write([]byte("NOOP\r\n")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.ReadString('\n'); err == nil {
+		t.Fatal("dribbled reply: want a timeout")
+	}
+}
+
+// The postmaster fallback scans every account: one session looks it up once per tenant, however many
+// RCPT TO:<postmaster@...> it sends (DoS guard, see .specs/security.md).
+func TestPostmasterLookupCachedPerSession(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, "file:"+t.TempDir()+"/store.sqlite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	dir := directory.NewLocal(store)
+	admin, err := directory.SeedDev(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &session{dir: dir}
+	first, err := s.resolvePostmaster(ctx, 0)
+	if err != nil || len(first) != 1 || first[0].ID != admin.ID {
+		t.Fatalf("first lookup %+v, %v", first, err)
+	}
+	if err := dir.SetAccountRole(ctx, admin.ID, directory.RoleUser); err != nil {
+		t.Fatal(err)
+	}
+	// A fresh lookup would now find no admin; the session must answer from its cache.
+	if again, err := s.resolvePostmaster(ctx, 0); err != nil || len(again) != 1 {
+		t.Fatalf("second lookup scanned again: %+v, %v", again, err)
+	}
+	if _, err := dir.ResolvePostmaster(ctx, 0); !errors.Is(err, directory.ErrNotFound) {
+		t.Fatalf("directory still has an admin: %v", err)
+	}
+}
+
+// The queue gets the authenticated sender as DKIM identity, and nothing for an unauthenticated session.
+func TestBuildEnvelopeSignAs(t *testing.T) {
+	t.Parallel()
+	s := &session{principal: directory.Principal{AccountID: 7, LocalPart: "alice", DomainName: "example.net"}}
+	if got := s.buildEnvelopeDSN(nil).SignAs; got != "alice@example.net" {
+		t.Fatalf("SignAs %q", got)
+	}
+	if got := (&session{}).buildEnvelopeDSN(nil).SignAs; got != "" {
+		t.Fatalf("unauthenticated SignAs %q", got)
 	}
 }

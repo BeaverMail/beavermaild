@@ -21,8 +21,9 @@ var (
 	ErrMessageTooLarge = errors.New("smtp: message too large")
 	// ErrLineTooLong is returned when a DATA line exceeds MaxLineBytes.
 	ErrLineTooLong = errors.New("smtp: data line too long")
-	// ErrBareLF is returned when a DATA line ends with bare LF (smuggling class).
-	ErrBareLF = errors.New("smtp: bare lf in data")
+	// ErrBareLF is returned when a DATA line holds a bare LF or bare CR (SMTP smuggling,
+	// CVE-2023-51764 class): the end of the message can no longer be trusted.
+	ErrBareLF = errors.New("smtp: bare CR or LF in data")
 )
 
 // DataLimits caps inbound SMTP DATA size and line length.
@@ -66,6 +67,9 @@ func readDATA(r *bufio.Reader, limits DataLimits, beforeRead ...func()) ([]byte,
 			return nil, ErrBareLF
 		}
 		content := line[:len(line)-2]
+		if bytes.IndexByte(content, '\r') >= 0 {
+			return nil, ErrBareLF
+		}
 		if bytes.Equal(content, []byte(".")) {
 			break
 		}
@@ -101,8 +105,11 @@ func readLineBounded(r *bufio.Reader, max int) (line []byte, tooLong bool, err e
 	}
 }
 
-// drainDATA discards the remainder of a failed DATA phase until the end marker.
-func drainDATA(r *bufio.Reader, beforeRead ...func()) {
+// drainDATA discards the remainder of a failed DATA phase until the end marker. It reports false when
+// it meets a bare CR or LF: the framing is then untrustworthy and the caller must hang up rather than
+// resume reading commands after a "." the sender may not have meant (SMTP smuggling).
+func drainDATA(r *bufio.Reader, limits DataLimits, beforeRead ...func()) (clean bool) {
+	limits = limits.withDefaults()
 	var refresh func()
 	if len(beforeRead) > 0 {
 		refresh = beforeRead[0]
@@ -111,12 +118,15 @@ func drainDATA(r *bufio.Reader, beforeRead ...func()) {
 		if refresh != nil {
 			refresh()
 		}
-		line, _, err := readLineBounded(r, 3)
+		line, tooLong, err := readLineBounded(r, limits.MaxLineBytes+2)
 		if err != nil {
-			return
+			return false
+		}
+		if tooLong || len(line) < 2 || line[len(line)-2] != '\r' || bytes.IndexByte(line[:len(line)-2], '\r') >= 0 {
+			return false
 		}
 		if bytes.Equal(line, []byte(".\r\n")) {
-			return
+			return true
 		}
 	}
 }
@@ -160,7 +170,7 @@ func dataErrorResponse(err error) string {
 	case errors.Is(err, ErrLineTooLong):
 		return "552 5.3.4 Line length exceeds maximum permitted"
 	case errors.Is(err, ErrBareLF):
-		return "554 5.6.0 Message content not accepted"
+		return replyBareCRLF
 	default:
 		return fmt.Sprintf("554 5.6.0 %s", err.Error())
 	}

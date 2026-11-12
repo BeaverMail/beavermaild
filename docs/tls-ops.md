@@ -127,6 +127,16 @@ Env: `BEAVER_SMTP_OUTBOUND_TLS_INSECURE=1`.
 
 A failed STARTTLS handshake fails the delivery attempt (no silent plaintext fallback after a failed upgrade).
 
+Direct MX delivery never connects to loopback, private (RFC 1918, `fc00::/7`), link-local or unspecified
+addresses: a remote domain whose MX points there fails permanently. For a LAN where other domains' MX
+really are private hosts, allow it:
+
+```json
+"smtp": {
+  "outbound_allow_private": true
+}
+```
+
 ### Relay
 
 ```json
@@ -139,6 +149,10 @@ A failed STARTTLS handshake fails the delivery attempt (no silent plaintext fall
 ```
 
 Env: `BEAVER_SMTP_RELAY_STARTTLS=1`.
+
+With `relay_starttls` set, a relay that does not offer STARTTLS is an error (no silent plaintext session:
+that is what a STARTTLS-stripping attacker would cause). `relay_user`/`relay_password` are sent only over
+TLS, except to a relay on the loopback interface (`127.0.0.1`, `::1`, `localhost`).
 
 ### MTA-STS (RFC 8461)
 

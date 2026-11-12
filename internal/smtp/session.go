@@ -66,11 +66,18 @@ type session struct {
 
 	mailFrom  string // "" is the null reverse-path (bounces); inTxn tells whether MAIL was accepted
 	inTxn     bool
+	txnRcpts  int // RCPT commands accepted in this transaction
 	mailRet   mail.RetMode
 	mailEnvid string
 	mailBody  string
 	mailUTF8  bool
 	rcpt      []rcptTarget
+
+	// Session-wide abuse counters (RFC 5321 7.8).
+	goodRcpts, badRcpts, unknownCmds int
+	// postmasters caches ResolvePostmaster per tenant: it scans every account, and a client could
+	// otherwise repeat RCPT TO:<postmaster@...> up to MaxRecipients times per transaction.
+	postmasters map[uint32][]storage.Account
 
 	bdatBuf  []byte
 	bdatUsed bool
@@ -160,6 +167,9 @@ func (s *session) run(ctx context.Context) error {
 			stop, blockMail, err := s.dispatch(ctx, c.cmd, c.arg, mailBlocked)
 			if blockMail {
 				mailBlocked = true
+			}
+			if errors.Is(err, errCloseSession) {
+				return nil
 			}
 			if err != nil {
 				return err
@@ -261,6 +271,9 @@ func (s *session) dispatch(ctx context.Context, cmd, arg string, mailBlocked boo
 		return true, false, nil
 	default:
 		// RFC 5321 4.2.4: 500 for an unknown command, 502 only for known but unimplemented ones.
+		if s.unknownCmds++; s.unknownCmds >= MaxUnknownCommands {
+			return true, false, s.writef(replyTooManyUnknown)
+		}
 		return false, false, s.writef(replyUnrecognized)
 	}
 }
@@ -352,6 +365,9 @@ func (s *session) handleRcpt(ctx context.Context, arg string, mailBlocked bool) 
 	if !s.inTxn {
 		return s.writef(replyBadSequence)
 	}
+	if s.txnRcpts >= MaxRecipients {
+		return s.writef(replyTooManyRcpts) // RFC 5321 4.5.3.1.10
+	}
 	// RFC 5321 4.5.1: "RCPT TO:<Postmaster>" with no domain MUST be accepted.
 	if strings.EqualFold(addr, directory.PostmasterLocalPart) && !s.submission {
 		return s.acceptPostmaster(ctx, rcptParams)
@@ -380,21 +396,11 @@ func (s *session) handleRcpt(ctx context.Context, arg string, mailBlocked bool) 
 			} else if !ok {
 				return s.writef("452 4.2.2 Try again later")
 			}
-			s.rcpt = append(s.rcpt, rcptTarget{
+			return s.addRcpt(ctx, normalizeEnvelopeAddress(addr), rcptTarget{
 				address: normalizeEnvelopeAddress(addr),
 				notify:  rcptParams.Notify,
 				orcpt:   rcptParams.Orcpt,
 			})
-			if out, err := s.runFilter(ctx, FilterPhaseRcpt, []string{normalizeEnvelopeAddress(addr)}, ""); err != nil {
-				return err
-			} else if out.Action != FilterActionAccept {
-				reply, _ := s.replyFilterAction(out.Action)
-				if reply == "" {
-					reply = replyFilterReject
-				}
-				return s.writef(reply)
-			}
-			return s.writef(replyOK)
 		}
 		return err
 	}
@@ -409,10 +415,10 @@ func (s *session) handleRcpt(ctx context.Context, arg string, mailBlocked bool) 
 	if target.report == "" {
 		accounts, err := s.resolveLocalRcpt(ctx, addr, domName)
 		if errors.Is(err, directory.ErrNotFound) && strings.EqualFold(localPart(addr), directory.PostmasterLocalPart) {
-			accounts, err = s.dir.ResolvePostmaster(ctx, dom.TenantID)
+			accounts, err = s.resolvePostmaster(ctx, dom.TenantID)
 		}
 		if errors.Is(err, directory.ErrNotFound) {
-			return s.writef(replyUserUnknown)
+			return s.unknownRcpt()
 		}
 		if err != nil {
 			return err
@@ -434,22 +440,12 @@ func (s *session) handleRcpt(ctx context.Context, arg string, mailBlocked bool) 
 	} else if !ok {
 		return s.writef("452 4.2.2 Try again later")
 	}
-	s.rcpt = append(s.rcpt, targets...)
-	if out, err := s.runFilter(ctx, FilterPhaseRcpt, []string{normalizeEnvelopeAddress(addr)}, ""); err != nil {
-		return err
-	} else if out.Action != FilterActionAccept {
-		reply, _ := s.replyFilterAction(out.Action)
-		if reply == "" {
-			reply = replyFilterReject
-		}
-		return s.writef(reply)
-	}
-	return s.writef(replyOK)
+	return s.addRcpt(ctx, normalizeEnvelopeAddress(addr), targets...)
 }
 
 // acceptPostmaster takes the bare "Postmaster" recipient for the instance admins (RFC 5321 4.5.1).
 func (s *session) acceptPostmaster(ctx context.Context, params RcptParams) error {
-	accounts, err := s.dir.ResolvePostmaster(ctx, 0)
+	accounts, err := s.resolvePostmaster(ctx, 0)
 	if errors.Is(err, directory.ErrNotFound) {
 		return s.writef(replyUserUnknown)
 	}
@@ -462,20 +458,63 @@ func (s *session) acceptPostmaster(ctx context.Context, params RcptParams) error
 	} else if !ok {
 		return s.writef("452 4.2.2 Try again later")
 	}
+	targets := make([]rcptTarget, 0, len(accounts))
 	for _, acc := range accounts {
-		s.rcpt = append(s.rcpt, rcptTarget{address: addr, notify: params.Notify, orcpt: params.Orcpt, accountID: acc.ID})
+		targets = append(targets, rcptTarget{address: addr, notify: params.Notify, orcpt: params.Orcpt, accountID: acc.ID})
 	}
+	return s.addRcpt(ctx, addr, targets...)
+}
+
+// resolvePostmaster is directory.ResolvePostmaster, looked up once per tenant and session.
+func (s *session) resolvePostmaster(ctx context.Context, tenantID uint32) ([]storage.Account, error) {
+	if accounts, ok := s.postmasters[tenantID]; ok {
+		return accounts, nil
+	}
+	accounts, err := s.dir.ResolvePostmaster(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	if s.postmasters == nil {
+		s.postmasters = map[uint32][]storage.Account{}
+	}
+	s.postmasters[tenantID] = accounts
+	return accounts, nil
+}
+
+// addRcpt adds the recipient's targets to the transaction unless the rcpt-phase filter refuses it: a
+// refused recipient must not get the message anyway.
+func (s *session) addRcpt(ctx context.Context, addr string, targets ...rcptTarget) error {
+	n := len(s.rcpt)
+	s.rcpt = append(s.rcpt, targets...)
 	if out, err := s.runFilter(ctx, FilterPhaseRcpt, []string{addr}, ""); err != nil {
+		s.rcpt = s.rcpt[:n]
 		return err
 	} else if out.Action != FilterActionAccept {
+		s.rcpt = s.rcpt[:n]
 		reply, _ := s.replyFilterAction(out.Action)
 		if reply == "" {
 			reply = replyFilterReject
 		}
 		return s.writef(reply)
 	}
+	s.txnRcpts++
+	s.goodRcpts++
 	return s.writef(replyOK)
 }
+
+// unknownRcpt answers an unknown recipient; a session that mostly probes unknown addresses is closed
+// (RFC 5321 7.8, address harvesting).
+func (s *session) unknownRcpt() error {
+	s.badRcpts++
+	if s.badRcpts >= MaxBadRecipients && s.badRcpts > s.goodRcpts {
+		_ = s.writef(replyTooManyBadRcpts)
+		return errCloseSession
+	}
+	return s.writef(replyUserUnknown)
+}
+
+// errCloseSession ends the session after a final reply has been written.
+var errCloseSession = errors.New("smtp: session closed by server")
 
 // localPart returns the part of addr before the last "@".
 func localPart(addr string) string {
@@ -513,8 +552,18 @@ func (s *session) handleDATA(ctx context.Context) error {
 		return err
 	}
 	raw, err := readDATA(s.r, s.dataLimits, s.bumpReadDeadline)
+	// SMTP smuggling: past a bare CR/LF, or a line too long to check, the end of data is unknowable,
+	// and resuming after the next "." could run attacker text as commands. Answer and hang up, as
+	// Postfix does; the same when the drain of any other failed DATA meets broken framing.
+	if errors.Is(err, ErrBareLF) || errors.Is(err, ErrLineTooLong) {
+		_ = s.writef(dataErrorResponse(err))
+		return errCloseSession
+	}
 	if err != nil {
-		drainDATA(s.r, s.bumpReadDeadline)
+		if !drainDATA(s.r, s.dataLimits, s.bumpReadDeadline) {
+			_ = s.writef(dataErrorResponse(err))
+			return errCloseSession
+		}
 		if werr := s.writef(dataErrorResponse(err)); werr != nil {
 			return werr
 		}
@@ -720,6 +769,7 @@ func (s *session) cmdStartTLS() error {
 
 func (s *session) reset() {
 	s.inTxn = false
+	s.txnRcpts = 0
 	s.mailFrom = ""
 	s.mailRet = mail.RetNone
 	s.mailEnvid = ""
@@ -876,6 +926,9 @@ func (s *session) buildEnvelopeDSN(remotes []string) mail.EnvelopeDSN {
 		Ret:        s.mailRet,
 		Envid:      s.mailEnvid,
 		Body:       s.mailBody,
+	}
+	if s.principal.AccountID != 0 {
+		env.SignAs = s.principal.Email()
 	}
 	remoteSet := make(map[string]rcptTarget, len(remotes))
 	for _, t := range s.rcpt {
