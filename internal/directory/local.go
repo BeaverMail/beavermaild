@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/BeaverMail/beavermaild/internal/dnsname"
 	"github.com/BeaverMail/beavermaild/internal/storage"
 )
 
@@ -509,8 +510,10 @@ func splitEmail(email string) (local, domain string, err error) {
 	return email[:at], email[at+1:], nil
 }
 
+// normalizeDomain stores and looks up every domain as A-labels, so the U-label and A-label forms of
+// a hosted domain are the same domain (RFC 6531 3.2).
 func normalizeDomain(name string) string {
-	return strings.ToLower(strings.TrimSpace(name))
+	return dnsname.ToASCII(name)
 }
 
 func normalizeLocalPart(part string) string {

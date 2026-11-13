@@ -170,6 +170,22 @@
 - SMTP 8BITMIME (RFC 6152): one BODY per MAIL (501). A message with 8-bit content is no longer
   sent as is to a next hop without 8BITMIME: as in Exim, the delivery fails for good with status
   5.6.3 before MAIL (no 8-bit to 7-bit conversion).
+- Internationalized domains (RFC 6531 3.2, RFC 8616): every domain is converted to A-labels
+  (`xn--…`) before DNS lookups and comparisons. A From domain in Unicode or fullwidth form got
+  no SPF or DMARC result (the resolver answered "no such host" without querying), so a forged
+  From in that form passed a `p=reject` domain; mail to such domains failed with "no such host".
+  Hosted domains are stored as A-labels, and a recipient in either form finds them; domains
+  created before this change with a non-ASCII name must be created again.
+- Web UI: internationalized domains and addresses show in Unicode (`bücher.example`), with the
+  A-label form beside domain names; deleting a domain or mailbox accepts either form.
+- SMTPUTF8 (RFC 6531): MAIL with a UTF-8 address and no SMTPUTF8 gets 550 5.6.7 (was 553), and
+  the Received field says `with UTF8SMTP*`. The client sends SMTPUTF8 when the envelope or a
+  header field at any MIME level needs it, writes a Unicode domain with an ASCII local part as
+  A-labels, and fails with 5.6.7 before MAIL when the next server does not offer SMTPUTF8.
+- Internationalized DSN (RFC 6533): a `utf-8` ORCPT is accepted (UTF-8 only with SMTPUTF8,
+  escapes of control characters refused) and passed on in 7-bit form without SMTPUTF8; the
+  notification of an internationalized message uses message/global-delivery-status, utf-8
+  addresses and message/global or message/global-headers (base64).
   - SEARCH BODY and TEXT also match the decoded text of base64 and quoted-printable parts, and TEXT
     the decoded RFC 2047 header words (no charset conversion: UTF-8 and US-ASCII parts).
 

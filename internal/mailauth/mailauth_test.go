@@ -2,6 +2,7 @@ package mailauth_test
 
 import (
 	"context"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -53,5 +54,33 @@ func TestFinishEomARCNone(t *testing.T) {
 	}
 	if lookups != 0 {
 		t.Fatalf("unexpected %d ARC DNS lookups for a message without ARC", lookups)
+	}
+}
+
+// RFC 8616 / RFC 6531 3.2: a From domain in U-label (or fullwidth) form is the same domain as its
+// A-label and gets that domain's DMARC policy. Unconverted, the Go resolver answers "no such host"
+// without querying and a forged From passed as "none".
+func TestDMARCUnicodeFromDomain(t *testing.T) {
+	for _, from := range []string{"ceo@münchen.example", "ceo@ＭＵＮＣＨＥＮ.example", "ceo@ｅｘａｍｐｌｅ.com"} {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "m.eml")
+		if err := os.WriteFile(path, []byte("From: "+from+"\r\nSubject: hi\r\n\r\nbody\r\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		v := mailauth.New(mailauth.Config{
+			Enabled:      true,
+			DMARCEnabled: true,
+			LookupTXT: func(_ context.Context, name string) ([]string, error) {
+				switch name {
+				case "_dmarc.xn--mnchen-3ya.example", "_dmarc.munchen.example", "_dmarc.example.com":
+					return []string{"v=DMARC1; p=reject"}, nil
+				}
+				return nil, &net.DNSError{Err: "no such host", Name: name, IsNotFound: true}
+			},
+		})
+		state := v.FinishEom(context.Background(), path, "x@attacker.example", "helo.example", mailauth.SessionState{SPFMailFrom: "pass"})
+		if state.DMARC != "fail" || state.DMARCPolicy != "reject" {
+			t.Errorf("%s: dmarc=%q policy=%q, want fail/reject", from, state.DMARC, state.DMARCPolicy)
+		}
 	}
 }

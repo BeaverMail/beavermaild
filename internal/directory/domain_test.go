@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/BeaverMail/beavermaild/internal/directory"
@@ -238,5 +239,28 @@ func TestCreateDomainWithOptsDKIMAndStats(t *testing.T) {
 	}
 	if _, err := d.LookupDomainByMailHost(ctx, "mail.hosted.test"); !errors.Is(err, directory.ErrNotFound) {
 		t.Fatalf("old mail host still mapped: %v", err)
+	}
+}
+
+// RFC 6531 3.2: the U-label and A-label forms of a hosted domain are one domain, created in either
+// form and found in either form.
+func TestLookupDomainIDN(t *testing.T) {
+	t.Parallel()
+	d := openDir(t)
+	ctx := context.Background()
+	if _, _, err := d.EnsureDomain(ctx, directory.DefaultTenantID, "bücher.example"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := d.EnsureDomain(ctx, directory.DefaultTenantID, "xn--e1afmkfd.example"); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"bücher.example", "BÜCHER.example", "xn--bcher-kva.example", "пример.example"} {
+		got, err := d.LookupDomain(ctx, name)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if !strings.HasPrefix(got.Name, "xn--") {
+			t.Fatalf("%s: stored as %q", name, got.Name)
+		}
 	}
 }

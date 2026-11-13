@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/BeaverMail/beavermaild/internal/dnsname"
 )
 
 // Mode is the MTA-STS policy enforcement level.
@@ -120,7 +122,7 @@ func parseTXTRecord(records []string) (string, bool) {
 }
 
 func normalizeHost(host string) string {
-	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+	return dnsname.ToASCII(strings.TrimSuffix(strings.TrimSpace(host), "."))
 }
 
 // mxMatch implements RFC 8461 mx pattern (exact or *.suffix single label).

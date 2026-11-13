@@ -8,10 +8,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/BeaverMail/beavermaild/internal/mailauth/arc"
 	"github.com/emersion/go-msgauth/dkim"
 	"github.com/emersion/go-msgauth/dmarc"
 	spflib "github.com/wttw/spf"
+
+	"github.com/BeaverMail/beavermaild/internal/dnsname"
+	"github.com/BeaverMail/beavermaild/internal/mailauth/arc"
 )
 
 // Config controls which mail-auth checks run and DNS timeouts.
@@ -120,6 +122,7 @@ func (v *Verifier) verifyARC(ctx context.Context, bodyPath string) string {
 // arcLookupTXT binds the verifier DNS seam to the ARC lookup signature.
 func (v *Verifier) arcLookupTXT() arc.LookupTXT {
 	return func(reqCtx context.Context, name string) ([]string, error) {
+		name = dnsname.ToASCII(name)
 		if v.cfg.LookupTXT != nil {
 			return v.cfg.LookupTXT(reqCtx, name)
 		}
@@ -224,8 +227,8 @@ func dkimAligned(dkimResult, fromDomain, bodyPath string, mode dmarc.AlignmentMo
 }
 
 func domainsAlign(authDomain, fromDomain string, mode dmarc.AlignmentMode) bool {
-	authDomain = strings.ToLower(authDomain)
-	fromDomain = strings.ToLower(fromDomain)
+	authDomain = dnsname.ToASCII(authDomain)
+	fromDomain = dnsname.ToASCII(fromDomain)
 	if mode == dmarc.AlignmentStrict {
 		return authDomain == fromDomain
 	}
@@ -246,9 +249,9 @@ func domainFromAddress(addr string) string {
 	addr = strings.TrimSuffix(addr, ">")
 	i := strings.LastIndexByte(addr, '@')
 	if i < 0 {
-		return strings.ToLower(addr)
+		return dnsname.ToASCII(addr)
 	}
-	return strings.ToLower(addr[i+1:])
+	return dnsname.ToASCII(addr[i+1:])
 }
 
 func extractFromHeader(bodyPath string) string {
@@ -321,6 +324,7 @@ func (v *Verifier) lookupTXT(ctx context.Context) func(string) ([]string, error)
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
+		name = dnsname.ToASCII(name) // DKIM d= may carry U-labels (RFC 8616 4)
 		if v.cfg.LookupTXT != nil {
 			return v.cfg.LookupTXT(ctx, name)
 		}

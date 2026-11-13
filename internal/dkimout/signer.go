@@ -14,6 +14,8 @@ import (
 	"strings"
 
 	"github.com/emersion/go-msgauth/dkim"
+
+	"github.com/BeaverMail/beavermaild/internal/dnsname"
 )
 
 // Signer adds a DKIM-Signature when configured selector and key are present.
@@ -116,7 +118,7 @@ func domainFromAddress(addr string) (string, error) {
 	if at <= 0 || at == len(addr)-1 {
 		return "", fmt.Errorf("dkimout: invalid address %q", addr)
 	}
-	return addr[at+1:], nil
+	return dnsname.ToASCII(addr[at+1:]), nil
 }
 
 // hasSelectorSignature reports whether raw already contains s=<selector> in a DKIM-Signature header.

@@ -1,8 +1,9 @@
 package dkimout
 
 import (
-	"strings"
 	"sync"
+
+	"github.com/BeaverMail/beavermaild/internal/dnsname"
 )
 
 // Registry signs with a per-domain signer, falling back to a global signer.
@@ -22,7 +23,7 @@ func (r *Registry) Set(domain string, s *Signer) {
 	if r == nil {
 		return
 	}
-	domain = strings.ToLower(strings.TrimSpace(domain))
+	domain = dnsname.ToASCII(domain)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if s == nil {

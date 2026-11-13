@@ -9,6 +9,8 @@ import (
 	"net"
 	"sort"
 	"strings"
+
+	"github.com/BeaverMail/beavermaild/internal/dnsname"
 )
 
 const smtpPort = "25"
@@ -18,7 +20,7 @@ var errNullMX = errors.New("smtp: domain does not accept mail (null MX, RFC 7505
 
 // LookupHosts returns MX targets as host:port, lowest preference first (RFC 5321 5.1).
 func LookupHosts(ctx context.Context, domain string) ([]string, error) {
-	domain = strings.TrimSpace(strings.TrimSuffix(domain, "."))
+	domain = dnsname.ToASCII(strings.TrimSuffix(strings.TrimSpace(domain), "."))
 	if domain == "" {
 		return nil, fmt.Errorf("smtp: empty domain")
 	}
@@ -64,5 +66,5 @@ func DomainFromAddress(addr string) (string, error) {
 	if at <= 0 || at == len(addr)-1 {
 		return "", fmt.Errorf("smtp: invalid address %q", addr)
 	}
-	return addr[at+1:], nil
+	return dnsname.ToASCII(addr[at+1:]), nil // RFC 6531 3.2: lookups and comparisons use A-labels
 }

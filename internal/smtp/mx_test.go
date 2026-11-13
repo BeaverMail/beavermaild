@@ -18,6 +18,10 @@ func TestDomainFromAddress(t *testing.T) {
 	if _, err := smtp.DomainFromAddress("bad"); err == nil {
 		t.Fatal("expected error")
 	}
+	// RFC 6531 3.2: MX lookups and local domain lookups use the A-label.
+	if d, _ := smtp.DomainFromAddress("ivan@Пример.рф"); d != "xn--e1afmkfd.xn--p1ai" {
+		t.Fatalf("U-label domain %q", d)
+	}
 }
 
 // example.com publishes a null MX (RFC 7505): no host to try, a permanent failure.
