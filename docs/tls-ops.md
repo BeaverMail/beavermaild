@@ -21,6 +21,27 @@ STARTTLS and implicit TLS listeners are always available: without `tls.cert_file
 
 Certificate choice per connection (by SNI): per-domain custom PEM → issued ACME cert → `tls.cert_file` → self-signed.
 
+Server certificates must use an ECDSA key or an RSA key of at least 2048 bits and must not be signed
+with SHA-1 or MD5 (RFC 9325 4.5): a `tls.cert_file` that fails this stops startup, a per-domain PEM is
+refused when uploaded (`400`) and skipped with a warning if already on disk.
+
+### Protocol settings (RFC 9325)
+
+TLS 1.2 and 1.3 only. In TLS 1.2 every listener and every verified client connection (relay, MTA-STS,
+`smtp.tls_policy`, policy fetch) uses AEAD suites only: ECDHE with AES-GCM or ChaCha20-Poly1305; CBC
+suites are refused because crypto/tls lacks encrypt_then_mac. Opportunistic delivery to an MX keeps
+Go's defaults, CBC included, since the alternative is no delivery (RFC 9325 5.2).
+
+ALPN is strict where a protocol name is registered: IMAP listeners (143, 993) negotiate only `imap` and
+the HTTPS API only `http/1.1`, so a client offering another protocol is refused (ALPACA cross-protocol
+attacks; clients that send no ALPN are unaffected). SMTP has no registered ALPN name. The HTTPS API sends
+`Strict-Transport-Security: max-age=31536000`.
+
+Not done, by limits of Go's crypto/tls: revocation checking of the certificates our clients verify
+(no CRL or OCSP), and aborting a TLS 1.2 handshake with a server that lacks `renegotiation_info`. An
+unknown SNI name gets the fallback certificate instead of an `unrecognized_name` alert, as RFC 8461
+requires for SMTP.
+
 ## Certificates
 
 ### PEM files
@@ -167,6 +188,11 @@ stays queued (no plaintext retry after a failed handshake).
 - `verify`: as `encrypt`, and the certificate must be valid for the MX host name. The MX name comes
   from DNS, so without DNSSEC this guards against a passive attacker and a misdirected connection, not
   against forged MX records (MTA-STS or DANE do that).
+- `secure`: as `encrypt`, and the certificate must chain to a trusted root and be valid for the
+  recipient domain or one of its subdomains (Postfix `secure`): `partner.example` accepts a certificate
+  for `partner.example`, `mx1.partner.example` or `*.partner.example`. It does not trust the MX name
+  from DNS (RFC 9325 7.1), so a forged MX record cannot pass; an MX hosted under another domain
+  (e.g. a hosting provider) fails unless its certificate also names the recipient domain.
 
 Without STARTTLS, after a refused STARTTLS or a failed handshake, the MX is skipped and the message
 stays queued: it never goes in clear. With an MTA-STS `enforce` policy the stricter of the two applies.

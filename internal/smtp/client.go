@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"github.com/BeaverMail/beavermaild/internal/dnsname"
 	"github.com/BeaverMail/beavermaild/internal/mail"
 	"github.com/BeaverMail/beavermaild/internal/security"
+	"github.com/BeaverMail/beavermaild/internal/tlsload"
 )
 
 // RFC 5321 4.5.3.2: "a timer is set for each SMTP command and for each buffer of the data transfer",
@@ -45,9 +47,13 @@ type ClientOptions struct {
 	OpportunisticSTARTTLS bool // MX: upgrade when EHLO offers STARTTLS
 	TLSInsecureSkipVerify bool // skip server cert verification (dev/self-signed relay only)
 	RequireTLS            bool // STARTTLS mandatory, TLS 1.2+, never clear (MTA-STS enforce, smtp.tls_policy)
-	User                  string
-	Password              string
-	HeloName              string // EHLO name; should match the sending IP's PTR (default "localhost")
+	// VerifyDomain (smtp.tls_policy "secure") requires a certificate chaining to a trusted root and
+	// valid for this domain or a subdomain of it, whatever TLSInsecureSkipVerify says.
+	VerifyDomain string
+	rootCAs      *x509.CertPool // tests: roots for VerifyDomain (nil = system)
+	User         string
+	Password     string
+	HeloName     string // EHLO name; should match the sending IP's PTR (default "localhost")
 	// AllowPlainAuth lets User/Password go out without TLS; only for a relay on the loopback interface
 	// (see IsLoopbackAddr), where nothing can sniff or strip STARTTLS.
 	AllowPlainAuth bool
@@ -343,11 +349,22 @@ func startTLS(conn net.Conn, r *bufio.Reader, host string, opts ClientOptions) (
 	if err := cmd(conn, r, "STARTTLS", 220); err != nil {
 		return nil, err
 	}
-	tlsConn := tls.Client(conn, &tls.Config{
+	cfg := &tls.Config{
 		ServerName:         host,
 		MinVersion:         tls.VersionTLS12,
 		InsecureSkipVerify: opts.TLSInsecureSkipVerify,
-	})
+	}
+	// RFC 9325 4.2: AEAD suites only, except opportunistic TLS to an MX, where a CBC suite still beats
+	// no delivery (RFC 9325 5.2).
+	if !opts.OpportunisticSTARTTLS || opts.RequireTLS {
+		cfg.CipherSuites = tlsload.AEADSuites
+	}
+	if opts.VerifyDomain != "" {
+		cfg.VerifyConnection = func(cs tls.ConnectionState) error {
+			return verifyForDomain(cs, opts.VerifyDomain, opts.rootCAs)
+		}
+	}
+	tlsConn := tls.Client(conn, cfg)
 	if err := tlsConn.Handshake(); err != nil {
 		return nil, fmt.Errorf("smtp client starttls: %w", err)
 	}
@@ -483,4 +500,30 @@ func asciiDomain(addr string) string {
 		return addr
 	}
 	return addr[:at+1] + dnsname.ToASCII(addr[at+1:])
+}
+
+// verifyForDomain checks the chain against the roots and that the leaf names domain or a subdomain of
+// it (Postfix "secure" with nexthop:dot-nexthop): the reference identity is the recipient domain, not
+// the MX name found in DNS (RFC 9325 7.1).
+func verifyForDomain(cs tls.ConnectionState, domain string, roots *x509.CertPool) error {
+	if len(cs.PeerCertificates) == 0 {
+		return errors.New("smtp client: no server certificate")
+	}
+	leaf := cs.PeerCertificates[0]
+	inter := x509.NewCertPool()
+	for _, c := range cs.PeerCertificates[1:] {
+		inter.AddCert(c)
+	}
+	if _, err := leaf.Verify(x509.VerifyOptions{Roots: roots, Intermediates: inter}); err != nil {
+		return fmt.Errorf("smtp client: certificate: %w", err)
+	}
+	if leaf.VerifyHostname(domain) == nil {
+		return nil
+	}
+	for _, name := range leaf.DNSNames {
+		if strings.HasSuffix(strings.ToLower(strings.TrimSuffix(name, ".")), "."+domain) {
+			return nil
+		}
+	}
+	return fmt.Errorf("smtp client: certificate not valid for %s or its subdomains", domain)
 }

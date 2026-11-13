@@ -152,10 +152,20 @@ func New(opts Options) (*Server, error) {
 }
 
 func (s *Server) handler() http.Handler {
-	if s.domainTLS != nil {
-		return s.domainTLS.HTTPHandler(s.mux)
+	var h http.Handler = s.mux
+	if s.useTLS {
+		// RFC 9325 3.2: HSTS tells browsers to use only TLS here. A browser ignores it on a
+		// certificate it does not trust (RFC 6797 8.1), so the self-signed fallback is safe.
+		mux := s.mux
+		h = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Strict-Transport-Security", "max-age=31536000")
+			mux.ServeHTTP(w, r)
+		})
 	}
-	return s.mux
+	if s.domainTLS != nil {
+		return s.domainTLS.HTTPHandler(h)
+	}
+	return h
 }
 
 // Serve binds listen and serves until ctx is canceled.

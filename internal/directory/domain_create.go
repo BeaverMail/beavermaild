@@ -8,6 +8,7 @@ import (
 
 	"github.com/BeaverMail/beavermaild/internal/dkimout"
 	"github.com/BeaverMail/beavermaild/internal/storage"
+	"github.com/BeaverMail/beavermaild/internal/tlsload"
 )
 
 // DomainCreateOpts holds optional hosting settings when registering a domain.
@@ -81,6 +82,13 @@ func (d *Local) applyDomainOpts(ctx context.Context, dom *storage.Domain, opts D
 	mailHost := normalizeDomain(opts.MailHostname)
 	if mode != storage.DomainSSLNone && mailHost == "" {
 		return fmt.Errorf("directory: mail_hostname required when ssl_mode is %s", mode)
+	}
+	// Before anything is written: a pair that does not parse, or a key or signature RFC 9325 4.5
+	// forbids, used to be stored and then skipped in silence at load.
+	if mode == storage.DomainSSLCustom && strings.TrimSpace(opts.CertPEM) != "" && strings.TrimSpace(opts.KeyPEM) != "" {
+		if err := tlsload.CheckKeyPair([]byte(opts.CertPEM), []byte(opts.KeyPEM)); err != nil {
+			return fmt.Errorf("directory: custom certificate: %w", err)
+		}
 	}
 	if update {
 		dom.CatchAllLocal = normalizeLocalPart(opts.CatchAllLocal)

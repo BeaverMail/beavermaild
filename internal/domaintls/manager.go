@@ -150,7 +150,11 @@ func (m *Manager) Reload(ctx context.Context) error {
 			continue
 		}
 		cert, err := tls.LoadX509KeyPair(directory.DomainTLSCertPath(m.dataDir, dom.ID), directory.DomainTLSKeyPath(m.dataDir, dom.ID))
+		if err == nil {
+			err = tlsload.CheckServerCert(&cert)
+		}
 		if err != nil {
+			m.log.Warn("domain certificate not used", "domain", dom.Name, "err", err)
 			continue
 		}
 		next[host] = &cert
@@ -241,6 +245,7 @@ func (m *Manager) TLSConfig() *tls.Config {
 	}
 	cfg := &tls.Config{
 		MinVersion:     m.minVersion,
+		CipherSuites:   tlsload.AEADSuites,
 		GetCertificate: m.getCertificate,
 	}
 	// acme-tls/1 is offered only to ACME validators: listing it for everyone would

@@ -3,6 +3,7 @@ package mtasts
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/BeaverMail/beavermaild/internal/security"
+	"github.com/BeaverMail/beavermaild/internal/tlsload"
 )
 
 const (
@@ -209,8 +211,9 @@ func policyClient(allowPrivate bool) *http.Client {
 		dialer.Control = security.RejectInternalDial
 	}
 	return &http.Client{
-		Timeout:   fetchTimeout,
-		Transport: &http.Transport{DialContext: dialer.DialContext, Proxy: nil},
+		Timeout: fetchTimeout,
+		Transport: &http.Transport{DialContext: dialer.DialContext, Proxy: nil,
+			TLSClientConfig: &tls.Config{CipherSuites: tlsload.AEADSuites}}, // RFC 9325 4.2
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse // the 3xx is then rejected as a non-200 status
 		},

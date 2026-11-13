@@ -571,9 +571,9 @@ func (c *Config) validateSMTPTLS() error {
 			return fmt.Errorf("config: smtp.tls_policy: empty domain")
 		}
 		switch level {
-		case "encrypt", "verify":
+		case "encrypt", "verify", "secure":
 		default:
-			return fmt.Errorf("config: smtp.tls_policy %q: level must be encrypt or verify, not %q", domain, level)
+			return fmt.Errorf("config: smtp.tls_policy %q: level must be encrypt, verify or secure, not %q", domain, level)
 		}
 		policy[d] = level
 	}

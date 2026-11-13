@@ -224,7 +224,7 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 			Dir:          dir,
 			Log:          log,
 			AuthKey:      cfg.Secrets.AuthKey,
-			Certs:        certs,
+			Certs:        certs.WithALPN("http/1.1"), // RFC 9325 3.8: strict ALPN against ALPACA
 			AuthGate:     authGate,
 			Blobs:        blobs,
 			Queue:        queue,
@@ -276,7 +276,7 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 			RequireSTARTTLSFrom: requireTLSFrom,
 		}),
 		imap: imap.NewServer(log, cfg.IMAPListen(), dir, inbox, imap.Options{
-			Certs:          certs,
+			Certs:          certs.WithALPN("imap"), // RFC 9325 3.8; SMTP has no registered ALPN id
 			TLSListen:      tlsOpts.imapTLSListen,
 			TLSRequired:    tlsOpts.required,
 			AuthGate:       authGate,

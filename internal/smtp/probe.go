@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/BeaverMail/beavermaild/internal/dnsname"
 	"net"
 	"strings"
 	"time"
@@ -119,7 +120,7 @@ func probeMX(ctx context.Context, cfg RemoteConfig, to string) ProbeResult {
 	res.Steps = append(res.Steps, ProbeStep{Name: "mx_lookup", OK: true, Detail: strings.Join(hosts, ", ")})
 
 	// Connectivity only — skip MTA-STS HTTPS/DNS (can hang; not needed for a probe).
-	opts := mxOptionsForPolicy(ClientOptions{}, nil, cfg.tlsLevel(domain))
+	opts := mxOptionsForPolicy(ClientOptions{}, nil, cfg.tlsLevel(domain), dnsname.ToASCII(domain))
 	var lastFail ProbeResult
 	for _, host := range hosts {
 		if err := ctx.Err(); err != nil {

@@ -147,7 +147,7 @@ deleted its `external_id` can be used again.
 | `tenant_id` | number | POST only; admin and provisioner may choose (default `1`), tenant_admin is forced to its own |
 | `mail_hostname` | string | **required** on POST (e.g. `mail.example.com`); on PATCH it cannot be set to empty |
 | `ssl_mode` | string | `none` (default), `acme`, `custom`. `acme` issues for `mail_hostname` via HTTP-01 or TLS-ALPN-01, so it needs ports 80/443 or a proxy that forwards the challenge (see [tls-ops.md](tls-ops.md#acme)); `custom` takes PEMs you renew yourself |
-| `cert_pem`, `key_pem` | string | required with `custom` on create; on PATCH omit them to keep the stored cert |
+| `cert_pem`, `key_pem` | string | required with `custom` on create; on PATCH omit them to keep the stored cert. Checked on upload: a pair that does not parse, an RSA key under 2048 bits or a SHA-1/MD5 signature gets `400` (RFC 9325 4.5) |
 | `catch_all` | string | local part that receives mail for unknown addresses |
 | `dkim_enabled` | bool | generates a key (selector `beaver`) on first enable |
 | `antispam` | bool | |

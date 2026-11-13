@@ -18,7 +18,7 @@ type RemoteConfig struct {
 	RelayOptions ClientOptions
 	MXOptions    ClientOptions // direct MX delivery (EHLO name, private-address guard)
 	MTASTS       *mtasts.Resolver
-	// TLSPolicy maps a recipient domain (A-labels, lowercase) to TLSEncrypt or TLSVerify: the static
+	// TLSPolicy maps a recipient domain (A-labels, lowercase) to TLSEncrypt, TLSVerify or TLSSecure: the static
 	// per-destination TLS requirement of RFC 3207 6 (smtp.tls_policy).
 	TLSPolicy map[string]string
 }
@@ -27,6 +27,10 @@ type RemoteConfig struct {
 const (
 	TLSEncrypt = "encrypt" // STARTTLS mandatory, certificate not checked
 	TLSVerify  = "verify"  // STARTTLS mandatory, certificate valid for the MX host name
+	// TLSSecure: STARTTLS mandatory, certificate valid for the recipient domain or one of its
+	// subdomains (Postfix "secure", match nexthop:dot-nexthop). Unlike verify it does not trust the MX
+	// name, which comes from unauthenticated DNS (RFC 9325 7.1).
+	TLSSecure = "secure"
 )
 
 // tlsLevel returns the static TLS level for domain, "" when none is configured.
@@ -67,7 +71,7 @@ func DeliverRemote(ctx context.Context, cfg RemoteConfig, mailFrom, rcptTo strin
 	if err != nil {
 		return "", err
 	}
-	return deliverMX(ctx, hosts, mailFrom, rcptTo, data, mxOptionsForPolicy(cfg.MXOptions, policy, cfg.tlsLevel(domain)))
+	return deliverMX(ctx, hosts, mailFrom, rcptTo, data, mxOptionsForPolicy(cfg.MXOptions, policy, cfg.tlsLevel(domain), domain))
 }
 
 // relayOptionsForPolicy applies MTA-STS to a smart host: its domain is the Policy Domain (RFC 8461
@@ -116,9 +120,10 @@ func filterMXForMTASTS(hosts []string, policy *mtasts.Policy) ([]string, error) 
 // mxOptionsForPolicy: without an explicit policy TLS to the MX is opportunistic and unauthenticated
 // (RFC 7435 3: default authentication checks "must be disabled or configured to soft-fail"; MX
 // indirection precludes authentication anyway, RFC 7672 1.3). Explicit policies preempt it and the
-// strongest wins: the static level (RFC 3207 6) requires TLS, with a valid certificate for "verify";
-// MTA-STS enforce requires both (RFC 8461 4.2, 5).
-func mxOptionsForPolicy(base ClientOptions, policy *mtasts.Policy, level string) ClientOptions {
+// strongest wins: the static level (RFC 3207 6) requires TLS, with a certificate valid for the MX name
+// ("verify") or for the recipient domain ("secure"); MTA-STS enforce requires a certificate valid for
+// the MX name (RFC 8461 4.2, 5), checked as well when "secure" also applies.
+func mxOptionsForPolicy(base ClientOptions, policy *mtasts.Policy, level, domain string) ClientOptions {
 	opts := ClientOptions{
 		OpportunisticSTARTTLS: true,
 		TLSInsecureSkipVerify: true,
@@ -128,6 +133,9 @@ func mxOptionsForPolicy(base ClientOptions, policy *mtasts.Policy, level string)
 	if level != "" {
 		opts.RequireTLS = true
 		opts.TLSInsecureSkipVerify = level != TLSVerify
+	}
+	if level == TLSSecure {
+		opts.VerifyDomain = domain
 	}
 	if policy.Enforce() {
 		opts.RequireTLS = true

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- RFC 9325 (BCP 195): TLS 1.2 uses AEAD suites only on every listener and verified client connection
+  (CBC suites refused; opportunistic MX delivery keeps Go's defaults). Strict ALPN: IMAP listeners
+  accept only `imap`, the HTTPS API only `http/1.1` (ALPACA). The HTTPS API sends HSTS. Server
+  certificates with an RSA key under 2048 bits or a SHA-1/MD5 signature are refused: a bad
+  `tls.cert_file` stops startup, a bad per-domain PEM gets `400` on upload (before, an unparsable one
+  was stored and ignored). New `smtp.tls_policy` level `secure`: the MX certificate must be valid for
+  the recipient domain or a subdomain, not for the MX name from DNS.
+
 - RFC 6409 (submission): recipients with a malformed domain get `501 5.1.3`, single-label domains
   `554 5.1.2`; a message that is not valid RFC 5322 (no or several `From`, repeated single fields,
   several `From` mailboxes without `Sender`, unparsable or unqualified addresses) is refused with

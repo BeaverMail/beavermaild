@@ -54,3 +54,22 @@ func TestPlainHandlerRedirectsToHTTPS(t *testing.T) {
 		}
 	}
 }
+
+// RFC 9325 3.2: the HTTPS listener sends HSTS; the plain one (redirects, ACME) does not.
+func TestHTTPSSendsHSTS(t *testing.T) {
+	t.Parallel()
+	srv, err := newPlainAPI(t, ":443", tlsload.FromConfig(&tls.Config{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(res, httptest.NewRequest(http.MethodGet, "https://mail.example.com/api/v1/me", nil))
+	if got := res.Header().Get("Strict-Transport-Security"); got != "max-age=31536000" {
+		t.Fatalf("HSTS %q", got)
+	}
+	res = httptest.NewRecorder()
+	srv.PlainHandler().ServeHTTP(res, httptest.NewRequest(http.MethodGet, "http://mail.example.com/", nil))
+	if got := res.Header().Get("Strict-Transport-Security"); got != "" {
+		t.Fatalf("HSTS over plain HTTP: %q", got)
+	}
+}

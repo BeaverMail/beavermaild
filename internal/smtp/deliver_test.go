@@ -3,9 +3,15 @@ package smtp
 import (
 	"bufio"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"errors"
 	"fmt"
+	"math/big"
 	"net"
 	"strings"
 	"testing"
@@ -95,7 +101,7 @@ func TestDeliverMXMTASTSEnforceRequiresSTARTTLS(t *testing.T) {
 		Mode: mtasts.ModeEnforce,
 		MX:   []string{strings.ToLower(host)},
 	}
-	_, err := deliverMX(context.Background(), []string{mx.addr}, "a@b.c", "x@example.com", []byte("hi\r\n"), mxOptionsForPolicy(ClientOptions{}, policy, ""))
+	_, err := deliverMX(context.Background(), []string{mx.addr}, "a@b.c", "x@example.com", []byte("hi\r\n"), mxOptionsForPolicy(ClientOptions{}, policy, "", "example.com"))
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -126,7 +132,7 @@ func TestDeliverMXOpportunisticTLSIgnoresCertificate(t *testing.T) {
 		if mode != "" {
 			policy = &mtasts.Policy{Mode: mode, MX: []string{"other.example"}}
 		}
-		_, err := deliverMX(context.Background(), []string{mx.addr}, "a@b.c", "x@example.com", []byte("hi\r\n"), mxOptionsForPolicy(ClientOptions{}, policy, ""))
+		_, err := deliverMX(context.Background(), []string{mx.addr}, "a@b.c", "x@example.com", []byte("hi\r\n"), mxOptionsForPolicy(ClientOptions{}, policy, "", "example.com"))
 		mx.close()
 		if err != nil {
 			t.Fatalf("mode %q: %v", mode, err)
@@ -141,7 +147,7 @@ func TestDeliverMXRefusesTLS10(t *testing.T) {
 	for _, v := range []uint16{tls.VersionTLS10, tls.VersionTLS11} {
 		first := startMockMX(t, mxScript{advertiseSTARTTLS: true, tls: wrongNameTLS(t, v, v)})
 		second := startMockMX(t, mxScript{})
-		_, err := deliverMX(context.Background(), []string{first.addr, second.addr}, "a@b.c", "x@example.com", []byte("hi\r\n"), mxOptionsForPolicy(ClientOptions{}, nil, ""))
+		_, err := deliverMX(context.Background(), []string{first.addr, second.addr}, "a@b.c", "x@example.com", []byte("hi\r\n"), mxOptionsForPolicy(ClientOptions{}, nil, "", "example.com"))
 		first.close()
 		second.close()
 		if err != nil {
@@ -161,7 +167,7 @@ func TestDeliverMXEnforceBadCertificateTriesNext(t *testing.T) {
 	second := startMockMX(t, mxScript{})
 	t.Cleanup(func() { first.close(); second.close() })
 	policy := &mtasts.Policy{Mode: mtasts.ModeEnforce, MX: []string{"127.0.0.1"}}
-	_, err := deliverMX(context.Background(), []string{first.addr, second.addr}, "a@b.c", "x@example.com", []byte("hi\r\n"), mxOptionsForPolicy(ClientOptions{}, policy, ""))
+	_, err := deliverMX(context.Background(), []string{first.addr, second.addr}, "a@b.c", "x@example.com", []byte("hi\r\n"), mxOptionsForPolicy(ClientOptions{}, policy, "", "example.com"))
 	if err == nil || deliveryPermanent(err) {
 		t.Fatalf("got %v; want a transient failure", err)
 	}
@@ -317,7 +323,7 @@ func TestDeliverMXSTARTTLSRefusedContinuesInClear(t *testing.T) {
 	t.Parallel()
 	for _, reply := range []string{"454 4.7.0 TLS not available\r\n", "502 5.5.1 not implemented\r\n"} {
 		mx := startMockMX(t, mxScript{advertiseSTARTTLS: true, startTLSReply: reply})
-		_, err := deliverMX(context.Background(), []string{mx.addr}, "a@b.c", "x@example.com", []byte("hi\r\n"), mxOptionsForPolicy(ClientOptions{}, nil, ""))
+		_, err := deliverMX(context.Background(), []string{mx.addr}, "a@b.c", "x@example.com", []byte("hi\r\n"), mxOptionsForPolicy(ClientOptions{}, nil, "", "example.com"))
 		mx.close()
 		if err != nil {
 			t.Fatalf("%q: %v", reply, err)
@@ -326,7 +332,7 @@ func TestDeliverMXSTARTTLSRefusedContinuesInClear(t *testing.T) {
 
 	first := startMockMX(t, mxScript{advertiseSTARTTLS: true, startTLSReply: "421 4.3.2 closing\r\n"})
 	second := startMockMX(t, mxScript{})
-	_, err := deliverMX(context.Background(), []string{first.addr, second.addr}, "a@b.c", "x@example.com", []byte("hi\r\n"), mxOptionsForPolicy(ClientOptions{}, nil, ""))
+	_, err := deliverMX(context.Background(), []string{first.addr, second.addr}, "a@b.c", "x@example.com", []byte("hi\r\n"), mxOptionsForPolicy(ClientOptions{}, nil, "", "example.com"))
 	first.close()
 	second.close()
 	if err != nil {
@@ -336,7 +342,7 @@ func TestDeliverMXSTARTTLSRefusedContinuesInClear(t *testing.T) {
 	mx := startMockMX(t, mxScript{advertiseSTARTTLS: true, startTLSReply: "454 4.7.0 TLS not available\r\n"})
 	t.Cleanup(mx.close)
 	policy := &mtasts.Policy{Mode: mtasts.ModeEnforce, MX: []string{"127.0.0.1"}}
-	_, err = deliverMX(context.Background(), []string{mx.addr}, "a@b.c", "x@example.com", []byte("hi\r\n"), mxOptionsForPolicy(ClientOptions{}, policy, ""))
+	_, err = deliverMX(context.Background(), []string{mx.addr}, "a@b.c", "x@example.com", []byte("hi\r\n"), mxOptionsForPolicy(ClientOptions{}, policy, "", "example.com"))
 	if err == nil || deliveryPermanent(err) {
 		t.Fatalf("enforce: %v; want a transient failure, never clear", err)
 	}
@@ -350,7 +356,7 @@ func TestDeliverMXStaticTLSPolicy(t *testing.T) {
 	deliver := func(script mxScript, level string) error {
 		mx := startMockMX(t, script)
 		defer mx.close()
-		_, err := deliverMX(context.Background(), []string{mx.addr}, "a@b.c", "x@example.com", []byte("hi\r\n"), mxOptionsForPolicy(ClientOptions{}, nil, level))
+		_, err := deliverMX(context.Background(), []string{mx.addr}, "a@b.c", "x@example.com", []byte("hi\r\n"), mxOptionsForPolicy(ClientOptions{}, nil, level, "example.com"))
 		return err
 	}
 	badCert := mxScript{advertiseSTARTTLS: true, tls: wrongNameTLS(t, tls.VersionTLS12, 0)}
@@ -373,5 +379,75 @@ func TestDeliverMXStaticTLSPolicy(t *testing.T) {
 	cfg := RemoteConfig{TLSPolicy: map[string]string{"xn--mnchen-3ya.example": TLSVerify}}
 	if got := cfg.tlsLevel("MÜNCHEN.example."); got != TLSVerify {
 		t.Fatalf("tlsLevel of a U-label domain: %q", got)
+	}
+}
+
+// RFC 9325 4.2 and 5.2: an MX offering only a CBC suite still gets opportunistic mail, but not mail
+// sent under a TLS policy, which uses AEAD suites only.
+func TestDeliverMXCBCOnlyOpportunistic(t *testing.T) {
+	t.Parallel()
+	cbcOnly := func() *tls.Config {
+		c := wrongNameTLS(t, tls.VersionTLS12, tls.VersionTLS12)
+		c.CipherSuites = []uint16{tls.TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA}
+		return c
+	}
+	mx := startMockMX(t, mxScript{advertiseSTARTTLS: true, tls: cbcOnly()})
+	_, err := deliverMX(context.Background(), []string{mx.addr}, "a@b.c", "x@example.com", []byte("hi\r\n"), mxOptionsForPolicy(ClientOptions{}, nil, "", "example.com"))
+	mx.close()
+	if err != nil {
+		t.Fatalf("opportunistic: %v", err)
+	}
+	mx = startMockMX(t, mxScript{advertiseSTARTTLS: true, tls: cbcOnly()})
+	t.Cleanup(mx.close)
+	_, err = deliverMX(context.Background(), []string{mx.addr}, "a@b.c", "x@example.com", []byte("hi\r\n"), mxOptionsForPolicy(ClientOptions{}, nil, TLSEncrypt, "example.com"))
+	if err == nil || deliveryPermanent(err) {
+		t.Fatalf("encrypt: %v; want a transient failure", err)
+	}
+}
+
+// RFC 9325 7.1: "secure" checks the certificate against the recipient domain and its subdomains,
+// with a trusted chain, never against the MX name from DNS.
+func TestVerifyForDomain(t *testing.T) {
+	t.Parallel()
+	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	caTmpl := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "Test CA"}, IsCA: true,
+		BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour)}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca, _ := x509.ParseCertificate(caDER)
+	roots := x509.NewCertPool()
+	roots.AddCert(ca)
+	leaf := func(names ...string) tls.ConnectionState {
+		key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		tmpl := &x509.Certificate{SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: names[0]}, DNSNames: names,
+			ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour)}
+		der, err := x509.CreateCertificate(rand.Reader, tmpl, ca, &key.PublicKey, caKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c, _ := x509.ParseCertificate(der)
+		return tls.ConnectionState{PeerCertificates: []*x509.Certificate{c}}
+	}
+	for _, tc := range []struct {
+		names []string
+		roots *x509.CertPool
+		ok    bool
+	}{
+		{[]string{"example.com"}, roots, true},
+		{[]string{"mx1.example.com"}, roots, true},
+		{[]string{"*.example.com"}, roots, true},
+		{[]string{"mx.hosting.example.net"}, roots, false}, // valid for the MX name only
+		{[]string{"notexample.com"}, roots, false},
+		{[]string{"mx1.example.com"}, x509.NewCertPool(), false}, // untrusted chain
+	} {
+		err := verifyForDomain(leaf(tc.names...), "example.com", tc.roots)
+		if (err == nil) != tc.ok {
+			t.Errorf("%v: %v, want ok=%v", tc.names, err, tc.ok)
+		}
+	}
+	if opts := mxOptionsForPolicy(ClientOptions{}, nil, TLSSecure, "example.com"); !opts.RequireTLS || opts.VerifyDomain != "example.com" {
+		t.Fatalf("secure options %+v", opts)
 	}
 }

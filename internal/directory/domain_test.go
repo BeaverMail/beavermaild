@@ -11,6 +11,7 @@ import (
 	"github.com/BeaverMail/beavermaild/internal/mail"
 	"github.com/BeaverMail/beavermaild/internal/storage/blob"
 	"github.com/BeaverMail/beavermaild/internal/storage/sqlite"
+	"github.com/BeaverMail/beavermaild/internal/tlsload/tlstest"
 )
 
 func TestCreateDomainRejectsInvalid(t *testing.T) {
@@ -262,5 +263,31 @@ func TestLookupDomainIDN(t *testing.T) {
 		if !strings.HasPrefix(got.Name, "xn--") {
 			t.Fatalf("%s: stored as %q", name, got.Name)
 		}
+	}
+}
+
+// RFC 9325 4.5: an uploaded certificate pair is checked before anything is stored; a refused one
+// leaves no domain behind.
+func TestCreateDomainRejectsBadCustomCert(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	d := openDir(t)
+	d.SetDataDir(t.TempDir())
+	_, err := d.CreateDomainWithOpts(ctx, directory.DefaultTenantID, "custom.test", directory.DomainCreateOpts{
+		MailHostname: "mail.custom.test", SSLMode: "custom", CertPEM: "junk", KeyPEM: "junk",
+	})
+	if err == nil || !strings.Contains(err.Error(), "custom certificate") {
+		t.Fatalf("got %v", err)
+	}
+	if _, err := d.LookupDomain(ctx, "custom.test"); err == nil {
+		t.Fatal("refused domain left behind")
+	}
+	certFile, keyFile := tlstest.WritePEM(t, t.TempDir(), []string{"mail.custom.test"})
+	certPEM, _ := os.ReadFile(certFile)
+	keyPEM, _ := os.ReadFile(keyFile)
+	if _, err := d.CreateDomainWithOpts(ctx, directory.DefaultTenantID, "custom.test", directory.DomainCreateOpts{
+		MailHostname: "mail.custom.test", SSLMode: "custom", CertPEM: string(certPEM), KeyPEM: string(keyPEM),
+	}); err != nil {
+		t.Fatal(err)
 	}
 }

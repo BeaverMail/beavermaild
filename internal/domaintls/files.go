@@ -9,6 +9,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"fmt"
+	"github.com/BeaverMail/beavermaild/internal/tlsload"
 	"log/slog"
 	"math/big"
 	"os"
@@ -54,6 +55,9 @@ func (f *fileCert) load() error {
 	cert, err := tls.LoadX509KeyPair(f.certFile, f.keyFile)
 	if err != nil {
 		return fmt.Errorf("domaintls: load key pair: %w", err)
+	}
+	if err := tlsload.CheckServerCert(&cert); err != nil {
+		return err
 	}
 	f.cert, f.certMod, f.keyMod, f.checked = &cert, cm, km, time.Now()
 	return nil
