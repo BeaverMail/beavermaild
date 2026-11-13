@@ -551,7 +551,8 @@ func TestClientSendPipelining(t *testing.T) {
 		t.Fatal(err)
 	}
 	<-done
-	if len(batch) < 4 || batch[1] != "MAIL FROM:<sender@example.com> SIZE=6" || batch[2] != "RCPT TO:<rcpt@example.com>" || batch[3] != "DATA" {
+	// The server offers no SIZE, so MAIL carries no SIZE= (RFC 5321 4.1.1.11).
+	if len(batch) < 4 || batch[1] != "MAIL FROM:<sender@example.com>" || batch[2] != "RCPT TO:<rcpt@example.com>" || batch[3] != "DATA" {
 		t.Fatalf("batch %#v", batch)
 	}
 }

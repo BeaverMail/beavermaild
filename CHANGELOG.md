@@ -161,6 +161,12 @@
   - Notifications carry the server's name (Reporting-MTA, From, Message-ID) instead of localhost,
     ENVID and ORCPT decoded, and only the header (as text/rfc822-headers) unless they report a
     failure with RET=FULL.
+- SMTP SIZE (RFC 1870): the message size counts CRLF, so a message over the announced limit gets
+  552 (one stored with LF line ends was counted smaller and could exceed the limit by its number
+  of lines). One SIZE per MAIL (501); a valid 20-digit SIZE is too big (552), not a syntax error.
+  The client sends SIZE= only to servers offering SIZE (a strict server answered 555 and the
+  delivery failed), and a message over the server's announced SIZE fails permanently without
+  being transferred.
   - SEARCH BODY and TEXT also match the decoded text of base64 and quoted-printable parts, and TEXT
     the decoded RFC 2047 header words (no charset conversion: UTF-8 and US-ASCII parts).
 

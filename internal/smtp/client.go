@@ -168,6 +168,11 @@ func SendReply(ctx context.Context, addr, mailFrom, rcptTo string, data []byte, 
 		}
 	}
 
+	// RFC 1870 7: a message over the server's announced limit would only be refused after the
+	// transfer; it is undeliverable there, so fail it now without sending it.
+	if caps.SizeLimit > 0 && len(data) > caps.SizeLimit {
+		return "", &DeliveryError{Err: fmt.Errorf("smtp client: message of %d octets over the server's SIZE %d", len(data), caps.SizeLimit), Permanent: true}
+	}
 	tc.d = clientDataTimeout
 	mailLine := mailFromLine(mailFrom, data, caps, opts.User != "" && opts.Password != "")
 	rcptLine := fmt.Sprintf("RCPT TO:<%s>", rcptTo)
@@ -210,7 +215,7 @@ func mailFromLine(mailFrom string, data []byte, caps clientCaps, authenticated b
 	if authenticated {
 		mailLine += " AUTH=<>"
 	}
-	if len(data) > 0 {
+	if len(data) > 0 && caps.Size { // only to a server offering SIZE (RFC 5321 4.1.1.11)
 		mailLine += fmt.Sprintf(" SIZE=%d", len(data))
 	}
 	if caps.EightBitMIME {
@@ -320,6 +325,7 @@ func startTLS(conn net.Conn, r *bufio.Reader, host string, insecureSkipVerify bo
 }
 
 type clientCaps struct {
+	Size         bool // SIZE offered, with or without a limit
 	SizeLimit    int
 	StartTLS     bool
 	EightBitMIME bool
@@ -357,6 +363,7 @@ func readEHLOCaps(r *bufio.Reader) (clientCaps, error) {
 		if fields := strings.Fields(trimmed[min(4, len(trimmed)):]); !first && len(fields) > 0 {
 			switch strings.ToUpper(fields[0]) {
 			case "SIZE":
+				caps.Size = true
 				if len(fields) > 1 {
 					_, _ = fmt.Sscanf(fields[1], "%d", &caps.SizeLimit)
 				}

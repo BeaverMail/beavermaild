@@ -2,6 +2,7 @@
 package smtp
 
 import (
+	"math"
 	"strconv"
 	"strings"
 
@@ -45,8 +46,8 @@ func parseMailArg(arg string) (address string, declaredSize int, params MailPara
 	for _, field := range strings.Fields(rest) {
 		upper := strings.ToUpper(field)
 		key, val, hasVal := strings.Cut(upper, "=")
-		// RET and ENVID at most once each (RFC 3461 4.5): 501.
-		if (key == "RET" || key == "ENVID") && seen[key] {
+		// RET and ENVID at most once each (RFC 3461 4.5), SIZE too (RFC 1870 6): 501.
+		if (key == "RET" || key == "ENVID" || key == "SIZE") && seen[key] {
 			return "", 0, MailParams{}, false
 		}
 		seen[key] = true
@@ -60,9 +61,13 @@ func parseMailArg(arg string) (address string, declaredSize int, params MailPara
 		}
 		switch key {
 		case "SIZE":
-			n, err := strconv.Atoi(val)
-			if err != nil || n < 0 {
+			// size-value = 1*20DIGIT (RFC 1870): a valid value past int is simply too big (552).
+			if val == "" || len(val) > 20 || strings.Trim(val, "0123456789") != "" {
 				return "", 0, MailParams{}, false
+			}
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				n = math.MaxInt
 			}
 			declaredSize = n
 		case "RET":

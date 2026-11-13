@@ -36,7 +36,7 @@ func TestReadEHLOCapsLastLine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := clientCaps{SizeLimit: 1000, Chunking: true, Auth: []string{"PLAIN", "LOGIN"}}
+	want := clientCaps{Size: true, SizeLimit: 1000, Chunking: true, Auth: []string{"PLAIN", "LOGIN"}}
 	if !reflect.DeepEqual(caps, want) {
 		t.Fatalf("caps %+v, want %+v", caps, want)
 	}

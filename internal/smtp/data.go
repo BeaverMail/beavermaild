@@ -52,6 +52,7 @@ func readDATA(r *bufio.Reader, limits DataLimits, beforeRead ...func()) ([]byte,
 		refresh = beforeRead[0]
 	}
 	var buf bytes.Buffer
+	lines := 0 // stored with LF: the message size counts CRLF (RFC 1870 5), one more octet per line
 	for {
 		if refresh != nil {
 			refresh()
@@ -78,7 +79,7 @@ func readDATA(r *bufio.Reader, limits DataLimits, beforeRead ...func()) ([]byte,
 		}
 		buf.Write(content)
 		buf.WriteByte('\n')
-		if buf.Len() > limits.MaxMessageBytes {
+		if lines++; buf.Len()+lines > limits.MaxMessageBytes {
 			return nil, ErrMessageTooLarge
 		}
 	}
