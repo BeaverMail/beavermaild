@@ -114,10 +114,12 @@ type PluginsSMTPConfig struct {
 
 // TLSConfig holds PEM paths or ACME hostnames for server TLS.
 type TLSConfig struct {
-	CertFile     string   `json:"cert_file"`
-	KeyFile      string   `json:"key_file"`
-	MinVersion   string   `json:"min_version"`
-	Required     bool     `json:"required"`
+	CertFile   string `json:"cert_file"`
+	KeyFile    string `json:"key_file"`
+	MinVersion string `json:"min_version"`
+	// Required (default true) rejects IMAP LOGIN/AUTHENTICATE before TLS (RFC 8314 4: deprecate
+	// cleartext access). Set it false only for legacy clients on a trusted network.
+	Required     *bool    `json:"required,omitempty"`
 	ACMEHosts    []string `json:"acme_hosts"`
 	ACMECacheDir string   `json:"acme_cache_dir"`
 }
@@ -785,9 +787,9 @@ func (c *Config) TLSPair() (certFile, keyFile string, ok bool) {
 	return certFile, keyFile, true
 }
 
-// TLSRequired reports whether plain-text auth must be rejected.
+// TLSRequired reports whether plain-text auth must be rejected: true unless tls.required is false.
 func (c *Config) TLSRequired() bool {
-	return c.TLS.Required
+	return c.TLS.Required == nil || *c.TLS.Required
 }
 
 // QueueTimings holds parsed outbound queue schedule values.

@@ -74,12 +74,23 @@ Either:
 ## `tls.required`
 
 ```json
-"tls": { "required": true }
+"tls": { "required": false }
 ```
 
-**IMAP:** when true and the connection is not yet TLS, CAPABILITY includes `LOGINDISABLED` and LOGIN/AUTHENTICATE are rejected until STARTTLS (or use `imap.tls_listen`).
+Default **true** (RFC 8314 4: cleartext mail access is deprecated). On IMAP without TLS, CAPABILITY
+includes `LOGINDISABLED` and LOGIN/AUTHENTICATE are rejected until STARTTLS (or use `imap.tls_listen`),
+before the credentials are looked at. Set it `false` only for legacy clients on a trusted network; the
+server then logs a warning at startup.
 
-**SMTP:** the flag is passed into the session today but **does not** force STARTTLS on plain inbound `:25`. Submission already requires TLS before AUTH/MAIL regardless of this flag.
+**SMTP:** submission always requires TLS before AUTH/MAIL, whatever this flag says; port 25 never
+requires it (see `smtp.require_starttls_from`).
+
+At startup the server also warns when only its self-signed certificate is available: mail clients
+reject it (RFC 8314 4.4), so set `tls.cert_file`, `tls.acme_hosts` or a per-domain certificate.
+
+Logs of accepted mail, SMTP rejections and IMAP errors carry `tls` (version and cipher suite, or
+`none`), and the `Received` field of mail taken over TLS ends with the RFC 8314 `tls <cipher suite>`
+clause.
 
 ## Typical production listeners
 

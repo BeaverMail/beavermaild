@@ -3,6 +3,7 @@ package httpapi
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -23,7 +24,7 @@ type dnsRecordDTO struct {
 // emitted (inactive features stay hidden), empty with dkimErr!=nil means the key could not
 // be read and the row stays with an honest note; every non-real value is flagged as
 // placeholder so nothing invented goes unmarked.
-func dnsRecommendedRecords(dom storage.Domain, dkimName, dkimVal string, dkimErr error) []dnsRecordDTO {
+func dnsRecommendedRecords(dom storage.Domain, dkimName, dkimVal string, dkimErr error, services []MailService) []dnsRecordDTO {
 	mailHost := dom.MailHostname
 	hostPlaceholder := mailHost == ""
 	if hostPlaceholder {
@@ -75,6 +76,15 @@ func dnsRecommendedRecords(dom storage.Domain, dkimName, dkimVal string, dkimErr
 		dnsRecordDTO{Type: "CNAME", Host: "autoconfig." + dom.Name, Value: mailHost, Placeholder: hostPlaceholder, Note: hostNote},
 		dnsRecordDTO{Type: "CNAME", Host: "autodiscover." + dom.Name, Value: mailHost, Placeholder: hostPlaceholder, Note: hostNote},
 	)
+	// RFC 6186 SRV records for mail clients; RFC 8314 4.5.2: Implicit TLS (priority 0) in preference
+	// to STARTTLS (priority 10). Weight 1: one server.
+	for _, svc := range services {
+		recs = append(recs, dnsRecordDTO{
+			Type: "SRV", Host: svc.Name + "." + dom.Name,
+			Value:       fmt.Sprintf("%d 1 %d %s", svc.Priority, svc.Port, mailHost),
+			Placeholder: hostPlaceholder, Note: hostNote,
+		})
+	}
 	return recs
 }
 
@@ -103,6 +113,6 @@ func (s *Server) handleDomainDNSRecommended(w http.ResponseWriter, r *http.Reque
 	dkimName, dkimVal, dkimErr := s.dir.DKIMDNSRecord(dom)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"domain":  dom.Name,
-		"records": dnsRecommendedRecords(dom, dkimName, dkimVal, dkimErr),
+		"records": dnsRecommendedRecords(dom, dkimName, dkimVal, dkimErr, s.services),
 	})
 }

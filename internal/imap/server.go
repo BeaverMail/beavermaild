@@ -202,7 +202,7 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn, secure bool, lim 
 
 // logAttrs describes the session for logs: the failing command, account, mailbox and client.
 func (s *session) logAttrs() []any {
-	attrs := []any{"cmd", s.lastCmd, "remote", s.conn.RemoteAddr().String()}
+	attrs := []any{"cmd", s.lastCmd, "remote", s.conn.RemoteAddr().String(), "tls", tlsload.Describe(s.conn)}
 	if s.principal.AccountID != 0 {
 		attrs = append(attrs, "account", s.principal.AccountID)
 	}

@@ -115,3 +115,18 @@ func TestACMEALPNOnlyForValidators(t *testing.T) {
 		t.Fatal("regular clients must use the base config")
 	}
 }
+
+// RFC 8314 4.4: startup warns when only the self-signed certificate can be served.
+func TestOnlySelfSigned(t *testing.T) {
+	ctx := context.Background()
+	if m := newTestManager(t, Options{}); !m.OnlySelfSigned(ctx) {
+		t.Fatal("no certificate configured: want true")
+	}
+	if m := newTestManager(t, Options{ACMEHosts: []string{"mail.example.com"}}); m.OnlySelfSigned(ctx) {
+		t.Fatal("ACME host: want false")
+	}
+	certFile, keyFile := tlstest.WritePEM(t, t.TempDir(), []string{"mail.example.com"})
+	if m := newTestManager(t, Options{CertFile: certFile, KeyFile: keyFile}); m.OnlySelfSigned(ctx) {
+		t.Fatal("global PEM: want false")
+	}
+}

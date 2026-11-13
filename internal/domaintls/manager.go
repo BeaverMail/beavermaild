@@ -224,6 +224,16 @@ func (m *Manager) acmeTargets(ctx context.Context) []string {
 	return out
 }
 
+// OnlySelfSigned reports whether every client gets the self-signed certificate: no global PEM, no
+// per-domain certificate, no ACME host. Mail clients reject it, and RFC 8314 4.4 says providers MUST
+// keep valid certificates.
+func (m *Manager) OnlySelfSigned(ctx context.Context) bool {
+	m.mu.RLock()
+	custom := len(m.custom)
+	m.mu.RUnlock()
+	return m.global == nil && custom == 0 && len(m.acmeTargets(ctx)) == 0
+}
+
 // TLSConfig returns a server config resolving certificates by SNI.
 func (m *Manager) TLSConfig() *tls.Config {
 	if m == nil {

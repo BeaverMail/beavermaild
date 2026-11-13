@@ -991,7 +991,7 @@ func (s *session) finishDelivery(ctx context.Context, raw []byte) error {
 	if s.submission && s.principal.AccountID != 0 {
 		s.sendGate.RecordSend(s.principal.Email())
 	}
-	s.log.Info("smtp accepted", "ip", s.clientIP(), "from", s.mailFrom, "rcpts", s.rcptAddresses(), "size", len(raw), "submission", s.submission)
+	s.log.Info("smtp accepted", "ip", s.clientIP(), "from", s.mailFrom, "rcpts", s.rcptAddresses(), "size", len(raw), "submission", s.submission, "tls", tlsload.Describe(s.conn))
 	if err := s.writef(replyOK); err != nil {
 		return err
 	}
@@ -1131,7 +1131,7 @@ func (s *session) writef(format string, args ...any) error {
 	}
 	// Rejections are otherwise invisible to the operator (greylist, unknown user, filter, auth).
 	if line[0] == '4' || line[0] == '5' {
-		s.log.Info("smtp reply", "ip", s.clientIP(), "cmd", s.curCmd, "from", s.mailFrom, "reply", strings.TrimRight(line, "\r\n"), "submission", s.submission)
+		s.log.Info("smtp reply", "ip", s.clientIP(), "cmd", s.curCmd, "from", s.mailFrom, "reply", strings.TrimRight(line, "\r\n"), "submission", s.submission, "tls", tlsload.Describe(s.conn))
 	}
 	if s.held != nil {
 		s.held.WriteString(line)

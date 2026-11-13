@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net"
+	"net/netip"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -96,6 +99,12 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 	if err != nil {
 		_ = store.Close()
 		return nil, fmt.Errorf("tls: %w", err)
+	}
+	if !cfg.TLSRequired() {
+		log.Warn("tls.required is false: IMAP accepts LOGIN and AUTHENTICATE in clear (RFC 8314 4: deprecate cleartext access)")
+	}
+	if domainTLS.OnlySelfSigned(ctx) {
+		log.Warn("tls: only the self-signed certificate is available; mail clients (IMAP, submission) will reject it. Set tls.cert_file, tls.acme_hosts or a domain certificate (RFC 8314 4.4)")
 	}
 	certs := domainTLS.AsCerts()
 	tlsOpts := tlsOptions(cfg, certs)
@@ -210,23 +219,24 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 			uiFS = assets
 		}
 		httpSrv, err = httpapi.New(httpapi.Options{
-			Listen:      cfg.HTTPListen(),
-			PlainListen: cfg.HTTPPlainListen(),
-			Dir:         dir,
-			Log:         log,
-			AuthKey:     cfg.Secrets.AuthKey,
-			Certs:       certs,
-			AuthGate:    authGate,
-			Blobs:       blobs,
-			Queue:       queue,
-			Inbox:       inbox,
-			DKIM:        dkimReg,
-			DomainTLS:   domainTLS,
-			Remote:      &remote,
-			Status:      status,
-			LogFile:     logPath,
-			LogFileKeep: cfg.LogFileKeep(),
-			UI:          uiFS,
+			Listen:       cfg.HTTPListen(),
+			PlainListen:  cfg.HTTPPlainListen(),
+			Dir:          dir,
+			Log:          log,
+			AuthKey:      cfg.Secrets.AuthKey,
+			Certs:        certs,
+			AuthGate:     authGate,
+			Blobs:        blobs,
+			Queue:        queue,
+			Inbox:        inbox,
+			DKIM:         dkimReg,
+			DomainTLS:    domainTLS,
+			Remote:       &remote,
+			MailServices: mailServices(cfg),
+			Status:       status,
+			LogFile:      logPath,
+			LogFileKeep:  cfg.LogFileKeep(),
+			UI:           uiFS,
 		})
 		if err != nil {
 			if logFile != nil {
@@ -475,6 +485,33 @@ wait:
 		return runErr
 	}
 	return closeErr
+}
+
+// mailServices lists the client-facing listeners for RFC 6186 SRV records: Implicit TLS first
+// (RFC 8314 4.5.2). Loopback listeners (the dev defaults) and unset ones are not advertised.
+func mailServices(cfg *config.Config) []httpapi.MailService {
+	var out []httpapi.MailService
+	for _, l := range []struct {
+		addr, name string
+		prio       int
+	}{
+		{cfg.SMTPSubmissionTLSListen(), "_submissions._tcp", 0},
+		{cfg.SMTPSubmissionListen(), "_submission._tcp", 10},
+		{cfg.IMAPTLSListen(), "_imaps._tcp", 0},
+		{cfg.IMAPListen(), "_imap._tcp", 10},
+	} {
+		host, port, err := net.SplitHostPort(l.addr)
+		if err != nil || host == "localhost" {
+			continue
+		}
+		if ip, err := netip.ParseAddr(host); err == nil && ip.IsLoopback() {
+			continue
+		}
+		if p, err := strconv.Atoi(port); err == nil && p > 0 {
+			out = append(out, httpapi.MailService{Name: l.name, Priority: l.prio, Port: p})
+		}
+	}
+	return out
 }
 
 // shutdownGrace bounds the wait for listeners to drain (their own drain is 5s).

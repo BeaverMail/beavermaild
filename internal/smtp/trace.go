@@ -44,12 +44,15 @@ func (s *session) receivedField(now time.Time) string {
 	}
 	v := fmt.Sprintf("from %s (%s [%s])\r\n\tby %s (BeaverMail) with %s id %s",
 		traceToken(s.heloDomain), traceToken(ptr), ip, s.hostname, proto, s.currentFilterID())
-	if tc, ok := s.conn.(*tls.Conn); ok {
-		st := tc.ConnectionState()
-		v += fmt.Sprintf("\r\n\t(version=%s cipher=%s)", tls.VersionName(st.Version), tls.CipherSuiteName(st.CipherSuite))
-	}
 	if len(s.rcpt) == 1 {
 		v += "\r\n\tfor <" + s.rcpt[0].address + ">"
+	}
+	if tc, ok := s.conn.(*tls.Conn); ok {
+		// RFC 8314 4.3: the registered "tls" clause with the IANA cipher suite name (CipherSuiteName
+		// gives "0x%04X" for an unknown one, the tls-cipher-hex form), after "for" as RFC 5321 4.4
+		// puts Additional-Registered-Clauses last; the version goes in a comment.
+		st := tc.ConnectionState()
+		v += fmt.Sprintf("\r\n\ttls %s (%s)", tls.CipherSuiteName(st.CipherSuite), tls.VersionName(st.Version))
 	}
 	return v + "; " + now.Format(time.RFC1123Z)
 }

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- RFC 8314: `tls.required` now defaults to true, so IMAP refuses LOGIN/AUTHENTICATE before TLS (set it
+  false for legacy clients; a warning is logged). `dns-recommended` adds RFC 6186 SRV records for the
+  client listeners, Implicit TLS first. The `Received` field of mail taken over TLS carries the
+  registered `tls <cipher suite>` clause; logs carry the TLS version and cipher. Startup warns when
+  only the self-signed certificate is available.
+
 - RFC 3207 6: TLS can be required for selected hosts. `smtp.tls_policy` maps a recipient domain to
   `encrypt` or `verify` (no delivery in clear, certificate checked for `verify`);
   `smtp.require_starttls_from` lists client IPs/networks that must STARTTLS before sending mail on

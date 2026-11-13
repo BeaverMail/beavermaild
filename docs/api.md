@@ -281,8 +281,10 @@ Key rotation and importing your own key are not available through the API.
 
 ### Recommended DNS records
 
-`GET /domains/{domain}/dns-recommended` returns MX, SPF, DKIM (when enabled), DMARC, TLS-RPT and the
-autoconfig/autodiscover CNAMEs. Rows flagged `placeholder: true` contain an invented value (e.g. no `mail_hostname`
+`GET /domains/{domain}/dns-recommended` returns MX, SPF, DKIM (when enabled), DMARC, TLS-RPT, the
+autoconfig/autodiscover CNAMEs and the RFC 6186 SRV records of the client listeners (`_submissions._tcp`,
+`_submission._tcp`, `_imaps._tcp`, `_imap._tcp`; Implicit TLS with priority 0, STARTTLS with 10, as
+RFC 8314 4.5.2 asks; loopback and unset listeners are left out). Rows flagged `placeholder: true` contain an invented value (e.g. no `mail_hostname`
 yet) and must not be published as is.
 
 | Record | Value | Why |

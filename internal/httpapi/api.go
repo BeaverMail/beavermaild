@@ -60,6 +60,16 @@ type Options struct {
 	LogFileKeep int
 	// UI is the embedded admin SPA (nil when not attached).
 	UI fs.FS
+	// MailServices are the client-facing listeners advertised as SRV records (RFC 6186) in the
+	// recommended DNS records.
+	MailServices []MailService
+}
+
+// MailService is one RFC 6186 service: SRV owner prefix (e.g. "_submissions._tcp"), priority and port.
+type MailService struct {
+	Name     string
+	Priority int
+	Port     int
 }
 
 // Server is the optional admin/API HTTP listener.
@@ -78,6 +88,7 @@ type Server struct {
 	dkim        *dkimout.Registry
 	domainTLS   *domaintls.Manager
 	remote      *smtp.RemoteConfig
+	services    []MailService
 	status      *servicestatus.Registry
 	logFile     string
 	logFileKeep int
@@ -129,6 +140,7 @@ func New(opts Options) (*Server, error) {
 		dkim:        opts.DKIM,
 		domainTLS:   opts.DomainTLS,
 		remote:      opts.Remote,
+		services:    opts.MailServices,
 		status:      opts.Status,
 		logFile:     strings.TrimSpace(opts.LogFile),
 		logFileKeep: opts.LogFileKeep,

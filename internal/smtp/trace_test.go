@@ -1,12 +1,14 @@
 package smtp
 
 import (
+	"crypto/tls"
 	"net"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/BeaverMail/beavermaild/internal/directory"
+	"github.com/BeaverMail/beavermaild/internal/tlsload/tlstest"
 )
 
 func TestReceivedField(t *testing.T) {
@@ -60,5 +62,32 @@ func TestCountReceivedHeaderOnly(t *testing.T) {
 	raw := []byte("Received: from a\r\n\tby b; date\r\nreceived: from c\r\nSubject: x\r\n\r\nReceived: in body\r\n")
 	if n := countReceived(raw); n != 2 {
 		t.Fatalf("count %d want 2 (folded lines and body ignored)", n)
+	}
+}
+
+// RFC 8314 4.3: a hop received over TLS carries the registered "tls" clause with the IANA cipher suite
+// name, after "for" (RFC 5321 4.4: Additional-Registered-Clauses come last).
+func TestReceivedFieldTLSClause(t *testing.T) {
+	sc, cc := net.Pipe()
+	certFile, keyFile := tlstest.WritePEM(t, t.TempDir(), []string{"mx.example.net"})
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := tls.Server(sc, &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS13})
+	client := tls.Client(cc, &tls.Config{InsecureSkipVerify: true})
+	defer server.Close()
+	defer client.Close()
+	go func() { _ = client.Handshake() }()
+	if err := server.Handshake(); err != nil {
+		t.Fatal(err)
+	}
+	s := &session{conn: server, hostname: "mx.example.net", heloDomain: "web01.example.org", secure: true,
+		pipelining: true, rcpt: []rcptTarget{{address: "info@example.net"}}, filterTxnID: "abc123"}
+	got := s.receivedField(time.Date(2026, 10, 20, 12, 0, 2, 0, time.UTC))
+	cipher := tls.CipherSuiteName(server.ConnectionState().CipherSuite)
+	want := "\r\n\tfor <info@example.net>\r\n\ttls " + cipher + " (TLS 1.3); Tue, 20 Oct 2026"
+	if !strings.HasPrefix(cipher, "TLS_") || !strings.Contains(got, want) {
+		t.Fatalf("got %q\nwant it to contain %q", got, want)
 	}
 }

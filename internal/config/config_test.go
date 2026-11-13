@@ -367,3 +367,26 @@ func TestSMTPTLSPolicyConfig(t *testing.T) {
 		}
 	}
 }
+
+// RFC 8314 4: cleartext IMAP login is off unless tls.required is explicitly false.
+func TestTLSRequiredDefault(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	for body, want := range map[string]bool{
+		`{"data_dir":"` + dir + `"}`:                          true,
+		`{"data_dir":"` + dir + `","tls":{"required":true}}`:  true,
+		`{"data_dir":"` + dir + `","tls":{"required":false}}`: false,
+	} {
+		path := filepath.Join(t.TempDir(), "config.json")
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := config.Load(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.TLSRequired() != want {
+			t.Errorf("%s: TLSRequired %v, want %v", body, cfg.TLSRequired(), want)
+		}
+	}
+}
