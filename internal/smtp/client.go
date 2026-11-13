@@ -44,7 +44,7 @@ type ClientOptions struct {
 	STARTTLS              bool // relay: upgrade when configured
 	OpportunisticSTARTTLS bool // MX: upgrade when EHLO offers STARTTLS
 	TLSInsecureSkipVerify bool // skip server cert verification (dev/self-signed relay only)
-	MTASTSRequireTLS      bool // MX: RFC 8461 enforce requires STARTTLS with PKIX verify
+	RequireTLS            bool // STARTTLS mandatory, TLS 1.2+, never clear (MTA-STS enforce, smtp.tls_policy)
 	User                  string
 	Password              string
 	HeloName              string // EHLO name; should match the sending IP's PTR (default "localhost")
@@ -149,20 +149,18 @@ func SendReply(ctx context.Context, addr, mailFrom, rcptTo string, data []byte, 
 	}
 	preTLSCaps := caps
 	if wantSTARTTLS(opts) && caps.StartTLS {
-		conn, err = startTLS(conn, r, host, opts.TLSInsecureSkipVerify)
-		if err != nil {
-			if opts.MTASTSRequireTLS {
-				return "", &DeliveryError{Err: fmt.Errorf("smtp client starttls: %w", err), Permanent: true}
+		tlsConn, err := startTLS(conn, r, host, opts)
+		switch {
+		case err == nil:
+			conn, r = tlsConn, bufio.NewReader(tlsConn)
+			if caps, err = ehlo(conn, r, helo); err != nil {
+				return "", err
 			}
-			return "", err
+		case !staysClearAfterRefusal(opts, err):
+			return "", tlsFailure{err}
 		}
-		r = bufio.NewReader(conn)
-		caps, err = ehlo(conn, r, helo)
-		if err != nil {
-			return "", err
-		}
-	} else if opts.MTASTSRequireTLS {
-		return "", &DeliveryError{Err: fmt.Errorf("mta-sts: STARTTLS required but not advertised"), Permanent: true}
+	} else if opts.RequireTLS {
+		return "", tlsFailure{errors.New("smtp client: TLS is required for this host but STARTTLS is not advertised")}
 	}
 	if err := relaySecurity(opts, preTLSCaps, conn); err != nil {
 		return "", err
@@ -221,7 +219,7 @@ func SendReply(ctx context.Context, addr, mailFrom, rcptTo string, data []byte, 
 }
 
 func wantSTARTTLS(opts ClientOptions) bool {
-	return opts.STARTTLS || opts.OpportunisticSTARTTLS || opts.MTASTSRequireTLS
+	return opts.STARTTLS || opts.OpportunisticSTARTTLS || opts.RequireTLS
 }
 
 // mailFromLine builds MAIL FROM. After authenticating to the server it adds AUTH=<>: RFC 4954 5
@@ -329,14 +327,26 @@ func writeLine(conn net.Conn, line string) error {
 	return err
 }
 
-func startTLS(conn net.Conn, r *bufio.Reader, host string, insecureSkipVerify bool) (net.Conn, error) {
+// staysClearAfterRefusal reports whether, the server having refused STARTTLS with a reply (no handshake
+// started, the session still in clear and usable), the transaction goes on in clear: only for
+// opportunistic TLS (RFC 7435 3, 4: cleartext is the baseline, a refusal is no reason not to deliver).
+// 421 means the server is closing: that MX is unusable.
+func staysClearAfterRefusal(opts ClientOptions, err error) bool {
+	var re *ResponseError
+	return opts.OpportunisticSTARTTLS && !opts.RequireTLS && errors.As(err, &re) && re.Code != 421
+}
+
+// startTLS upgrades the session. ServerName is always the host, for SNI (RFC 8461 7.1). TLS 1.2 is the
+// floor even for opportunistic TLS: RFC 8996 2-3 "TLS 1.0 [1.1] MUST NOT be used", with no exception
+// for unauthenticated encryption; Go's default suites leave out static RSA (RFC 9325 4.1 SHOULD NOT).
+func startTLS(conn net.Conn, r *bufio.Reader, host string, opts ClientOptions) (net.Conn, error) {
 	if err := cmd(conn, r, "STARTTLS", 220); err != nil {
 		return nil, err
 	}
 	tlsConn := tls.Client(conn, &tls.Config{
 		ServerName:         host,
 		MinVersion:         tls.VersionTLS12,
-		InsecureSkipVerify: insecureSkipVerify,
+		InsecureSkipVerify: opts.TLSInsecureSkipVerify,
 	})
 	if err := tlsConn.Handshake(); err != nil {
 		return nil, fmt.Errorf("smtp client starttls: %w", err)

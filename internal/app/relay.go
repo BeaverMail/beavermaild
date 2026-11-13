@@ -16,10 +16,8 @@ type remoteDeliverer struct {
 	dir  *directory.Local
 }
 
-func newRemoteDeliverer(c *config.Config, dir *directory.Local) remoteDeliverer {
-	return remoteDeliverer{base: remoteConfigFrom(c), dir: dir}
-}
-
+// remoteConfigFrom builds the outbound delivery settings. Build it once: it owns the MTA-STS policy
+// cache and its file.
 func remoteConfigFrom(c *config.Config) smtp.RemoteConfig {
 	tlsSkip := c.SMTPOutboundTLSInsecureSkip()
 	helo := c.SMTPHostname()
@@ -33,8 +31,9 @@ func remoteConfigFrom(c *config.Config) smtp.RemoteConfig {
 			HeloName:              helo,
 			AllowPlainAuth:        smtp.IsLoopbackAddr(c.SMTPRelay()),
 		},
-		MXOptions: smtp.ClientOptions{TLSInsecureSkipVerify: tlsSkip, HeloName: helo, RejectPrivate: !c.SMTPOutboundAllowPrivate()},
+		MXOptions: smtp.ClientOptions{HeloName: helo, RejectPrivate: !c.SMTPOutboundAllowPrivate()},
 		MTASTS:    c.NewMTASTSResolver(),
+		TLSPolicy: c.SMTP.TLSPolicy,
 	}
 }
 

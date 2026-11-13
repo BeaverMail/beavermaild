@@ -69,9 +69,19 @@ func deliveryPermanent(err error) bool {
 	return false
 }
 
+// tlsFailure: the MX failed TLS (STARTTLS refused, handshake failed, or STARTTLS missing under MTA-STS
+// enforce). The MX counts as unreachable: the next one is tried and the message stays queued, whatever
+// reply code it carries (RFC 8461 5 SHOULD, 5.1 step 2). Each retry looks the policy up again, so
+// nothing fails permanently before a new policy has been checked for (RFC 8461 5 MUST).
+type tlsFailure struct{ error }
+
+func (e tlsFailure) Unwrap() error         { return e.error }
+func (tlsFailure) DeliveryPermanent() bool { return false }
+
 // shouldTryNextMX reports whether DeliverRemote should attempt the next MX host.
 func shouldTryNextMX(err error) bool {
-	if isDialError(err) {
+	var tf tlsFailure
+	if isDialError(err) || errors.As(err, &tf) {
 		return true
 	}
 	var re *ResponseError

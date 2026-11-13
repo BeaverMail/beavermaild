@@ -338,3 +338,32 @@ func TestNewDKIMSigner(t *testing.T) {
 		t.Fatalf("signer %v err %v", s, err)
 	}
 }
+
+// RFC 3207 6: smtp.tls_policy and smtp.require_starttls_from are checked at load.
+func TestSMTPTLSPolicyConfig(t *testing.T) {
+	t.Parallel()
+	cfg := config.Default(t.TempDir())
+	cfg.SMTP.TLSPolicy = map[string]string{"Example.ORG.": "verify", "münchen.example": "encrypt"}
+	cfg.SMTP.RequireSTARTTLSFrom = []string{"192.0.2.0/24", "2001:db8::1", "198.51.100.7"}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SMTP.TLSPolicy["example.org"] != "verify" || cfg.SMTP.TLSPolicy["xn--mnchen-3ya.example"] != "encrypt" {
+		t.Fatalf("policy %v; want lowercase A-label keys", cfg.SMTP.TLSPolicy)
+	}
+	prefixes, err := cfg.SMTPRequireSTARTTLSFrom()
+	if err != nil || len(prefixes) != 3 || prefixes[1].Bits() != 128 || prefixes[2].Bits() != 32 {
+		t.Fatalf("prefixes %v %v", prefixes, err)
+	}
+	for _, bad := range []func(*config.Config){
+		func(c *config.Config) { c.SMTP.TLSPolicy = map[string]string{"example.org": "may"} },
+		func(c *config.Config) { c.SMTP.TLSPolicy = map[string]string{" ": "verify"} },
+		func(c *config.Config) { c.SMTP.RequireSTARTTLSFrom = []string{"mx.example.org"} },
+	} {
+		c := config.Default(t.TempDir())
+		bad(c)
+		if err := c.Validate(); err == nil {
+			t.Errorf("accepted %+v %v", c.SMTP.TLSPolicy, c.SMTP.RequireSTARTTLSFrom)
+		}
+	}
+}

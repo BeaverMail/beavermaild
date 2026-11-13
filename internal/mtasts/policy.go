@@ -47,11 +47,18 @@ func (p *Policy) AllowsMX(host string) bool {
 	return false
 }
 
-// parsePolicy parses the HTTPS policy file body for domain.
+// maxAgeLimit is the largest max_age (RFC 8461 3.2); larger values are clamped.
+const maxAgeLimit = 31557600
+
+// maxMXPatterns bounds a cached policy: real ones list a handful of MX. A policy over it counts as
+// no policy, which only affects the domain publishing it.
+const maxMXPatterns = 100
+
+// parsePolicy parses the HTTPS policy file body for domain (RFC 8461 3.2).
 func parsePolicy(domain string, body string, policyID string) (*Policy, error) {
-	p := &Policy{Domain: domain, Mode: ModeNone, PolicyID: policyID}
-	lines := strings.Split(body, "\n")
-	for _, line := range lines {
+	p := &Policy{Domain: domain, PolicyID: policyID}
+	seen := map[string]bool{}
+	for _, line := range strings.Split(body, "\n") {
 		line = strings.TrimSpace(strings.TrimSuffix(line, "\r"))
 		if line == "" {
 			continue
@@ -62,6 +69,14 @@ func parsePolicy(domain string, body string, policyID string) (*Policy, error) {
 		}
 		key = strings.TrimSpace(strings.ToLower(key))
 		val = strings.TrimSpace(val)
+		if key == "mx" {
+			p.MX = append(p.MX, normalizeHost(val))
+			continue
+		}
+		if seen[key] {
+			continue // a repeated non-mx field: only the first counts
+		}
+		seen[key] = true
 		switch key {
 		case "version":
 			if val != "STSv1" {
@@ -74,51 +89,68 @@ func parsePolicy(domain string, body string, policyID string) (*Policy, error) {
 			default:
 				return nil, fmt.Errorf("mta-sts: invalid mode %q", val)
 			}
-		case "mx":
-			p.MX = append(p.MX, normalizeHost(val))
 		case "max_age":
-			sec, err := strconv.Atoi(val)
-			if err != nil || sec <= 0 {
+			if val == "" || len(val) > 10 || strings.Trim(val, "0123456789") != "" {
 				return nil, fmt.Errorf("mta-sts: invalid max_age %q", val)
 			}
-			p.MaxAge = time.Duration(sec) * time.Second
+			sec, _ := strconv.ParseInt(val, 10, 64)
+			p.MaxAge = time.Duration(min(sec, maxAgeLimit)) * time.Second
 		}
 	}
-	if p.MaxAge == 0 {
-		return nil, fmt.Errorf("mta-sts: missing max_age")
+	for _, k := range []string{"version", "mode", "max_age"} {
+		if !seen[k] {
+			return nil, fmt.Errorf("mta-sts: missing %s", k)
+		}
 	}
-	if len(p.MX) == 0 {
+	if len(p.MX) == 0 && p.Mode != ModeNone {
 		return nil, fmt.Errorf("mta-sts: missing mx")
+	}
+	if len(p.MX) > maxMXPatterns {
+		return nil, fmt.Errorf("mta-sts: %d mx patterns, over %d", len(p.MX), maxMXPatterns)
 	}
 	return p, nil
 }
 
-// parseTXTRecord extracts the policy id from _mta-sts TXT (v=STSv1; id=...).
+// parseTXTRecord returns the policy id of the one _mta-sts TXT record starting with "v=STSv1;"
+// (RFC 8461 3.1). Several such records, or a syntactically invalid one, mean no policy.
 func parseTXTRecord(records []string) (string, bool) {
-	joined := strings.Join(records, "")
-	joined = strings.TrimSpace(joined)
-	if joined == "" {
-		return "", false
-	}
-	var version string
-	var id string
-	for _, part := range strings.Split(joined, ";") {
-		part = strings.TrimSpace(part)
-		key, val, ok := strings.Cut(part, "=")
-		if !ok {
-			continue
-		}
-		switch strings.ToLower(strings.TrimSpace(key)) {
-		case "v":
-			version = strings.TrimSpace(val)
-		case "id":
-			id = strings.TrimSpace(val)
+	var rest string
+	n := 0
+	for _, rec := range records {
+		if after, ok := strings.CutPrefix(rec, "v=STSv1"); ok && strings.HasPrefix(strings.TrimLeft(after, " \t"), ";") {
+			rest, n = after, n+1
 		}
 	}
-	if version != "STSv1" || id == "" {
+	if n != 1 {
 		return "", false
 	}
-	return id, true
+	fields := strings.Split(rest, ";")[1:]
+	if last := len(fields) - 1; strings.Trim(fields[last], " \t") == "" {
+		fields = fields[:last] // trailing delimiter
+	}
+	id := ""
+	for _, f := range fields {
+		key, val, ok := strings.Cut(strings.Trim(f, " \t"), "=")
+		if !ok || key == "" || val == "" || strings.ContainsAny(val, " \t=") {
+			return "", false
+		}
+		if key == "id" && id == "" {
+			if len(val) > 32 || !isAlnum(val) {
+				return "", false
+			}
+			id = val
+		}
+	}
+	return id, id != ""
+}
+
+func isAlnum(s string) bool {
+	for _, c := range s {
+		if !('a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9') {
+			return false
+		}
+	}
+	return true
 }
 
 func normalizeHost(host string) string {

@@ -43,3 +43,34 @@ func TestPolicyFetchDoesNotFollowRedirects(t *testing.T) {
 		t.Fatalf("err %v, followed %v; want the 302 rejected", err, followed)
 	}
 }
+
+// RFC 8461 3.2 SHOULD: only a text/plain body is a policy; 3.3: a body over the size limit is a failed
+// fetch, never a truncated policy.
+func TestPolicyFetchContentTypeAndSize(t *testing.T) {
+	t.Parallel()
+	for name, h := range map[string]http.HandlerFunc{
+		"html": func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = w.Write([]byte("version: STSv1\nmode: enforce\nmx: mx.example.org\nmax_age: 86400\n"))
+		},
+		"too big": func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			_, _ = w.Write([]byte("version: STSv1\nmode: enforce\nmx: mx.example.org\nmax_age: 86400\n" + strings.Repeat("x: y\n", defaultMaxBody/4)))
+		},
+	} {
+		srv := httptest.NewServer(h)
+		_, err := fetchPolicy(context.Background(), policyClient(true), srv.URL+policyPath)
+		srv.Close()
+		if err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=us-ascii")
+		_, _ = w.Write([]byte("version: STSv1\n"))
+	}))
+	defer srv.Close()
+	if _, err := fetchPolicy(context.Background(), policyClient(true), srv.URL+policyPath); err != nil {
+		t.Fatal(err)
+	}
+}

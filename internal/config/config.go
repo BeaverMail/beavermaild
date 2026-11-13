@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/BeaverMail/beavermaild/internal/dkimout"
+	"github.com/BeaverMail/beavermaild/internal/dnsname"
 	"github.com/BeaverMail/beavermaild/internal/mtasts"
 	"github.com/BeaverMail/beavermaild/internal/security"
 )
@@ -123,25 +125,31 @@ type TLSConfig struct {
 // SMTPConfig holds inbound SMTP listener settings.
 type SMTPConfig struct {
 	// Hostname is the SMTP banner/EHLO name; it should match the server IP's PTR record.
-	Hostname                string                    `json:"hostname"`
-	Listen                  string                    `json:"listen"`
-	SubmissionListen        string                    `json:"submission_listen"`
-	SubmissionTLSListen     string                    `json:"submission_tls_listen"`
-	Relay                   string                    `json:"relay"`
-	RelayStartTLS           bool                      `json:"relay_starttls"`
-	RelayUser               string                    `json:"relay_user"`
-	RelayPassword           string                    `json:"relay_password"`
-	OutboundTLSInsecureSkip bool                      `json:"outbound_tls_insecure_skip_verify"` // dev/self-signed relay or MX; default verify
-	OutboundAllowPrivate    bool                      `json:"outbound_allow_private"`            // MX delivery may reach loopback/private addresses; default refuse
-	MTASTS                  MTASTSConfig              `json:"mta_sts"`
-	DKIMSign                DKIMSignConfig            `json:"dkim_sign"`
-	Greylist                GreylistConfig            `json:"greylist"`
-	ASNLookup               ASNLookupConfig           `json:"asn_lookup"`
-	MaxMessageBytes         int                       `json:"max_message_bytes"`
-	VRFYEnabled             bool                      `json:"vrfy_enabled"` // off by default (RFC 5321: user enumeration risk)
-	SubmissionRateLimit     SubmissionRateLimitConfig `json:"submission_rate_limit"`
-	MaxConnections          int                       `json:"max_connections"` // default 200; -1 = unlimited
-	ReadTimeout             string                    `json:"read_timeout"`    // default 5m; "0" = disabled
+	Hostname                string       `json:"hostname"`
+	Listen                  string       `json:"listen"`
+	SubmissionListen        string       `json:"submission_listen"`
+	SubmissionTLSListen     string       `json:"submission_tls_listen"`
+	Relay                   string       `json:"relay"`
+	RelayStartTLS           bool         `json:"relay_starttls"`
+	RelayUser               string       `json:"relay_user"`
+	RelayPassword           string       `json:"relay_password"`
+	OutboundTLSInsecureSkip bool         `json:"outbound_tls_insecure_skip_verify"` // dev/self-signed relay; default verify (MX: unverified unless MTA-STS enforce)
+	OutboundAllowPrivate    bool         `json:"outbound_allow_private"`            // MX delivery may reach loopback/private addresses; default refuse
+	MTASTS                  MTASTSConfig `json:"mta_sts"`
+	// TLSPolicy requires TLS to the MX of a recipient domain: "encrypt" or "verify" (certificate valid
+	// for the MX name). RFC 3207 6: TLS MUST be requirable for selected hosts.
+	TLSPolicy map[string]string `json:"tls_policy,omitempty"`
+	// RequireSTARTTLSFrom lists client IPs or CIDRs that must STARTTLS before mail on the inbound
+	// listener (RFC 3207 6). Never every client: a public MX MUST NOT require TLS (RFC 3207 4).
+	RequireSTARTTLSFrom []string                  `json:"require_starttls_from,omitempty"`
+	DKIMSign            DKIMSignConfig            `json:"dkim_sign"`
+	Greylist            GreylistConfig            `json:"greylist"`
+	ASNLookup           ASNLookupConfig           `json:"asn_lookup"`
+	MaxMessageBytes     int                       `json:"max_message_bytes"`
+	VRFYEnabled         bool                      `json:"vrfy_enabled"` // off by default (RFC 5321: user enumeration risk)
+	SubmissionRateLimit SubmissionRateLimitConfig `json:"submission_rate_limit"`
+	MaxConnections      int                       `json:"max_connections"` // default 200; -1 = unlimited
+	ReadTimeout         string                    `json:"read_timeout"`    // default 5m; "0" = disabled
 }
 
 // SubmissionRateLimitConfig limits accepted messages per authenticated principal.
@@ -374,6 +382,9 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("config: plugins.smtp.timeout_policy must be accept or tempfail")
 	}
 	c.normalizeMailAuth()
+	if err := c.validateSMTPTLS(); err != nil {
+		return err
+	}
 	if err := c.validateHTTP(); err != nil {
 		return err
 	}
@@ -549,7 +560,45 @@ func (c *Config) SMTPRelayStartTLS() bool {
 	return c.SMTP.RelayStartTLS
 }
 
-// SMTPOutboundTLSInsecureSkip reports whether outbound relay/MX skips TLS cert verify.
+// validateSMTPTLS checks smtp.tls_policy (keys become lowercase A-labels) and smtp.require_starttls_from.
+func (c *Config) validateSMTPTLS() error {
+	policy := make(map[string]string, len(c.SMTP.TLSPolicy))
+	for domain, level := range c.SMTP.TLSPolicy {
+		d := dnsname.ToASCII(strings.TrimSuffix(strings.ToLower(strings.TrimSpace(domain)), "."))
+		if d == "" {
+			return fmt.Errorf("config: smtp.tls_policy: empty domain")
+		}
+		switch level {
+		case "encrypt", "verify":
+		default:
+			return fmt.Errorf("config: smtp.tls_policy %q: level must be encrypt or verify, not %q", domain, level)
+		}
+		policy[d] = level
+	}
+	c.SMTP.TLSPolicy = policy
+	_, err := c.SMTPRequireSTARTTLSFrom()
+	return err
+}
+
+// SMTPRequireSTARTTLSFrom parses smtp.require_starttls_from (a bare IP is a single-address prefix).
+func (c *Config) SMTPRequireSTARTTLSFrom() ([]netip.Prefix, error) {
+	var out []netip.Prefix
+	for _, v := range c.SMTP.RequireSTARTTLSFrom {
+		v = strings.TrimSpace(v)
+		p, err := netip.ParsePrefix(v)
+		if err != nil {
+			a, aerr := netip.ParseAddr(v)
+			if aerr != nil {
+				return nil, fmt.Errorf("config: smtp.require_starttls_from: %q is not an IP or CIDR", v)
+			}
+			p = netip.PrefixFrom(a, a.BitLen())
+		}
+		out = append(out, p.Masked())
+	}
+	return out, nil
+}
+
+// SMTPOutboundTLSInsecureSkip reports whether the outbound relay skips TLS cert verify.
 func (c *Config) SMTPOutboundTLSInsecureSkip() bool {
 	return c.SMTP.OutboundTLSInsecureSkip
 }

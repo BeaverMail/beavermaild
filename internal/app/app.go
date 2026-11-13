@@ -48,6 +48,7 @@ type App struct {
 	logFile   *beaverlog.RotatingFile
 	dkim      *dkimout.Registry
 	domainTLS *domaintls.Manager
+	remote    smtp.RemoteConfig // outbound delivery; owns the MTA-STS policy cache
 }
 
 // Open connects storage using cfg and returns an App.
@@ -193,6 +194,15 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 		}
 	}
 
+	requireTLSFrom, _ := cfg.SMTPRequireSTARTTLSFrom()
+	remote := remoteConfigFrom(cfg)
+	if remote.MTASTS != nil {
+		remote.MTASTS.WithLogger(log)
+		if err := remote.MTASTS.LoadCache(filepath.Join(cfg.DataDir, "mta-sts-cache.json")); err != nil {
+			log.Warn("mta-sts: cannot load policy cache", slog.Any("err", err))
+		}
+	}
+
 	var httpSrv *httpapi.Server
 	if cfg.HTTPEnabled() {
 		var uiFS fs.FS
@@ -212,7 +222,7 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 			Inbox:       inbox,
 			DKIM:        dkimReg,
 			DomainTLS:   domainTLS,
-			Remote:      ptrRemote(remoteConfigFrom(cfg)),
+			Remote:      &remote,
 			Status:      status,
 			LogFile:     logPath,
 			LogFileKeep: cfg.LogFileKeep(),
@@ -228,13 +238,14 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 	}
 
 	return &App{
-		log:   log,
-		cfg:   cfg,
-		store: store,
-		blobs: blobs,
-		dir:   dir,
-		inbox: inbox,
-		queue: queue,
+		log:    log,
+		cfg:    cfg,
+		remote: remote,
+		store:  store,
+		blobs:  blobs,
+		dir:    dir,
+		inbox:  inbox,
+		queue:  queue,
 		smtp: smtp.NewServer(log, cfg.SMTPListen(), dir, inbox, queue, cfg.SMTPSubmissionListen(), cfg.SMTPSubmissionTLSListen(), smtp.Options{
 			Certs:           certs,
 			VRFYEnabled:     cfg.SMTPVRFYEnabled(),
@@ -251,6 +262,8 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 			ReadTimeout:     smtpReadTO,
 			Status:          status,
 			Hostname:        cfg.SMTPHostname(),
+			// Validated at config load.
+			RequireSTARTTLSFrom: requireTLSFrom,
 		}),
 		imap: imap.NewServer(log, cfg.IMAPListen(), dir, inbox, imap.Options{
 			Certs:          certs,
@@ -407,7 +420,10 @@ func (a *App) Run(ctx context.Context) error {
 	}
 	go a.domainTLS.Run(ctx)
 	go blob.RunGC(ctx, a.log, a.store, a.blobs)
-	go mail.NewWorker(a.log, a.queue, a.inbox, a.dir, newRemoteDeliverer(a.cfg, a.dir), signer, policy).Run(ctx)
+	if a.remote.MTASTS != nil {
+		go a.remote.MTASTS.Run(ctx)
+	}
+	go mail.NewWorker(a.log, a.queue, a.inbox, a.dir, remoteDeliverer{base: a.remote, dir: a.dir}, signer, policy).Run(ctx)
 
 	_, _, tlsOn := a.cfg.TLSPair()
 	storeInfo := a.cfg.StorePath()
@@ -463,10 +479,6 @@ wait:
 
 // shutdownGrace bounds the wait for listeners to drain (their own drain is 5s).
 const shutdownGrace = 7 * time.Second
-
-func ptrRemote(cfg smtp.RemoteConfig) *smtp.RemoteConfig {
-	return &cfg
-}
 
 // Close releases storage handles and stops plugin daemons.
 func (a *App) Close() error {

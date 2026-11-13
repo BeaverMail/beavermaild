@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- RFC 3207 6: TLS can be required for selected hosts. `smtp.tls_policy` maps a recipient domain to
+  `encrypt` or `verify` (no delivery in clear, certificate checked for `verify`);
+  `smtp.require_starttls_from` lists client IPs/networks that must STARTTLS before sending mail on
+  port 25.
+
+- Outbound TLS to MX hosts is opportunistic (RFC 7435): the certificate is no longer verified
+  unless the recipient domain publishes an MTA-STS `enforce` policy (TLS 1.2+ always, RFC 8996). Mail to an
+  MX whose certificate names another host (common with hosting providers) used to stay queued until it
+  bounced. An MX that refuses the STARTTLS command gets the message in clear on the same session.
+  `outbound_tls_insecure_skip_verify` now applies to the relay only.
+- MTA-STS (RFC 8461): a cached policy survives a missing or forged `_mta-sts` record, a broken policy
+  file and a restart (`<data_dir>/mta-sts-cache.json`); cached policies are refreshed daily and a
+  failed refresh is logged. A policy failure leaves the message queued and tries the next MX instead
+  of bouncing at once. A relay is checked against the MTA-STS policy of its own domain. A DNS error on
+  `_mta-sts` or an invalid policy no longer blocks delivery.
+
 - Paid plugins: new SDK package `plugin/license` verifies Ed25519-signed license files offline.
   The host passes the licenses directory (`<config dir>/licenses`) and the installation id to
   every plugin. `beaver init` creates the installation id in `<data_dir>/install-id`.

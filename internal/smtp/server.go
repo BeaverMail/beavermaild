@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net"
+	"net/netip"
 	"runtime/debug"
 	"time"
 
@@ -35,6 +36,9 @@ type Options struct {
 	ReadTimeout     time.Duration // 0 = no idle read deadline
 	Status          *servicestatus.Registry
 	Hostname        string // banner and EHLO name (default "localhost")
+	// RequireSTARTTLSFrom lists client networks that must STARTTLS before mail on the inbound listener
+	// (RFC 3207 6 MUST be configurable; never every client: a public MX MUST NOT require it, 4).
+	RequireSTARTTLSFrom []netip.Prefix
 }
 
 // Server accepts inbound SMTP connections.
@@ -62,6 +66,7 @@ type Server struct {
 	status              *servicestatus.Registry
 	hostname            string
 	sessions            connset.Set
+	requireTLSFrom      []netip.Prefix
 }
 
 // NewServer returns an SMTP server. submissionAddr is optional plain listener (e.g. :587).
@@ -98,6 +103,7 @@ func NewServer(log *slog.Logger, addr string, dir *directory.Local, inbox *mail.
 		readTimeout:         opts.ReadTimeout,
 		status:              opts.Status,
 		hostname:            opts.Hostname,
+		requireTLSFrom:      opts.RequireSTARTTLSFrom,
 	}
 }
 
@@ -246,6 +252,7 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn, secure, submissio
 	if s.hostname != "" {
 		sess.hostname = s.hostname
 	}
+	sess.requireTLS = !submission && !secure && s.mustSTARTTLS(conn.RemoteAddr())
 	sess.stopping = &s.sessions.Stopping
 	s.sessions.Add(sess, conn)
 	defer s.sessions.Remove(sess)
@@ -254,6 +261,21 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn, secure, submissio
 	if err := sess.run(context.WithoutCancel(ctx)); err != nil && ctx.Err() == nil {
 		s.log.Debug("smtp session", slog.Any("err", err))
 	}
+}
+
+// mustSTARTTLS reports whether the client at addr is in smtp.require_starttls_from.
+func (s *Server) mustSTARTTLS(addr net.Addr) bool {
+	ap, err := netip.ParseAddrPort(addr.String())
+	if err != nil {
+		return false
+	}
+	ip := ap.Addr().Unmap()
+	for _, p := range s.requireTLSFrom {
+		if p.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // CertsConfigured reports whether STARTTLS may be offered.

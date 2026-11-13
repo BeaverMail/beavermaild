@@ -13,8 +13,8 @@ How Beaver loads certificates and where TLS is required or optional on IMAP/SMTP
 | SMTP submission implicit | `smtp.submission_tls_listen` (e.g. `:465`) | TLS from first byte |
 | HTTP admin/API | `http.listen` | TLS unless loopback |
 | HTTP cleartext | `http.plain_listen` (e.g. `:80`) | Plain; ACME HTTP-01 + 301 to HTTPS only |
-| Outbound MX | queue worker | Opportunistic STARTTLS + PKIX verify (default) |
-| Outbound relay | `smtp.relay` | Optional STARTTLS (`relay_starttls`) |
+| Outbound MX | queue worker | Opportunistic STARTTLS, certificate not verified (RFC 7435) |
+| Outbound relay | `smtp.relay` | Optional STARTTLS (`relay_starttls`), PKIX verify |
 | MTA-STS | outbound MX | When policy is `enforce`: mandatory STARTTLS + PKIX |
 
 STARTTLS and implicit TLS listeners are always available: without `tls.cert_file`/`tls.key_file`, Beaver serves a self-signed certificate generated once under `<data_dir>/tls/self/`. Fine for server-to-server STARTTLS (opportunistic, unverified); mail clients will warn, so give them a real certificate.
@@ -107,15 +107,64 @@ Either:
 
 MUA tip: prefer submission `:465` or `:587`+STARTTLS, and IMAP `:993` or `:143`+STARTTLS. Keep `:25` for server-to-server inbound.
 
+### Requiring STARTTLS from selected senders (port 25)
+
+A public MX must accept mail in clear (RFC 3207 4), so `tls.required` never applies to port 25. To
+require TLS from known peers only (a partner, an internal relay), list their addresses:
+
+```json
+"smtp": {
+  "require_starttls_from": ["192.0.2.0/24", "2001:db8::25"]
+}
+```
+
+Those clients get `530 5.7.0 Must issue a STARTTLS command first` to every command but EHLO, NOOP,
+STARTTLS and QUIT until they upgrade. Everyone else is unaffected.
+
 ## Outbound TLS
 
 ### Direct MX
 
 1. Connect plain to MX.
-2. If EHLO offers `STARTTLS`, upgrade.
-3. Verify the server certificate (PKIX) by default.
+2. If EHLO offers `STARTTLS`, upgrade (TLS 1.2 or later: TLS 1.0/1.1 must not be used, RFC 8996; an
+   MX offering nothing newer is skipped like an unreachable one).
+3. The certificate is **not** verified: any MX that can encrypt gets the mail encrypted (RFC 7435
+   opportunistic security, as Postfix `may`). A certificate for another name, self-signed or expired
+   does not block delivery. Mail to a domain with an MTA-STS `enforce` policy is the exception: there the
+   certificate must be valid for the MX name, with TLS 1.2 or later (see below).
 
-Disable verify only for lab/self-signed:
+An MX that advertises STARTTLS but refuses the command (e.g. `454 TLS not available`) gets the message
+in clear on the same session, as Postfix `may` does (RFC 7435: cleartext is the baseline); not under
+MTA-STS `enforce`. A failed TLS handshake fails that MX instead: the next MX is tried and the message
+stays queued (no plaintext retry after a failed handshake).
+
+### Required TLS per destination
+
+`smtp.tls_policy` requires TLS to the MX of chosen recipient domains (RFC 3207 6; Postfix
+`smtp_tls_policy_maps`):
+
+```json
+"smtp": {
+  "tls_policy": {
+    "partner.example": "verify",
+    "legacy.example": "encrypt"
+  }
+}
+```
+
+- `encrypt`: STARTTLS mandatory (TLS 1.2+), certificate not checked.
+- `verify`: as `encrypt`, and the certificate must be valid for the MX host name. The MX name comes
+  from DNS, so without DNSSEC this guards against a passive attacker and a misdirected connection, not
+  against forged MX records (MTA-STS or DANE do that).
+
+Without STARTTLS, after a refused STARTTLS or a failed handshake, the MX is skipped and the message
+stays queued: it never goes in clear. With an MTA-STS `enforce` policy the stricter of the two applies.
+The policy is for direct MX delivery; a relay has its own settings.
+
+### Relay
+
+The relay (`smtp.relay`) certificate is verified (PKIX, TLS 1.2+). Disable verify only for a
+lab/self-signed relay:
 
 ```json
 "smtp": {
@@ -123,9 +172,7 @@ Disable verify only for lab/self-signed:
 }
 ```
 
-Env: `BEAVER_SMTP_OUTBOUND_TLS_INSECURE=1`.
-
-A failed STARTTLS handshake fails the delivery attempt (no silent plaintext fallback after a failed upgrade).
+Env: `BEAVER_SMTP_OUTBOUND_TLS_INSECURE=1`. It has no effect on direct MX delivery.
 
 Direct MX delivery never connects to loopback, private (RFC 1918, `fc00::/7`), link-local or unspecified
 addresses: a remote domain whose MX points there fails permanently. For a LAN where other domains' MX
@@ -156,7 +203,7 @@ TLS, except to a relay on the loopback interface (`127.0.0.1`, `::1`, `localhost
 
 ### MTA-STS (RFC 8461)
 
-Outbound client is **on by default**. Policy mode `enforce` filters MX and requires STARTTLS with PKIX verify (overrides insecure skip for that delivery).
+Outbound client is **on by default**. Policy mode `enforce` filters MX and requires STARTTLS with PKIX verify and TLS 1.2+. A failure leaves the message queued (the policy is looked up again at each retry, and a cached policy survives a missing or broken `_mta-sts` record or policy file). Modes `testing` and `none` deliver as without a policy.
 
 ```json
 "smtp": {
@@ -166,7 +213,18 @@ Outbound client is **on by default**. Policy mode `enforce` filters MX and requi
 
 Env: `BEAVER_SMTP_MTA_STS_DISABLE=1` to turn off.
 
-Not implemented: publishing an inbound MTA-STS policy, TLS-RPT, or treating policy mode `testing` as enforce.
+Policies are cached in `<data_dir>/mta-sts-cache.json`, so they survive a restart. Every cached policy
+is fetched again 5 minutes after startup and then daily; a failed refresh logs `mta-sts: policy refresh
+failed` (with the expiry of the cached policy), except for mode `none`. After a failed fetch the same
+policy id is not fetched again for 5 minutes. The cache holds at most 10000 domains (the least recently
+fetched goes first); a policy with more than 100 `mx` lines is ignored.
+
+Through a relay (global `smtp.relay` or per-domain), the relay host name is the policy domain
+(RFC 8461 3.4): under `enforce` the relay must match the policy `mx`, offer STARTTLS and present a valid
+certificate, whatever `relay_starttls` and `outbound_tls_insecure_skip_verify` say. Relays given as an IP
+address or on loopback have no policy.
+
+Not implemented: publishing an inbound MTA-STS policy, TLS-RPT.
 
 ## Not implemented (intentional / P2)
 
@@ -174,7 +232,7 @@ Not implemented: publishing an inbound MTA-STS policy, TLS-RPT, or treating poli
 |------|--------|
 | DANE (RFC 7672) | Needs DNSSEC; backlog `smtp-dane` |
 | REQUIRETLS (RFC 8689) | Not advertised until enforced |
-| Force TLS on SMTP `:25` via `tls.required` | Use network policy or wait for a dedicated inbound flag |
+| Force TLS on SMTP `:25` for every client | Forbidden for a public MX (RFC 3207 4); use `smtp.require_starttls_from` for selected peers |
 
 ## Smoke
 

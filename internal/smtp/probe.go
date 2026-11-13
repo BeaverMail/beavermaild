@@ -119,10 +119,7 @@ func probeMX(ctx context.Context, cfg RemoteConfig, to string) ProbeResult {
 	res.Steps = append(res.Steps, ProbeStep{Name: "mx_lookup", OK: true, Detail: strings.Join(hosts, ", ")})
 
 	// Connectivity only — skip MTA-STS HTTPS/DNS (can hang; not needed for a probe).
-	opts := ClientOptions{
-		OpportunisticSTARTTLS: true,
-		TLSInsecureSkipVerify: cfg.MXOptions.TLSInsecureSkipVerify,
-	}
+	opts := mxOptionsForPolicy(ClientOptions{}, nil, cfg.tlsLevel(domain))
 	var lastFail ProbeResult
 	for _, host := range hosts {
 		if err := ctx.Err(); err != nil {
@@ -202,23 +199,28 @@ func probeConnect(ctx context.Context, addr string, opts ClientOptions) (steps [
 	conn = raw
 	preTLSCaps := caps
 	if wantSTARTTLS(opts) && caps.StartTLS {
-		conn, err = startTLS(conn, r, host, opts.TLSInsecureSkipVerify)
-		if err != nil {
+		tlsConn, err := startTLS(conn, r, host, opts)
+		switch {
+		case err != nil && staysClearAfterRefusal(opts, err):
+			steps = append(steps, ProbeStep{Name: "starttls", OK: true, Detail: "refused (" + err.Error() + "), continuing in clear"})
+		case err != nil:
 			_ = raw.Close()
 			steps = append(steps, ProbeStep{Name: "starttls", OK: false, Error: err.Error()})
 			return steps, nil, nil, caps, false
-		}
-		r = bufio.NewReader(conn)
-		caps, err = ehlo(conn, r, "beavermail-probe")
-		if err != nil {
-			_ = conn.Close()
+		default:
+			conn = tlsConn
+			r = bufio.NewReader(conn)
+			caps, err = ehlo(conn, r, "beavermail-probe")
+			if err != nil {
+				_ = conn.Close()
+				steps = append(steps, ProbeStep{Name: "starttls", OK: true})
+				steps = append(steps, ProbeStep{Name: "ehlo", OK: false, Error: err.Error()})
+				return steps, nil, nil, caps, false
+			}
 			steps = append(steps, ProbeStep{Name: "starttls", OK: true})
-			steps = append(steps, ProbeStep{Name: "ehlo", OK: false, Error: err.Error()})
-			return steps, nil, nil, caps, false
+			steps = append(steps, ProbeStep{Name: "ehlo", OK: true, Detail: "after STARTTLS"})
 		}
-		steps = append(steps, ProbeStep{Name: "starttls", OK: true})
-		steps = append(steps, ProbeStep{Name: "ehlo", OK: true, Detail: "after STARTTLS"})
-	} else if opts.MTASTSRequireTLS {
+	} else if opts.RequireTLS {
 		_ = conn.Close()
 		steps = append(steps, ProbeStep{Name: "starttls", OK: false, Error: "STARTTLS required but not advertised"})
 		return steps, nil, nil, caps, false

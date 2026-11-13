@@ -36,6 +36,7 @@ type session struct {
 	secure      bool
 	vrfyEnabled bool
 	submission  bool
+	requireTLS  bool // inbound client in smtp.require_starttls_from: no mail before STARTTLS
 	pipelining  bool
 	dataLimits  DataLimits
 
@@ -265,10 +266,11 @@ func (s *session) dispatch(ctx context.Context, cmd, arg string, mailBlocked boo
 			return false, false, err
 		}
 	}
-	// Submission without TLS is of no use (AUTH needs it): like a server that requires TLS, answer
-	// every command but NOOP, EHLO, STARTTLS and QUIT with 530 (RFC 3207 4). AUTH keeps the more
-	// specific 538 5.7.11 of RFC 4954 6.
-	if s.submission && !s.secure && s.tls != nil {
+	// Submission without TLS is of no use (AUTH needs it), and smtp.require_starttls_from names inbound
+	// clients that must use TLS (RFC 3207 6): like a server that requires TLS, answer every command but
+	// NOOP, EHLO, STARTTLS and QUIT with 530 (RFC 3207 4). AUTH keeps the more specific 538 5.7.11 of
+	// RFC 4954 6.
+	if (s.submission || s.requireTLS) && !s.secure && s.tls != nil {
 		switch cmd {
 		case "NOOP", "EHLO", "STARTTLS", "QUIT", "AUTH":
 		default:
