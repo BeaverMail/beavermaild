@@ -37,10 +37,16 @@ the HTTPS API only `http/1.1`, so a client offering another protocol is refused 
 attacks; clients that send no ALPN are unaffected). SMTP has no registered ALPN name. The HTTPS API sends
 `Strict-Transport-Security: max-age=31536000`.
 
-Not done, by limits of Go's crypto/tls: revocation checking of the certificates our clients verify
-(no CRL or OCSP), and aborting a TLS 1.2 handshake with a server that lacks `renegotiation_info`. An
-unknown SNI name gets the fallback certificate instead of an `unrecognized_name` alert, as RFC 8461
-requires for SMTP.
+Certificates our clients verify (relay, MTA-STS `enforce`, `smtp.tls_policy` `verify`/`secure`, MTA-STS
+policy fetch) are checked against their CA's CRL (RFC 9325 7.5): the CRL named in the certificate is
+fetched over HTTP(S), authenticated with the issuer's key and cached until its `nextUpdate`; a listed
+serial fails the connection like any TLS error (next MX, message stays queued). A CRL that cannot be
+fetched, does not verify or is stale is ignored (soft-fail, as browsers do), and CRL hosts on internal
+addresses are never contacted. OCSP is not used (Let's Encrypt ended it in 2025).
+
+Deviations: a TLS 1.2 server that does not acknowledge `renegotiation_info` is not refused (crypto/tls
+does not expose it; such servers predate RFC 5746, 2010). An unknown SNI name gets the fallback
+certificate instead of an `unrecognized_name` alert, as RFC 8461 requires for SMTP.
 
 ## Certificates
 

@@ -13,11 +13,14 @@ import (
 	"fmt"
 	"math/big"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/BeaverMail/beavermaild/internal/mtasts"
+	"github.com/BeaverMail/beavermaild/internal/revocation"
 	"github.com/BeaverMail/beavermaild/internal/tlsload/tlstest"
 )
 
@@ -442,12 +445,49 @@ func TestVerifyForDomain(t *testing.T) {
 		{[]string{"notexample.com"}, roots, false},
 		{[]string{"mx1.example.com"}, x509.NewCertPool(), false}, // untrusted chain
 	} {
-		err := verifyForDomain(leaf(tc.names...), "example.com", tc.roots)
+		_, err := verifyForDomain(leaf(tc.names...), "example.com", tc.roots)
 		if (err == nil) != tc.ok {
 			t.Errorf("%v: %v, want ok=%v", tc.names, err, tc.ok)
 		}
 	}
 	if opts := mxOptionsForPolicy(ClientOptions{}, nil, TLSSecure, "example.com"); !opts.RequireTLS || opts.VerifyDomain != "example.com" {
 		t.Fatalf("secure options %+v", opts)
+	}
+}
+
+// RFC 9325 7.5: a verified MX whose certificate its CA has revoked is refused (next MX, transient).
+func TestDeliverMXRevokedCertificate(t *testing.T) {
+	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	caTmpl := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "Test CA"}, IsCA: true,
+		BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour)}
+	caDER, _ := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
+	ca, _ := x509.ParseCertificate(caDER)
+	crlDER, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{Number: big.NewInt(1),
+		ThisUpdate: time.Now().Add(-time.Hour), NextUpdate: time.Now().Add(time.Hour),
+		RevokedCertificateEntries: []x509.RevocationListEntry{{SerialNumber: big.NewInt(66), RevocationTime: time.Now()}}}, ca, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	crlSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(crlDER) }))
+	t.Cleanup(crlSrv.Close)
+	leafKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	leafDER, _ := x509.CreateCertificate(rand.Reader, &x509.Certificate{SerialNumber: big.NewInt(66),
+		Subject: pkix.Name{CommonName: "mx1.example.com"}, DNSNames: []string{"mx1.example.com"},
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, CRLDistributionPoints: []string{crlSrv.URL + "/ca.crl"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour)}, ca, &leafKey.PublicKey, caKey)
+	roots := x509.NewCertPool()
+	roots.AddCert(ca)
+	revocationChecker = revocation.New(true) // the CRL server is on loopback
+	t.Cleanup(func() { revocationChecker = revocation.Default })
+
+	mx := startMockMX(t, mxScript{advertiseSTARTTLS: true, tls: &tls.Config{
+		Certificates: []tls.Certificate{{Certificate: [][]byte{leafDER}, PrivateKey: leafKey}}}})
+	t.Cleanup(mx.close)
+	opts := mxOptionsForPolicy(ClientOptions{}, nil, TLSSecure, "example.com")
+	opts.rootCAs = roots
+	_, err = deliverMX(context.Background(), []string{mx.addr}, "a@b.c", "x@example.com", []byte("hi\r\n"), opts)
+	if !errors.Is(err, revocation.ErrRevoked) || deliveryPermanent(err) {
+		t.Fatalf("got %v; want a transient revoked-certificate failure", err)
 	}
 }

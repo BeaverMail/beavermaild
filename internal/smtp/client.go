@@ -15,6 +15,7 @@ import (
 
 	"github.com/BeaverMail/beavermaild/internal/dnsname"
 	"github.com/BeaverMail/beavermaild/internal/mail"
+	"github.com/BeaverMail/beavermaild/internal/revocation"
 	"github.com/BeaverMail/beavermaild/internal/security"
 	"github.com/BeaverMail/beavermaild/internal/tlsload"
 )
@@ -342,6 +343,9 @@ func staysClearAfterRefusal(opts ClientOptions, err error) bool {
 	return opts.OpportunisticSTARTTLS && !opts.RequireTLS && errors.As(err, &re) && re.Code != 421
 }
 
+// revocationChecker checks verified peers (a variable so tests can reach a local CRL server).
+var revocationChecker = revocation.Default
+
 // startTLS upgrades the session. ServerName is always the host, for SNI (RFC 8461 7.1). TLS 1.2 is the
 // floor even for opportunistic TLS: RFC 8996 2-3 "TLS 1.0 [1.1] MUST NOT be used", with no exception
 // for unauthenticated encryption; Go's default suites leave out static RSA (RFC 9325 4.1 SHOULD NOT).
@@ -359,9 +363,19 @@ func startTLS(conn net.Conn, r *bufio.Reader, host string, opts ClientOptions) (
 	if !opts.OpportunisticSTARTTLS || opts.RequireTLS {
 		cfg.CipherSuites = tlsload.AEADSuites
 	}
-	if opts.VerifyDomain != "" {
+	if !cfg.InsecureSkipVerify || opts.VerifyDomain != "" {
 		cfg.VerifyConnection = func(cs tls.ConnectionState) error {
-			return verifyForDomain(cs, opts.VerifyDomain, opts.rootCAs)
+			chains := cs.VerifiedChains
+			if opts.VerifyDomain != "" {
+				var err error
+				if chains, err = verifyForDomain(cs, opts.VerifyDomain, opts.rootCAs); err != nil {
+					return err
+				}
+			}
+			if len(chains) == 0 {
+				return nil
+			}
+			return revocationChecker.Check(chains[0]) // RFC 9325 7.5
 		}
 	}
 	tlsConn := tls.Client(conn, cfg)
@@ -505,25 +519,26 @@ func asciiDomain(addr string) string {
 // verifyForDomain checks the chain against the roots and that the leaf names domain or a subdomain of
 // it (Postfix "secure" with nexthop:dot-nexthop): the reference identity is the recipient domain, not
 // the MX name found in DNS (RFC 9325 7.1).
-func verifyForDomain(cs tls.ConnectionState, domain string, roots *x509.CertPool) error {
+func verifyForDomain(cs tls.ConnectionState, domain string, roots *x509.CertPool) ([][]*x509.Certificate, error) {
 	if len(cs.PeerCertificates) == 0 {
-		return errors.New("smtp client: no server certificate")
+		return nil, errors.New("smtp client: no server certificate")
 	}
 	leaf := cs.PeerCertificates[0]
 	inter := x509.NewCertPool()
 	for _, c := range cs.PeerCertificates[1:] {
 		inter.AddCert(c)
 	}
-	if _, err := leaf.Verify(x509.VerifyOptions{Roots: roots, Intermediates: inter}); err != nil {
-		return fmt.Errorf("smtp client: certificate: %w", err)
+	chains, err := leaf.Verify(x509.VerifyOptions{Roots: roots, Intermediates: inter})
+	if err != nil {
+		return nil, fmt.Errorf("smtp client: certificate: %w", err)
 	}
 	if leaf.VerifyHostname(domain) == nil {
-		return nil
+		return chains, nil
 	}
 	for _, name := range leaf.DNSNames {
 		if strings.HasSuffix(strings.ToLower(strings.TrimSuffix(name, ".")), "."+domain) {
-			return nil
+			return chains, nil
 		}
 	}
-	return fmt.Errorf("smtp client: certificate not valid for %s or its subdomains", domain)
+	return nil, fmt.Errorf("smtp client: certificate not valid for %s or its subdomains", domain)
 }

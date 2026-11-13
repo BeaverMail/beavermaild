@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Revocation (RFC 9325 7.5): certificates verified by our TLS clients (relay, MTA-STS, `tls_policy`
+  verify/secure, policy fetch) are checked against their CA's CRL, cached until its next update; a
+  revoked certificate fails the connection, an unreachable or invalid CRL is ignored (soft-fail).
+
 - RFC 9325 (BCP 195): TLS 1.2 uses AEAD suites only on every listener and verified client connection
   (CBC suites refused; opportunistic MX delivery keeps Go's defaults). Strict ALPN: IMAP listeners
   accept only `imap`, the HTTPS API only `http/1.1` (ALPACA). The HTTPS API sends HSTS. Server

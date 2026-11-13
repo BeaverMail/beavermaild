@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/BeaverMail/beavermaild/internal/revocation"
 	"github.com/BeaverMail/beavermaild/internal/security"
 	"github.com/BeaverMail/beavermaild/internal/tlsload"
 )
@@ -213,7 +214,13 @@ func policyClient(allowPrivate bool) *http.Client {
 	return &http.Client{
 		Timeout: fetchTimeout,
 		Transport: &http.Transport{DialContext: dialer.DialContext, Proxy: nil,
-			TLSClientConfig: &tls.Config{CipherSuites: tlsload.AEADSuites}}, // RFC 9325 4.2
+			TLSClientConfig: &tls.Config{CipherSuites: tlsload.AEADSuites, // RFC 9325 4.2
+				VerifyConnection: func(cs tls.ConnectionState) error { // RFC 9325 7.5
+					if len(cs.VerifiedChains) == 0 {
+						return nil
+					}
+					return revocation.Default.Check(cs.VerifiedChains[0])
+				}}},
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse // the 3xx is then rejected as a non-200 status
 		},
