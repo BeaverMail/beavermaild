@@ -3,6 +3,7 @@ package mail
 
 import (
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -42,6 +43,10 @@ func BuildDSN(opts DSNBuildOpts) []byte {
 	opts.ReturnPath, opts.FinalRcpt = dsnText(opts.ReturnPath), dsnText(opts.FinalRcpt)
 	opts.Orcpt, opts.Envid = dsnText(opts.Orcpt), dsnText(opts.Envid)
 	opts.Status, opts.Diagnostic = dsnText(opts.Status), dsnText(opts.Diagnostic)
+	// RFC 6533: the notification of an internationalized message (UTF-8 addresses or header
+	// fields) uses the message/global* types.
+	global := !printableASCII(opts.ReturnPath) || !printableASCII(opts.FinalRcpt) ||
+		!printableASCII(OrcptText(opts.Orcpt, true)) || Has8BitHeaders(opts.OriginalRaw)
 	boundary := dsnBoundary()
 	subjectAction := dsnSubjectAction(opts.Action)
 	human := dsnHumanText(opts)
@@ -78,14 +83,30 @@ func BuildDSN(opts DSNBuildOpts) []byte {
 
 	b.WriteString("--")
 	b.WriteString(boundary)
-	b.WriteString("\r\nContent-Type: message/delivery-status\r\n\r\n")
-	b.WriteString(dsnStatusPart(opts, host))
+	status := dsnStatusPart(opts, host, global)
+	switch {
+	case global && Has8Bit([]byte(status)):
+		b.WriteString("\r\nContent-Type: message/global-delivery-status\r\nContent-Transfer-Encoding: 8bit\r\n\r\n")
+	case global:
+		b.WriteString("\r\nContent-Type: message/global-delivery-status\r\n\r\n")
+	default:
+		b.WriteString("\r\nContent-Type: message/delivery-status\r\n\r\n")
+	}
+	b.WriteString(status)
 	b.WriteString("\r\n")
 
 	if part, headersOnly := dsnReturnPart(opts); len(part) > 0 {
 		b.WriteString("--")
 		b.WriteString(boundary)
-		if headersOnly {
+		if global {
+			// RFC 6533 4.2, 4.3. base64 (4.5): the return path's next hop may lack SMTPUTF8.
+			typ := "message/global"
+			if headersOnly {
+				typ = "message/global-headers"
+			}
+			b.WriteString("\r\nContent-Type: " + typ + "\r\nContent-Transfer-Encoding: base64\r\n\r\n")
+			part = base64Lines(CRLF(part))
+		} else if headersOnly {
 			b.WriteString("\r\nContent-Type: text/rfc822-headers\r\n\r\n") // RFC 6522 4
 		} else {
 			b.WriteString("\r\nContent-Type: message/rfc822\r\n\r\n")
@@ -145,7 +166,7 @@ func dsnHumanText(opts DSNBuildOpts) string {
 	}
 }
 
-func dsnStatusPart(opts DSNBuildOpts, host string) string {
+func dsnStatusPart(opts DSNBuildOpts, host string, global bool) string {
 	var b strings.Builder
 	// RFC 3461 6.3 (b): "dns" with the fully-qualified name, another type when it is not one.
 	if strings.Contains(host, ".") {
@@ -162,10 +183,14 @@ func dsnStatusPart(opts DSNBuildOpts, host string) string {
 	}
 	if opts.Orcpt != "" {
 		b.WriteString("Original-Recipient: ")
-		b.WriteString(dsnText(OrcptText(opts.Orcpt)))
+		b.WriteString(dsnText(OrcptText(opts.Orcpt, global)))
 		b.WriteString("\r\n")
 	}
-	b.WriteString("Final-Recipient: rfc822; ")
+	if printableASCII(opts.FinalRcpt) {
+		b.WriteString("Final-Recipient: rfc822; ")
+	} else {
+		b.WriteString("Final-Recipient: utf-8; ") // RFC 6533 3: utf-8-address form in a global status
+	}
 	b.WriteString(opts.FinalRcpt)
 	b.WriteString("\r\n")
 	b.WriteString("Action: ")
@@ -250,6 +275,9 @@ func SMTPStatusFromError(err error) string {
 	if errors.Is(err, ErrNeeds7Bit) {
 		return "5.6.3" // conversion required and not possible (RFC 3463)
 	}
+	if errors.Is(err, ErrNeedsSMTPUTF8) {
+		return "5.6.7" // non-ASCII addresses not permitted (RFC 6531 4.2)
+	}
 	type coded interface {
 		error
 		Permanent() bool
@@ -264,4 +292,16 @@ func SMTPStatusFromError(err error) string {
 		}
 	}
 	return "5.0.0"
+}
+
+// base64Lines is b in base64, in lines of 76 characters (RFC 2045 6.8).
+func base64Lines(b []byte) []byte {
+	enc := base64.StdEncoding.EncodeToString(b)
+	var out strings.Builder
+	for len(enc) > 76 {
+		out.WriteString(enc[:76] + "\r\n")
+		enc = enc[76:]
+	}
+	out.WriteString(enc + "\r\n")
+	return []byte(out.String())
 }

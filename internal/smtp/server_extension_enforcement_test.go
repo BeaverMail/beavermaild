@@ -104,7 +104,7 @@ func TestSMTPUTF8RequiresKeyword(t *testing.T) {
 	send(t, conn, "EHLO test")
 	skipEHLO(t, read)
 	send(t, conn, "MAIL FROM:<üser@example.com>")
-	expect(t, read, "553 5.6.7")
+	expect(t, read, "550 5.6.7") // RFC 6531 3.5: 550 on MAIL, 553 on RCPT
 }
 
 func TestSMTPUTF8AcceptsWithKeyword(t *testing.T) {

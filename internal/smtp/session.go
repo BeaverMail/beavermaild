@@ -372,7 +372,7 @@ func (s *session) handleMail(ctx context.Context, arg string) (blockMail bool, e
 		return true, s.writef(replySyntaxMail)
 	}
 	if addressNeedsUTF8(addr) && !mailParams.SMTPUTF8 {
-		return true, s.writef(replyUTF8Required)
+		return true, s.writef(replyUTF8RequiredMail)
 	}
 	if declaredSize > s.dataLimits.MaxMessageBytes {
 		return true, s.writef(replyMessageTooLarge)
@@ -428,6 +428,10 @@ func (s *session) handleRcpt(ctx context.Context, arg string, mailBlocked bool) 
 	}
 	if s.txnRcpts >= MaxRecipients {
 		return s.writef(replyTooManyRcpts) // RFC 5321 4.5.3.1.10
+	}
+	// RFC 6531 3.3: UTF-8 in a parameter value (a "utf-8" ORCPT, RFC 6533 3) only with SMTPUTF8.
+	if addressNeedsUTF8(rcptParams.Orcpt) && !s.mailUTF8 {
+		return s.writef(replySyntaxRcpt)
 	}
 	// RFC 5321 4.5.1: "RCPT TO:<Postmaster>" with no domain MUST be accepted.
 	if strings.EqualFold(addr, directory.PostmasterLocalPart) && !s.submission {

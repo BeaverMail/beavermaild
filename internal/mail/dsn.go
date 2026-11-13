@@ -2,7 +2,10 @@
 package mail
 
 import (
+	"fmt"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/BeaverMail/beavermaild/internal/storage"
 )
@@ -262,14 +265,96 @@ func ValidOrcpt(v string) bool {
 			return false
 		}
 	}
+	if strings.EqualFold(typ, "utf-8") {
+		_, ok := DecodeUTF8Addr(addr)
+		return ok
+	}
 	d, ok := DecodeXtext(addr)
 	return ok && printableASCII(d)
 }
 
-// OrcptText is the Original-Recipient field value for an ORCPT parameter: its addr-type and the
-// decoded address (RFC 3461 6.3 (d)).
-func OrcptText(v string) string {
+// DecodeUTF8Addr decodes the address of a "utf-8" ORCPT (RFC 6533 3): QCHAR, "\x{HEX}" escapes and,
+// in an SMTPUTF8 transaction, UTF-8 characters. The result must be a mailbox, so an escape or a
+// character that is a control (C0, DEL, C1) or not a scalar value is refused: decoded, it would
+// break the Original-Recipient line of the notification.
+func DecodeUTF8Addr(s string) (string, bool) {
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		c := s[i]
+		switch {
+		case c == '\\':
+			rest, ok := strings.CutPrefix(s[i:], "\\x{")
+			end := strings.IndexByte(rest, '}')
+			if !ok || end < 2 || end > 6 {
+				return "", false
+			}
+			n, err := strconv.ParseUint(rest[:end], 16, 32)
+			if err != nil || !utf8.ValidRune(rune(n)) || isControl(rune(n)) {
+				return "", false
+			}
+			b.WriteRune(rune(n))
+			i += len("\\x{") + end + 1
+		case c >= 0x80:
+			r, size := utf8.DecodeRuneInString(s[i:])
+			if r == utf8.RuneError || isControl(r) {
+				return "", false
+			}
+			b.WriteString(s[i : i+size])
+			i += size
+		case c <= ' ' || c == '+' || c == '=' || c == 0x7f: // QCHAR excludes CTLs, SP, "+", "="
+			return "", false
+		default:
+			b.WriteByte(c)
+			i++
+		}
+	}
+	return b.String(), b.Len() > 0
+}
+
+func isControl(r rune) bool { return r < 0x20 || r >= 0x7f && r <= 0x9f }
+
+// EncodeUTF8Addr is the 7-bit utf-8-addr-xtext form of a decoded address: every character outside
+// QCHAR as "\x{HEX}" (RFC 6533 3), for a server without SMTPUTF8 or a message/delivery-status.
+func EncodeUTF8Addr(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r > ' ' && r < 0x7f && r != '+' && r != '=' && r != '\\' {
+			b.WriteRune(r)
+		} else {
+			fmt.Fprintf(&b, "\\x{%02X}", r)
+		}
+	}
+	return b.String()
+}
+
+// OrcptASCII is v with a "utf-8" address in its 7-bit form, for a transaction without SMTPUTF8
+// (RFC 6533 3: "the EmbeddedUnicodeChar syntax MUST be used instead of UTF-8").
+func OrcptASCII(v string) string {
 	typ, addr, _ := strings.Cut(v, ";")
+	if !strings.EqualFold(typ, "utf-8") || printableASCII(addr) {
+		return v
+	}
+	if d, ok := DecodeUTF8Addr(addr); ok {
+		return typ + ";" + EncodeUTF8Addr(d)
+	}
+	return v
+}
+
+// OrcptText is the Original-Recipient field value for an ORCPT parameter: its addr-type and the
+// decoded address (RFC 3461 6.3 (d)). A "utf-8" address is decoded to UTF-8 in a
+// message/global-delivery-status (global) and kept 7-bit otherwise (RFC 6533 3, 4.1).
+func OrcptText(v string, global bool) string {
+	typ, addr, _ := strings.Cut(v, ";")
+	if strings.EqualFold(typ, "utf-8") {
+		d, ok := DecodeUTF8Addr(addr)
+		if !ok {
+			return v // RFC 6533 3: not utf-8 syntax, copied without alteration
+		}
+		if global {
+			return typ + ";" + d
+		}
+		return typ + ";" + EncodeUTF8Addr(d)
+	}
 	d, ok := DecodeXtext(addr)
 	if !ok {
 		d = addr

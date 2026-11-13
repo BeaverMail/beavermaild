@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BeaverMail/beavermaild/internal/dnsname"
 	"github.com/BeaverMail/beavermaild/internal/mail"
 	"github.com/BeaverMail/beavermaild/internal/security"
 )
@@ -110,6 +111,10 @@ func SendReply(ctx context.Context, addr, mailFrom, rcptTo string, data []byte, 
 	}
 	// BDAT sends bytes verbatim and SIZE counts them: both need the CRLF wire form.
 	data = mail.CRLF(data)
+	// RFC 6531 3.2: an A-label domain is not internationalized, so only a UTF-8 local part or UTF-8
+	// header fields need SMTPUTF8.
+	mailFrom, rcptTo = asciiDomain(mailFrom), asciiDomain(rcptTo)
+	needUTF8 := addressNeedsUTF8(mailFrom) || addressNeedsUTF8(rcptTo) || mail.Has8Bit(data) && mail.Has8BitHeaders(data)
 
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -173,12 +178,19 @@ func SendReply(ctx context.Context, addr, mailFrom, rcptTo string, data []byte, 
 	if caps.SizeLimit > 0 && len(data) > caps.SizeLimit {
 		return "", &DeliveryError{Err: fmt.Errorf("smtp client: message of %d octets over the server's SIZE %d", len(data), caps.SizeLimit), Permanent: true}
 	}
+	// RFC 6531 3.2: UTF-8 addresses and header fields never go to a server without SMTPUTF8 (5.6.7).
+	if needUTF8 && !caps.SMTPUTF8 {
+		return "", &DeliveryError{Err: mail.ErrNeedsSMTPUTF8, Permanent: true}
+	}
 	// RFC 6152 3: 8-bit content never goes to a server without 8BITMIME; fail before MAIL (5.6.3).
 	if !caps.EightBitMIME && mail.Has8Bit(data) {
 		return "", &DeliveryError{Err: mail.ErrNeeds7Bit, Permanent: true}
 	}
 	tc.d = clientDataTimeout
 	mailLine := mailFromLine(mailFrom, data, caps, opts.User != "" && opts.Password != "")
+	if needUTF8 {
+		mailLine += " SMTPUTF8" // RFC 6531 3.4: MUST when the envelope or message needs it
+	}
 	rcptLine := fmt.Sprintf("RCPT TO:<%s>", rcptTo)
 	// RFC 3461 5.2.1: to a server with DSN, the parameters received go along unchanged, and only
 	// those received; it reports from there on. Without DSN none is sent (5.2.2 (a)).
@@ -193,7 +205,11 @@ func SendReply(ctx context.Context, addr, mailFrom, rcptTo string, data []byte, 
 			rcptLine += " NOTIFY=" + kw
 		}
 		if d.Orcpt != "" {
-			rcptLine += " ORCPT=" + d.Orcpt
+			orcpt := d.Orcpt
+			if !needUTF8 {
+				orcpt = mail.OrcptASCII(orcpt) // RFC 6533 3: 7-bit form without SMTPUTF8
+			}
+			rcptLine += " ORCPT=" + orcpt
 		}
 		d.Passed = true
 	}
@@ -336,6 +352,7 @@ type clientCaps struct {
 	Chunking     bool
 	Pipelining   bool
 	DSN          bool
+	SMTPUTF8     bool
 	Auth         []string
 }
 
@@ -381,6 +398,8 @@ func readEHLOCaps(r *bufio.Reader) (clientCaps, error) {
 				caps.Pipelining = true
 			case "DSN":
 				caps.DSN = true
+			case "SMTPUTF8":
+				caps.SMTPUTF8 = true
 			case "AUTH":
 				for _, m := range fields[1:] {
 					caps.Auth = append(caps.Auth, strings.ToUpper(m))
@@ -444,4 +463,14 @@ func expectReply(r *bufio.Reader, want int) (string, error) {
 		return "", &ResponseError{Code: code, Line: strings.TrimSpace(line)}
 	}
 	return strings.TrimSpace(line), nil
+}
+
+// asciiDomain writes the domain of an address with an ASCII local part as A-labels, so it needs no
+// SMTPUTF8 (RFC 6531 3.2). A UTF-8 local part keeps the address as it is.
+func asciiDomain(addr string) string {
+	at := strings.LastIndexByte(addr, '@')
+	if at < 0 || addressNeedsUTF8(addr[:at]) || !addressNeedsUTF8(addr[at:]) {
+		return addr
+	}
+	return addr[:at+1] + dnsname.ToASCII(addr[at+1:])
 }

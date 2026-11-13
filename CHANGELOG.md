@@ -176,8 +176,6 @@
   From in that form passed a `p=reject` domain; mail to such domains failed with "no such host".
   Hosted domains are stored as A-labels, and a recipient in either form finds them; domains
   created before this change with a non-ASCII name must be created again.
-- Web UI: internationalized domains and addresses show in Unicode (`bücher.example`), with the
-  A-label form beside domain names; deleting a domain or mailbox accepts either form.
 - SMTPUTF8 (RFC 6531): MAIL with a UTF-8 address and no SMTPUTF8 gets 550 5.6.7 (was 553), and
   the Received field says `with UTF8SMTP*`. The client sends SMTPUTF8 when the envelope or a
   header field at any MIME level needs it, writes a Unicode domain with an ASCII local part as

@@ -29,6 +29,12 @@ func TestReceivedField(t *testing.T) {
 	if got := s.receivedField(now); !strings.Contains(got, "with ESMTPSA id") || strings.Contains(got, "for <") {
 		t.Fatalf("submission hop %q", got)
 	}
+	// SMTPUTF8 transaction -> UTF8SMTPSA (RFC 6531 4.3).
+	s.mailUTF8 = true
+	if got := s.receivedField(now); !strings.Contains(got, "with UTF8SMTPSA id") {
+		t.Fatalf("SMTPUTF8 hop %q", got)
+	}
+	s.mailUTF8 = false
 	s.pipelining = false
 	if got := s.receivedField(now); !strings.Contains(got, "with SMTP id") {
 		t.Fatalf("HELO hop %q", got)

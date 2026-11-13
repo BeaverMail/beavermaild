@@ -29,6 +29,7 @@ const (
 	replyMessageTooLarge     = "552 5.3.4 Message size exceeds fixed maximum message size"
 	replyBinaryNotSupported  = "555 5.6.1 BINARYMIME not supported"
 	replyUTF8Required        = "553 5.6.7 Non-ASCII addresses require SMTPUTF8"
+	replyUTF8RequiredMail    = "550 5.6.7 Non-ASCII addresses require SMTPUTF8" // RFC 6531 3.5: 550 on MAIL, 553 on RCPT
 	replyParamNotSupported   = "555 5.5.4 Extension parameter not supported"
 	replyParamUnknown        = "555 5.5.4 Unrecognized MAIL/RCPT parameter"
 	replySyntaxHelo          = "501 5.5.4 Syntax: EHLO hostname"

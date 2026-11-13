@@ -23,10 +23,14 @@ func (s *session) receivedField(now time.Time) string {
 	if ptr == "" {
 		ptr = "unknown"
 	}
-	// RFC 3848 "with" keywords: SMTP after HELO; ESMTP plus S (TLS) and A (authenticated).
+	// RFC 3848 "with" keywords: SMTP after HELO; ESMTP plus S (TLS) and A (authenticated);
+	// UTF8SMTP for a transaction with the SMTPUTF8 parameter (RFC 6531 3.7.3, 4.3).
 	proto := "SMTP"
 	if s.pipelining {
 		proto = "ESMTP"
+		if s.mailUTF8 {
+			proto = "UTF8SMTP"
+		}
 		if s.secure {
 			proto += "S"
 		}
