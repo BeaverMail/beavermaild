@@ -134,3 +134,24 @@ func normalizeEnvelopeAddress(addr string) string {
 	}
 	return addr[:at+1] + strings.ToLower(addr[at+1:])
 }
+
+// validDomain checks an RFC 5321 4.1.2 Domain in A-label form (DomainFromAddress output): dot-separated
+// sub-domains of letters, digits and inner hyphens (Let-dig [Ldh-str]), labels of at most 63 octets,
+// the whole at most 255 (4.5.3.1.2). A U-label that IDNA rejects stays non-ASCII and fails here.
+func validDomain(d string) bool {
+	if d == "" || len(d) > 255 {
+		return false
+	}
+	for _, label := range strings.Split(d, ".") {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for i := 0; i < len(label); i++ {
+			c := label[i]
+			if !('a' <= c && c <= 'z' || '0' <= c && c <= '9' || c == '-') {
+				return false
+			}
+		}
+	}
+	return true
+}

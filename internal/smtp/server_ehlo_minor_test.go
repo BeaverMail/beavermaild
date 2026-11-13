@@ -313,6 +313,7 @@ func TestSMTPBody8BitMIMEQueued(t *testing.T) {
 	expect(t, read, "250")
 	send(t, conn, "DATA")
 	expect(t, read, "354")
+	send(t, conn, "From: <alice@localhost>")
 	send(t, conn, "Subject: eight")
 	send(t, conn, "")
 	send(t, conn, "café")

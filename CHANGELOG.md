@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- RFC 6409 (submission): recipients with a malformed domain get `501 5.1.3`, single-label domains
+  `554 5.1.2`; a message that is not valid RFC 5322 (no or several `From`, repeated single fields,
+  several `From` mailboxes without `Sender`, unparsable or unqualified addresses) is refused with
+  `554 5.6.0` and the reason, instead of leaving the server broken. An unauthorized `MAIL FROM` now
+  gets `550 5.7.1` (was `553`).
+
 - RFC 8314: `tls.required` now defaults to true, so IMAP refuses LOGIN/AUTHENTICATE before TLS (set it
   false for legacy clients; a warning is logged). `dns-recommended` adds RFC 6186 SRV records for the
   client listeners, Implicit TLS first. The `Received` field of mail taken over TLS carries the

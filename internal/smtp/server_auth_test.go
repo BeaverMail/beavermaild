@@ -79,6 +79,7 @@ func TestSMTPSubmissionTLSAuth(t *testing.T) {
 	expect(t, read, "250")
 	send(t, conn, "DATA")
 	expect(t, read, "354")
+	send(t, conn, "From: <alice@localhost>")
 	send(t, conn, "Subject: auth test")
 	send(t, conn, "")
 	send(t, conn, "body")
@@ -230,7 +231,7 @@ func TestSMTPSubmissionSenderMismatch(t *testing.T) {
 	send(t, conn, "AUTH PLAIN "+plainCred("alice@localhost", directory.SeedPassword()))
 	expect(t, read, "235")
 	send(t, conn, "MAIL FROM:<other@example.com>")
-	expect(t, read, "553")
+	expect(t, read, "550 5.7.1") // RFC 6409 6.1
 }
 
 func TestSMTPSubmissionPlaceholderMailFrom(t *testing.T) {
@@ -286,6 +287,7 @@ func TestSMTPSubmissionPlaceholderMailFrom(t *testing.T) {
 	expect(t, read, "250")
 	send(t, conn, "DATA")
 	expect(t, read, "354")
+	send(t, conn, "From: <alice@localhost>")
 	send(t, conn, "Subject: placeholder from")
 	send(t, conn, "")
 	send(t, conn, "body")

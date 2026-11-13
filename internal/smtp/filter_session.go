@@ -244,6 +244,21 @@ func (s *session) deliverAfterFilter(ctx context.Context, raw []byte) error {
 	}
 	// Before the filter, so it judges the message as it will leave the MSA.
 	if s.submission && s.principal.AccountID != 0 {
+		seen := map[string]bool{} // one lookup per domain, however many addresses the header lists
+		if why := checkSubmissionHeaders(raw, func(d string) bool {
+			if h, ok := seen[d]; ok {
+				return h
+			}
+			_, err := s.dir.LookupDomain(ctx, d)
+			seen[d] = err == nil
+			return seen[d]
+		}); why != "" {
+			if err := s.writef("554 5.6.0 Message rejected: %s", why); err != nil { // RFC 6409 5.1, 8
+				return err
+			}
+			s.reset()
+			return nil
+		}
 		raw = completeSubmission(raw, s.hostname, time.Now())
 	}
 	out, err := s.filterEom(ctx, raw)

@@ -8,12 +8,12 @@ SMTP lines worth grepping (`grep -E 'smtp (reply|accepted|connect)'`):
 
 | Message | Level | Fields | Meaning |
 |---------|-------|--------|---------|
-| `smtp accepted` | info | `ip`, `from`, `rcpts`, `size`, `submission` | Message accepted (stored locally and/or queued) |
-| `smtp reply` | info | `ip`, `cmd`, `from`, `reply`, `submission` | Every `4xx`/`5xx` sent to a client: greylist, unknown user, filter verdict, relay denied, failed AUTH |
+| `smtp accepted` | info | `ip`, `from`, `rcpts`, `size`, `submission`, `tls` | Message accepted (stored locally and/or queued) |
+| `smtp reply` | info | `ip`, `cmd`, `from`, `reply`, `submission`, `tls` | Every `4xx`/`5xx` sent to a client: greylist, unknown user, filter verdict, relay denied, failed AUTH |
 | `smtp connect` | debug | `ip`, `submission` | New connection |
 | `queue rcpt failed` | warn | `queue_id`, `rcpt`, `err` | Outbound attempt failed; retried per `queue.retry_intervals` |
 
-`cmd` keeps the argument only for `MAIL` and `RCPT`; `AUTH` arguments (credentials) are never logged.
+`tls` is the TLS version and cipher suite (`TLS 1.3 TLS_AES_128_GCM_SHA256`) or `none` (RFC 8314 4). `cmd` keeps the argument only for `MAIL` and `RCPT`; `AUTH` arguments (credentials) are never logged.
 
 No `smtp connect` line at all for a sender (with `log_level: debug`) means its mail never reaches Beaver: check DNS MX, firewall, and the sender's bounce.
 
@@ -26,11 +26,11 @@ Every accepted message (inbound and submission) gets this hop on top:
 ```text
 Received: from client.example.org (client.example.org [192.0.2.10])
 	by mx.example.com (BeaverMail) with ESMTPS id 18e0319b67a8bbd0.1defb.3
-	(version=TLS 1.3 cipher=TLS_AES_128_GCM_SHA256)
-	for <user@example.com>; Tue, 20 Oct 2026 12:00:02 +0200
+	for <user@example.com>
+	tls TLS_AES_128_GCM_SHA256 (TLS 1.3); Tue, 20 Oct 2026 12:00:02 +0200
 ```
 
-`with` is `SMTP` (HELO), `ESMTP`, `ESMTPS` (TLS), `ESMTPA`/`ESMTPSA` (authenticated); `id` is the transaction id also used on the filter wire; `for` appears for a single recipient. Copies delivered to a local mailbox also get `Return-Path: <envelope sender>` (any `Return-Path` the message carried is replaced); relayed copies do not. A message already carrying more than 50 `Received` fields is rejected with `554 5.4.6` (mail loop).
+`with` is `SMTP` (HELO), `ESMTP`, `ESMTPS` (TLS), `ESMTPA`/`ESMTPSA` (authenticated); `id` is the transaction id also used on the filter wire; `for` appears for a single recipient; `tls` (RFC 8314 4.3) names the cipher suite when the message came over TLS. Copies delivered to a local mailbox also get `Return-Path: <envelope sender>` (any `Return-Path` the message carried is replaced); relayed copies do not. A message already carrying more than 50 `Received` fields is rejected with `554 5.4.6` (mail loop).
 
 ## Submission header fixes (RFC 6409 §8)
 
@@ -38,6 +38,13 @@ On authenticated submission (`:587`/`:465`) a missing or malformed `Message-ID` 
 replaced (`<random@smtp.hostname>`, §8.3) and a missing or unparsable `Date` is set to the
 current time (§8.2). This runs before the antispam filter, so scripts and minimal clients that
 omit these fields are not scored for it. Other header fields are left as sent.
+
+A submission that is not valid RFC 5322 mail is refused after the data with `554 5.6.0 Message
+rejected: <reason>` (§8, §4.2): no `From` or more than one, a field that may appear once repeated
+(`Date`, `Subject`, `To`, …), several `From` mailboxes without `Sender`, an unparsable address field,
+or an address whose domain is not fully qualified (hosted domains excepted). Recipients get the same
+check in the envelope: a malformed domain gets `501 5.1.3`, a single-label domain `554 5.1.2`. A
+`MAIL FROM` the account may not use gets `550 5.7.1` (§6.1).
 
 ## Queue history
 

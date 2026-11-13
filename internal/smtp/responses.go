@@ -21,10 +21,12 @@ const (
 	replyAuthRequired        = "530 5.7.0 Authentication required"
 	replyTLSRequired         = "530 5.7.0 Must issue a STARTTLS command first"
 	replyTLSRequiredAuth     = "538 5.7.11 Encryption required for authentication"
-	replySenderRejected      = "553 5.7.1 Sender address rejected"
+	replySenderRejected      = "550 5.7.1 Sender address rejected" // RFC 6409 6.1
 	replyRelayDenied         = "554 5.7.1 Relay access denied"
 	replyUserUnknown         = "550 5.1.1 User unknown"
 	replyDomainUnknown       = "550 5.1.2 Mailbox unavailable"
+	replyRcptDomainSyntax    = "501 5.1.3 Bad recipient domain syntax"             // RFC 6409 5.1
+	replyRcptDomainNotFQ     = "554 5.1.2 Recipient domain is not fully qualified" // RFC 6409 4.2
 	replyUserInactive        = "550 5.1.1 User inactive"
 	replyMessageTooLarge     = "552 5.3.4 Message size exceeds fixed maximum message size"
 	replyBinaryNotSupported  = "555 5.6.1 BINARYMIME not supported"

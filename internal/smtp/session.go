@@ -455,6 +455,16 @@ func (s *session) handleRcpt(ctx context.Context, arg string, mailBlocked bool) 
 			if !s.submission {
 				return s.writef(replyRelayDenied)
 			}
+			// RFC 6409 4.2 MUST, 5.1: a submission leaves only with fully qualified, well-formed domains
+			// (an address literal is not a domain and keeps its own handling).
+			if !strings.HasPrefix(domName, "[") {
+				if !validDomain(domName) {
+					return s.writef(replyRcptDomainSyntax)
+				}
+				if !strings.Contains(domName, ".") {
+					return s.writef(replyRcptDomainNotFQ)
+				}
+			}
 			if s.queue == nil {
 				return s.writef(replyDomainUnknown)
 			}
