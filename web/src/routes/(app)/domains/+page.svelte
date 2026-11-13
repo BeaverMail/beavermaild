@@ -13,6 +13,7 @@
     } from "$lib/api";
     import { me } from "$lib/session";
     import ConfirmDialog from "$lib/ConfirmDialog.svelte";
+    import { displayDomain } from "$lib/idn";
 
     let domains = $state<Domain[]>([]);
     let tenants = $state<Tenant[]>([]);
@@ -234,8 +235,11 @@
                         <td class="px-4 py-3">
                             <a
                                 class="font-medium text-brand-700 hover:underline"
-                                href="/domains/{d.name}">{d.name}</a
+                                href="/domains/{d.name}">{displayDomain(d.name)}</a
                             >
+                            {#if displayDomain(d.name) !== d.name}
+                                <span class="ml-1 inline-block whitespace-nowrap font-mono text-xs text-gray-500">{d.name}</span>
+                            {/if}
                         </td>
                         <td class="px-4 py-3 text-gray-700">{d.account_count ?? 0}</td>
                         <td class="px-4 py-3 text-gray-600">{formatBytes(d.storage_used ?? 0)}</td>
@@ -589,14 +593,15 @@
         title="Delete domain"
         confirmLabel="Delete domain"
         danger
-        requireText={deleteTarget.name}
+        requireText={displayDomain(deleteTarget.name)}
+        altText={displayDomain(deleteTarget.name) !== deleteTarget.name ? deleteTarget.name : ""}
         busy={deleteBusy}
         error={deleteError}
         onconfirm={confirmDelete}
         oncancel={() => (deleteTarget = null)}
     >
         <p>
-            This permanently deletes <span class="font-medium">{deleteTarget.name}</span>, its
+            This permanently deletes <span class="font-medium">{displayDomain(deleteTarget.name)}</span>, its
             <span class="font-medium">{deleteTarget.account_count ?? 0} accounts</span> and all their mail.
         </p>
         <p class="text-red-700">This cannot be undone.</p>

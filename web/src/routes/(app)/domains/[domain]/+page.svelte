@@ -1,6 +1,7 @@
 <script lang="ts">
     import { AtSign, KeyRound, MoreHorizontal, Pencil, Plus, Trash2, Users, X } from "@lucide/svelte";
     import ConfirmDialog from "$lib/ConfirmDialog.svelte";
+    import { displayDomain, displayEmail } from "$lib/idn";
     import { page } from "$app/state";
     import {
         type Alias,
@@ -425,9 +426,12 @@
 </script>
 
 <div class="mb-6 flex flex-wrap items-center justify-between gap-3">
-    <div class="flex items-center gap-2">
+    <div class="flex flex-wrap items-center gap-x-2">
         <Users class="size-5 text-gray-700" />
-        <h1 class="text-xl font-semibold text-gray-900">Accounts · {domain}</h1>
+        <h1 class="text-xl font-semibold text-gray-900">Accounts · {displayDomain(domain)}</h1>
+        {#if displayDomain(domain) !== domain}
+            <span class="whitespace-nowrap font-mono text-xs text-gray-500">{domain}</span>
+        {/if}
     </div>
     {#if canWrite && domainInfo}
         <button
@@ -460,7 +464,7 @@
         >
         {#if domainInfo.catch_all}
             <span class="rounded bg-gray-100 px-2 py-1 text-gray-700"
-                >catch-all: {domainInfo.catch_all}@{domain}</span
+                >catch-all: {domainInfo.catch_all}@{displayDomain(domain)}</span
             >
         {/if}
         {#if domainInfo.dkim_dns_name && domainInfo.dkim_dns_value}
@@ -549,7 +553,7 @@
                 {#each accounts as a (a.id)}
                     {@const ratio = usageRatio(a)}
                     <tr class="hover:bg-gray-50">
-                        <td class="px-4 py-3 font-medium text-gray-900">{a.email}</td>
+                        <td class="px-4 py-3 font-medium text-gray-900" title={a.email}>{displayEmail(a.email)}</td>
                         <td class="px-4 py-3 text-gray-600">
                             {#if canWrite}
                                 <select
@@ -673,7 +677,7 @@
                     placeholder="info"
                     class="w-32 rounded-lg border-gray-200 px-3 py-2 text-sm focus:border-brand-600 focus:ring-brand-600/30"
                 />
-                @{domain}
+                @{displayDomain(domain)}
             </div>
         </div>
         <div class="min-w-64 flex-1">
@@ -685,7 +689,7 @@
                 required
                 list="alias-target-options"
                 bind:value={aliasTargets}
-                placeholder="alice@{domain}, bob@{domain}"
+                placeholder="alice@{displayDomain(domain)}, bob@{displayDomain(domain)}"
                 class="block w-full rounded-lg border-gray-200 px-3 py-2 text-sm focus:border-brand-600 focus:ring-brand-600/30"
             />
             <datalist id="alias-target-options">
@@ -721,7 +725,7 @@
                 <tbody class="divide-y divide-gray-100">
                     {#each aliases as al (al.email)}
                         <tr class="hover:bg-gray-50">
-                            <td class="px-4 py-3 font-medium text-gray-900">{al.email}</td>
+                            <td class="px-4 py-3 font-medium text-gray-900" title={al.email}>{displayEmail(al.email)}</td>
                             <td class="px-4 py-3 text-gray-600">
                                 {#if aliasEditFor === al.email}
                                     <form class="flex flex-wrap items-center gap-2" onsubmit={saveEditAlias}>
@@ -839,7 +843,7 @@
         >
             <div class="flex items-center justify-between border-b border-gray-100 px-5 py-4">
                 <h2 id="edit-domain-title" class="text-lg font-semibold text-gray-900">
-                    Edit {domain}
+                    Edit {displayDomain(domain)}
                 </h2>
                 <button
                     type="button"
@@ -1118,14 +1122,15 @@
         title="Delete mailbox"
         confirmLabel="Delete mailbox"
         danger
-        requireText={deleteTarget.email}
+        requireText={displayEmail(deleteTarget.email)}
+        altText={displayEmail(deleteTarget.email) !== deleteTarget.email ? deleteTarget.email : ""}
         busy={deleteBusy}
         error={deleteError}
         onconfirm={confirmDelete}
         oncancel={() => (deleteTarget = null)}
     >
         <p>
-            This permanently deletes <span class="font-medium">{deleteTarget.email}</span> and all its mail:
+            This permanently deletes <span class="font-medium">{displayEmail(deleteTarget.email)}</span> and all its mail:
             <span class="font-medium">{deleteTarget.messages_used.toLocaleString()} messages</span>,
             <span class="font-medium">{formatBytes(deleteTarget.storage_used)}</span>.
         </p>

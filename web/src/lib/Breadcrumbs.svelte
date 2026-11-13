@@ -2,6 +2,7 @@
 <script lang="ts">
 import { ChevronRight } from '@lucide/svelte'
 import { page } from '$app/state'
+import { displayDomain } from '$lib/idn'
 
 type Crumb = { label: string; href?: string }
 
@@ -22,7 +23,7 @@ const crumbs = $derived.by((): Crumb[] => {
   for (let i = 0; i < parts.length; i++) {
     const seg = parts[i]
     path += `/${seg}`
-    const label = segmentLabel[seg] ?? decodeURIComponent(seg)
+    const label = segmentLabel[seg] ?? displayDomain(decodeURIComponent(seg))
     const last = i === parts.length - 1
     out.push(last ? { label } : { label, href: path })
   }

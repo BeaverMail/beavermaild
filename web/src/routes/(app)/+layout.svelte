@@ -6,6 +6,7 @@ import { page } from '$app/state'
 import { ApiError, fetchMe, logout } from '$lib/api'
 import logo from '$lib/assets/beavermail.svg'
 import Breadcrumbs from '$lib/Breadcrumbs.svelte'
+import { displayEmail } from '$lib/idn'
 import { me } from '$lib/session'
 
 let { children } = $props()
@@ -55,7 +56,7 @@ function navClass(href: string) {
             <p class="text-sm font-semibold text-gray-900">BeaverMail</p>
           </div>
           {#if $me}
-            <p class="mt-1 truncate text-xs text-gray-500">{$me.email}</p>
+            <p class="mt-1 truncate text-xs text-gray-500">{displayEmail($me.email)}</p>
             <p class="text-xs text-gray-400">{$me.role}</p>
           {/if}
         </div>

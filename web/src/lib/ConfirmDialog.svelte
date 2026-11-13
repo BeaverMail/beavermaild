@@ -9,6 +9,8 @@ type Props = {
   danger?: boolean
   /** When set, the user must type this exact text before confirming. */
   requireText?: string
+  /** Another form of requireText that is accepted too (the A-label form of a domain). */
+  altText?: string
   busy?: boolean
   error?: string
   onconfirm: () => void
@@ -21,6 +23,7 @@ let {
   confirmLabel = 'Confirm',
   danger = false,
   requireText = '',
+  altText = '',
   busy = false,
   error = '',
   onconfirm,
@@ -31,7 +34,7 @@ let {
 let typed = $state('')
 let input = $state<HTMLInputElement | null>(null)
 let confirmButton = $state<HTMLButtonElement | null>(null)
-const ready = $derived(!busy && (requireText === '' || typed === requireText))
+const ready = $derived(!busy && (requireText === '' || typed === requireText || (altText !== '' && typed === altText)))
 
 // Focus the field to type into, or the confirm button, when the dialog opens.
 $effect(() => {
@@ -83,7 +86,11 @@ function cancel() {
       {#if requireText}
         <label class="block text-sm">
           <span class="mb-1 block text-gray-600">
-            Type <span class="font-mono font-medium text-gray-900">{requireText}</span> to confirm
+            Type <span class="font-mono font-medium text-gray-900">{requireText}</span>
+            {#if altText}
+              or <span class="font-mono font-medium text-gray-900">{altText}</span>
+            {/if}
+            to confirm
           </span>
           <input
             bind:this={input}
