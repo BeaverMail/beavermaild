@@ -151,7 +151,12 @@ type SMTPConfig struct {
 	VRFYEnabled         bool                      `json:"vrfy_enabled"` // off by default (RFC 5321: user enumeration risk)
 	SubmissionRateLimit SubmissionRateLimitConfig `json:"submission_rate_limit"`
 	MaxConnections      int                       `json:"max_connections"` // default 200; -1 = unlimited
-	ReadTimeout         string                    `json:"read_timeout"`    // default 5m; "0" = disabled
+	// MaxConnectionsPerIP caps concurrent port 25 sessions of one IPv4 address or IPv6 /64: default
+	// 20, the most a Postfix client opens to one destination (default_destination_concurrency_limit),
+	// so ordinary senders never hit it while 10 addresses are needed to fill max_connections;
+	// -1 = unlimited.
+	MaxConnectionsPerIP int    `json:"max_connections_per_ip"`
+	ReadTimeout         string `json:"read_timeout"` // default 5m; "0" = disabled
 }
 
 // SubmissionRateLimitConfig limits accepted messages per authenticated principal.
@@ -350,6 +355,9 @@ func (c *Config) Validate() error {
 	}
 	if c.SMTP.MaxConnections == 0 {
 		c.SMTP.MaxConnections = 200
+	}
+	if c.SMTP.MaxConnectionsPerIP == 0 {
+		c.SMTP.MaxConnectionsPerIP = 20
 	}
 	if c.SMTP.ReadTimeout == "" {
 		c.SMTP.ReadTimeout = "5m"

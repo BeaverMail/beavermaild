@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Port 25 limits against DNS-work floods: at most 20 concurrent sessions per IPv4 address or IPv6 /64
+  (`smtp.max_connections_per_ip`), 1000 MAIL commands per session and 10 that deliver nothing, then
+  `421 4.7.0`; null MX answers are cached for an hour. Loopback is exempt from the per-address cap.
+  **Upgrade note:** behind a remote TCP proxy or load balancer all port 25 clients share the proxy's
+  address, so set `smtp.max_connections_per_ip: -1` there.
+- RFC 7505 (null MX): the DSN for a domain with a null MX says `5.1.10` (was `5.0.0`), and DSNs carry
+  the remote server's enhanced status code instead of `5.0.0`. On port 25, a `MAIL FROM` whose domain
+  publishes a null MX is refused with `550 5.7.27`.
+
 - Revocation (RFC 9325 7.5): certificates verified by our TLS clients (relay, MTA-STS, `tls_policy`
   verify/secure, policy fetch) are checked against their CA's CRL, cached until its next update; a
   revoked certificate fails the connection, an unreachable or invalid CRL is ignored (soft-fail).

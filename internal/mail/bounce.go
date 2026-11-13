@@ -278,6 +278,14 @@ func SMTPStatusFromError(err error) string {
 	if errors.Is(err, ErrNeedsSMTPUTF8) {
 		return "5.6.7" // non-ASCII addresses not permitted (RFC 6531 4.2)
 	}
+	// The precise code when the error carries one: a remote reply's enhanced code (550 5.1.1), or
+	// 5.1.10 for a null MX (RFC 7505). RFC 3464 2.3.4: Status is the RFC 3463 code of the outcome.
+	var enhanced interface{ EnhancedStatus() string }
+	if errors.As(err, &enhanced) {
+		if s := enhanced.EnhancedStatus(); s != "" {
+			return s
+		}
+	}
 	type coded interface {
 		error
 		Permanent() bool

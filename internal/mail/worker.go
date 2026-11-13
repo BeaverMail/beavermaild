@@ -340,15 +340,24 @@ func dsnStatusFor(action DSNAction, err error) string {
 		return "2.0.0"
 	case DSNActionDelayed:
 		if err != nil {
-			return SMTPStatusFromError(err)
+			return withClass('4', SMTPStatusFromError(err))
 		}
 		return "4.0.0"
 	default:
 		if err != nil {
-			return SMTPStatusFromError(err)
+			return withClass('5', SMTPStatusFromError(err))
 		}
 		return "5.0.0"
 	}
+}
+
+// withClass keeps the subject and detail of status but gives it the class of the action (RFC 3463 2:
+// 4 for a delay, 5 for a failure): a 4xx reply that ends in a failure at expiry is a failure.
+func withClass(class byte, status string) string {
+	if status == "" || status[0] == class {
+		return status
+	}
+	return string(class) + status[1:]
 }
 
 func (w *Worker) returnPathLocal(ctx context.Context, returnPath string) bool {

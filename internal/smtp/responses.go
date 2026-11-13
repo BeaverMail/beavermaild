@@ -25,6 +25,7 @@ const (
 	replyRelayDenied         = "554 5.7.1 Relay access denied"
 	replyUserUnknown         = "550 5.1.1 User unknown"
 	replyDomainUnknown       = "550 5.1.2 Mailbox unavailable"
+	replySenderNullMX        = "550 5.7.27 Sender address has null MX"             // RFC 7505 4.1
 	replyRcptDomainSyntax    = "501 5.1.3 Bad recipient domain syntax"             // RFC 6409 5.1
 	replyRcptDomainNotFQ     = "554 5.1.2 Recipient domain is not fully qualified" // RFC 6409 4.2
 	replyUserInactive        = "550 5.1.1 User inactive"
@@ -43,6 +44,8 @@ const (
 	replyTooManyRcpts        = "452 4.5.3 Too many recipients"
 	replyTooManyBadRcpts     = "421 4.7.0 Too many invalid recipients, closing connection"
 	replyTooManyUnknown      = "421 4.7.0 Too many unrecognized commands, closing connection"
+	replyTooManyMail         = "421 4.7.0 Too many transactions, closing connection"
+	replyTooManyFromIP       = "421 4.7.0 Too many connections from your address"
 	replyLocalError          = "451 4.3.0 Local error in processing"
 	replyOutboundUnavailable = "451 4.3.0 Outbound delivery unavailable"
 	replySendRateLimited     = "452 4.7.0 Message rate limit exceeded, try again later"
@@ -60,4 +63,11 @@ const (
 	MaxBadRecipients = 10
 	// MaxUnknownCommands unrecognized commands in a session end it.
 	MaxUnknownCommands = 10
+	// MaxMailPerSession MAIL commands end an inbound session: every MAIL costs DNS work (SPF, null
+	// MX) chosen by the sender. 1000 as Exim's smtp_accept_max_per_connection; a Postfix client
+	// reuses a connection with no count limit (300 s), so a lower cap would only make it reconnect.
+	MaxMailPerSession = 1000
+	// MaxIdleMail MAIL commands that led to no accepted message end an inbound session: a loop of
+	// MAIL/RSET with throwaway sender domains only makes us query the DNS.
+	MaxIdleMail = 10
 )

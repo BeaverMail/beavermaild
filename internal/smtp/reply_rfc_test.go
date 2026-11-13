@@ -1,7 +1,9 @@
 package smtp
 
 import (
+	"context"
 	"fmt"
+	"net"
 	"os"
 	"regexp"
 	"strings"
@@ -11,7 +13,21 @@ import (
 
 // Every reply the server writes in any test of this package is checked against the RFC grammar, so a
 // test that only looks at the reply code still catches a malformed reply.
+//
+// MX lookups never reach the DNS: no domain has MX records, except nullmx.test and its subdomains,
+// which publish a null MX (RFC 7505). Real answers made tests depend on the network (example.com has
+// a null MX). mxLookups counts the queries per name.
 func TestMain(m *testing.M) {
+	lookupMX = func(_ context.Context, name string) ([]*net.MX, error) {
+		name = strings.TrimSuffix(strings.ToLower(name), ".")
+		mxLookupsMu.Lock()
+		mxLookups[name]++
+		mxLookupsMu.Unlock()
+		if name == "nullmx.test" || strings.HasSuffix(name, ".nullmx.test") {
+			return []*net.MX{{Host: ".", Pref: 0}}, nil
+		}
+		return nil, &net.DNSError{Err: "no such host", Name: name, IsNotFound: true}
+	}
 	var mu sync.Mutex
 	var bad []string
 	replyHook = func(cmd, reply string) {
@@ -28,6 +44,11 @@ func TestMain(m *testing.M) {
 	}
 	os.Exit(code)
 }
+
+var (
+	mxLookupsMu sync.Mutex
+	mxLookups   = map[string]int{}
+)
 
 var (
 	// RFC 5321 4.2: Reply-code = %x32-35 %x30-35 %x30-39; textstring = 1*(%d09 / %d32-126).

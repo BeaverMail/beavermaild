@@ -269,9 +269,11 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 			ASNLookup:       asnLookup,
 			SendGate:        sendGate,
 			MaxConnections:  smtpMaxConn,
-			ReadTimeout:     smtpReadTO,
-			Status:          status,
-			Hostname:        cfg.SMTPHostname(),
+			// -1 (unlimited) becomes a nil limiter.
+			MaxConnectionsPerIP: cfg.SMTP.MaxConnectionsPerIP,
+			ReadTimeout:         smtpReadTO,
+			Status:              status,
+			Hostname:            cfg.SMTPHostname(),
 			// Validated at config load.
 			RequireSTARTTLSFrom: requireTLSFrom,
 		}),

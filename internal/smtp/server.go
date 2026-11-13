@@ -36,6 +36,9 @@ type Options struct {
 	ReadTimeout     time.Duration // 0 = no idle read deadline
 	Status          *servicestatus.Registry
 	Hostname        string // banner and EHLO name (default "localhost")
+	// MaxConnectionsPerIP caps concurrent inbound (port 25) sessions of one client network, IPv4
+	// address or IPv6 /64 (0 = unlimited): one address must not take every slot of MaxConnections.
+	MaxConnectionsPerIP int
 	// RequireSTARTTLSFrom lists client networks that must STARTTLS before mail on the inbound listener
 	// (RFC 3207 6 MUST be configurable; never every client: a public MX MUST NOT require it, 4).
 	RequireSTARTTLSFrom []netip.Prefix
@@ -67,6 +70,7 @@ type Server struct {
 	hostname            string
 	sessions            connset.Set
 	requireTLSFrom      []netip.Prefix
+	perIP               *security.IPLimiter // inbound only; submission is authenticated
 }
 
 // NewServer returns an SMTP server. submissionAddr is optional plain listener (e.g. :587).
@@ -104,6 +108,7 @@ func NewServer(log *slog.Logger, addr string, dir *directory.Local, inbox *mail.
 		status:              opts.Status,
 		hostname:            opts.Hostname,
 		requireTLSFrom:      opts.RequireSTARTTLSFrom,
+		perIP:               security.NewIPLimiter(opts.MaxConnectionsPerIP),
 	}
 }
 
@@ -239,6 +244,18 @@ const drainTimeout = 5 * time.Second
 
 func (s *Server) serveConn(ctx context.Context, conn net.Conn, secure, submission bool, lim *security.ConnLimiter) {
 	defer lim.Release()
+	// Loopback is exempt: a local proxy or a filter reinjecting mail is no attacker, and behind a local
+	// proxy every client would share one address. A remote proxy needs max_connections_per_ip -1
+	// (no PROXY protocol support).
+	if ip := security.ClientIP(conn); !submission && !isLoopbackIP(ip) {
+		release, ok := s.perIP.Acquire(ip)
+		if !ok {
+			_, _ = conn.Write([]byte(replyTooManyFromIP + "\r\n"))
+			_ = conn.Close()
+			return
+		}
+		defer release()
+	}
 	sess := newSession(s.log, conn, s.dir, s.inbox, s.queue, s.certs, secure, s.vrfyEnabled, submission, s.dataLimits, s.filter, s.filterTmpDir, s.filterTimeoutMs, s.mailAuth, s.authGate, s.sendGate, s.greylist, s.asnLookup, s.readTimeout)
 	// Close the session's current conn: after STARTTLS it is the TLS conn, whose Close sends
 	// close_notify (closing only the raw TCP conn makes peers log "TLS not properly terminated").
@@ -281,4 +298,9 @@ func (s *Server) mustSTARTTLS(addr net.Addr) bool {
 // CertsConfigured reports whether STARTTLS may be offered.
 func (s *Server) CertsConfigured() bool {
 	return s.certs != nil && s.certs.Config() != nil
+}
+
+func isLoopbackIP(ip string) bool {
+	a, err := netip.ParseAddr(ip)
+	return err == nil && a.Unmap().IsLoopback()
 }

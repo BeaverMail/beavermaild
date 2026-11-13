@@ -32,6 +32,31 @@ Received: from client.example.org (client.example.org [192.0.2.10])
 
 `with` is `SMTP` (HELO), `ESMTP`, `ESMTPS` (TLS), `ESMTPA`/`ESMTPSA` (authenticated); `id` is the transaction id also used on the filter wire; `for` appears for a single recipient; `tls` (RFC 8314 4.3) names the cipher suite when the message came over TLS. Copies delivered to a local mailbox also get `Return-Path: <envelope sender>` (any `Return-Path` the message carried is replaced); relayed copies do not. A message already carrying more than 50 `Received` fields is rejected with `554 5.4.6` (mail loop).
 
+## Connection and session limits (SMTP)
+
+| Setting / limit | Default | Effect |
+|---|---|---|
+| `smtp.max_connections` | 200 per listener (`-1` unlimited) | further connections get `421 4.7.0 Too many connections` |
+| `smtp.max_connections_per_ip` | 20 (`-1` unlimited) | port 25 only: concurrent sessions of one IPv4 address or IPv6 /64; more get `421 4.7.0 Too many connections from your address`. Loopback is exempt. **Behind a remote TCP proxy or load balancer** every client has the proxy's address (no PROXY protocol support): set `-1` there |
+| MAIL commands per inbound session | 1000 | then `421 4.7.0 Too many transactions` and the session ends |
+| MAIL commands that delivered nothing | 10 | same: a MAIL/RSET loop with throwaway sender domains only makes the server query the DNS |
+| unknown recipients (when they outnumber good ones) | 10 | `421 4.7.0 Too many invalid recipients` (address harvesting) |
+| unrecognized commands | 10 | `421 4.7.0 Too many unrecognized commands` |
+
+Each inbound `MAIL FROM` costs DNS work chosen by the sender (SPF, null MX check, 5 s timeout each);
+the limits above bound it per connection and per address. Null MX answers are cached for an hour;
+only well-formed sender domains are checked.
+
+## Null MX (RFC 7505)
+
+Mail to a domain that publishes a null MX (`MX 0 .`) fails at the first attempt, without retries; the
+DSN carries `Status: 5.1.10`. On port 25 a `MAIL FROM` whose domain publishes a null MX gets
+`550 5.7.27 Sender address has null MX`: no bounce could reach it. A DNS error or timeout (5 s) on that
+check lets the mail through.
+
+DSN `Status` fields carry the remote server's enhanced code (`550 5.1.1` → `5.1.1`), with the class of
+the outcome (a `4xx` reply that ends in a failure at expiry is reported as `5.x.x`).
+
 ## Submission header fixes (RFC 6409 §8)
 
 On authenticated submission (`:587`/`:465`) a missing or malformed `Message-ID` is added or

@@ -91,3 +91,20 @@ func TestReceivedFieldTLSClause(t *testing.T) {
 		t.Fatalf("got %q\nwant it to contain %q", got, want)
 	}
 }
+
+// RFC 2034 / 3463: the enhanced code of a reply, only when its class matches the reply code.
+func TestResponseErrorEnhancedStatus(t *testing.T) {
+	for line, want := range map[string]string{
+		"550 5.1.1 User unknown":         "5.1.1",
+		"452 4.2.2 Mailbox full":         "4.2.2",
+		"550 Mailbox unavailable":        "",
+		"550 4.1.1 mismatched class":     "",
+		"550 5.1 short":                  "",
+		"550 5.1.1234 detail too long":   "",
+		"550-5.1.1 continuation joined?": "",
+	} {
+		if got := (&ResponseError{Line: line}).EnhancedStatus(); got != want {
+			t.Errorf("%q: %q, want %q", line, got, want)
+		}
+	}
+}

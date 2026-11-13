@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 )
 
 // ResponseError is an SMTP reply code from the peer.
@@ -30,6 +31,25 @@ func (e *ResponseError) Permanent() bool {
 // DeliveryPermanent implements mail permanent delivery error classification.
 func (e *ResponseError) DeliveryPermanent() bool {
 	return e.Permanent()
+}
+
+// EnhancedStatus returns the RFC 3463 code of the reply ("550 5.1.1 ..." → "5.1.1"), "" when the
+// reply has none or one whose class does not match the reply code (RFC 2034 4: the classes agree).
+func (e *ResponseError) EnhancedStatus() string {
+	f := strings.Fields(e.Line)
+	if len(f) < 2 || len(f[0]) < 3 {
+		return ""
+	}
+	parts := strings.Split(f[1], ".")
+	if len(parts) != 3 || parts[0] != f[0][:1] || (parts[0] != "2" && parts[0] != "4" && parts[0] != "5") {
+		return ""
+	}
+	for _, p := range parts[1:] {
+		if p == "" || len(p) > 3 || strings.Trim(p, "0123456789") != "" {
+			return ""
+		}
+	}
+	return f[1]
 }
 
 // DeliveryError wraps an error with permanent vs transient delivery semantics.

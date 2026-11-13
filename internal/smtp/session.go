@@ -78,6 +78,7 @@ type session struct {
 
 	// Session-wide abuse counters (RFC 5321 7.8).
 	goodRcpts, badRcpts, unknownCmds int
+	mailCmds, accepted               int // inbound: MAIL commands and messages accepted (DNS-work limits)
 	// postmasters caches ResolvePostmaster per tenant: it scans every account, and a client could
 	// otherwise repeat RCPT TO:<postmaster@...> up to MaxRecipients times per transaction.
 	postmasters map[uint32][]storage.Account
@@ -346,6 +347,14 @@ func (s *session) handleMail(ctx context.Context, arg string) (blockMail bool, e
 	if s.submission && !s.secure {
 		return true, s.writef(replyTLSRequired)
 	}
+	// Before any DNS work: inbound sessions get a bounded number of transactions, and fewer that
+	// deliver nothing (MaxMailPerSession, MaxIdleMail).
+	if !s.submission {
+		if s.mailCmds++; s.mailCmds > MaxMailPerSession || s.mailCmds-s.accepted > MaxIdleMail {
+			_ = s.writef(replyTooManyMail)
+			return true, errCloseSession
+		}
+	}
 	// RFC 5321 4.1.4: EHLO/HELO opens the session, and MAIL MUST NOT be sent inside an open transaction.
 	if s.heloDomain == "" {
 		return true, s.writef(replyNoHelo)
@@ -381,6 +390,15 @@ func (s *session) handleMail(ctx context.Context, arg string) (blockMail bool, e
 	}
 	if s.submission && s.principal.AccountID == 0 {
 		return true, s.writef(replyAuthRequired)
+	}
+	// RFC 7505 4.1: a sender domain with a null MX accepts no mail, so no bounce could reach it. A DNS
+	// failure lets the mail through: the check must not delay legitimate senders. Only well-formed
+	// domains are checked: Go answers "not found" to any other name without asking the DNS, and such
+	// names (up to the 12 KB command line) would only fill the cache.
+	if !s.submission && addr != "" {
+		if d, err := DomainFromAddress(addr); err == nil && validDomain(d) && isNullMX(ctx, d) {
+			return true, s.writef(replySenderNullMX)
+		}
 	}
 	// A null path impersonates no one and must stay null (RFC 5321 4.5.5, 6.1).
 	if s.submission && addr != "" {
@@ -1001,6 +1019,7 @@ func (s *session) finishDelivery(ctx context.Context, raw []byte) error {
 	if s.submission && s.principal.AccountID != 0 {
 		s.sendGate.RecordSend(s.principal.Email())
 	}
+	s.accepted++
 	s.log.Info("smtp accepted", "ip", s.clientIP(), "from", s.mailFrom, "rcpts", s.rcptAddresses(), "size", len(raw), "submission", s.submission, "tls", tlsload.Describe(s.conn))
 	if err := s.writef(replyOK); err != nil {
 		return err
