@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- DKIM signing (RFC 6376, 8301, 8463): outgoing mail that carried another server's `s=beaver`
+  signature, or mentioned DKIM in its text, went out unsigned; it is now always signed. Signatures use
+  relaxed/relaxed canonicalization, sign only the core header fields (From, To, Cc, Subject, Date,
+  Message-ID, Reply-To, In-Reply-To, References, Resent-*, List-*, MIME fields) and list the single
+  ones once more, so a field added in transit breaks the signature. An RSA key under 1024 bits is
+  refused when loaded (it used to fail every delivery); ed25519 keys get a `k=ed25519` DNS record.
+
+- Security (DMARC): a message could pass DMARC for a domain it did not come from. DKIM alignment
+  used the first `DKIM-Signature` field in the text, not a verified signature, so a forged field
+  naming the victim on top of a valid attacker signature passed; relaxed alignment took the last two
+  labels as the organizational domain (`attacker.co.uk` aligned with `victim.co.uk`), now the Public
+  Suffix List; the From domain was cut from the raw line (`victim@example (x)` escaped the policy).
+  Messages with no From, several From fields or several mailboxes in From now get DMARC
+  `fail`/`reject` (RFC 7489 6.6.1). DKIM: a DNS timeout is `temperror` (was `permerror`), and a
+  message with more than 8 signatures still has its first 8 verified.
+
 - Port 25 limits against DNS-work floods: at most 20 concurrent sessions per IPv4 address or IPv6 /64
   (`smtp.max_connections_per_ip`), 1000 MAIL commands per session and 10 that deliver nothing, then
   `421 4.7.0`; null MX answers are cached for an hour. Loopback is exempt from the per-address cap.

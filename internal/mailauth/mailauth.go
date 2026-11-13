@@ -2,8 +2,10 @@
 package mailauth
 
 import (
+	"bufio"
 	"context"
 	"net"
+	netmail "net/mail"
 	"os"
 	"strings"
 	"time"
@@ -11,6 +13,7 @@ import (
 	"github.com/emersion/go-msgauth/dkim"
 	"github.com/emersion/go-msgauth/dmarc"
 	spflib "github.com/wttw/spf"
+	"golang.org/x/net/publicsuffix"
 
 	"github.com/BeaverMail/beavermaild/internal/dnsname"
 	"github.com/BeaverMail/beavermaild/internal/mailauth/arc"
@@ -94,12 +97,14 @@ func (v *Verifier) FinishEom(ctx context.Context, bodyPath, mailFrom, helo strin
 	ctx, cancel := context.WithTimeout(ctx, v.cfg.DNSTimeout)
 	defer cancel()
 
-	state.FromDomain = domainFromAddress(extractFromHeader(bodyPath))
+	fromDomain, fromOK := headerFromDomain(bodyPath)
+	state.FromDomain = fromDomain
+	var dkimPassed []string
 	if v.cfg.DKIMEnabled {
-		state.DKIM, state.DKIMDomain = v.verifyDKIM(ctx, bodyPath)
+		state.DKIM, state.DKIMDomain, dkimPassed = v.verifyDKIM(ctx, bodyPath)
 	}
 	if v.cfg.DMARCEnabled {
-		dmarcRes, policy := v.evaluateDMARC(ctx, bodyPath, mailFrom, state)
+		dmarcRes, policy := v.evaluateDMARC(ctx, fromDomain, fromOK, mailFrom, state, dkimPassed)
 		state.DMARC = dmarcRes
 		state.DMARCPolicy = policy
 	}
@@ -130,51 +135,54 @@ func (v *Verifier) arcLookupTXT() arc.LookupTXT {
 	}
 }
 
-// verifyDKIM verifies bounded signatures using the verifier DNS seam. It returns the result
-// and the signing domain (of the passing signature, else of the first one).
-func (v *Verifier) verifyDKIM(ctx context.Context, bodyPath string) (result, domain string) {
+// verifyDKIM verifies bounded signatures using the verifier DNS seam. It returns the result, the
+// signing domain (of the first passing signature, else of the first one) and the domains of every
+// passing signature, which DMARC alignment needs (any of them may align with From).
+func (v *Verifier) verifyDKIM(ctx context.Context, bodyPath string) (result, domain string, passed []string) {
 	f, err := os.Open(bodyPath)
 	if err != nil {
-		return "temperror", ""
+		return "temperror", "", nil
 	}
 	defer f.Close()
 	verifs, err := dkim.VerifyWithOptions(f, &dkim.VerifyOptions{
 		LookupTXT:        v.lookupTXT(ctx),
-		MaxVerifications: 8,
+		MaxVerifications: 8, // bounds the DNS and hashing work a sender can ask for
 	})
-	if err != nil {
+	// Past 8 signatures the first 8 are still verified (RFC 6376 6.1: one passing is enough).
+	if err != nil && err != dkim.ErrTooManySignatures {
 		if dkim.IsPermFail(err) {
-			return "permerror", ""
+			return "permerror", "", nil
 		}
 		if dkim.IsTempFail(err) {
-			return "temperror", ""
+			return "temperror", "", nil
 		}
-		return "fail", ""
+		return "fail", "", nil
 	}
 	if len(verifs) == 0 {
-		return "none", ""
+		return "none", "", nil
 	}
 	for _, vr := range verifs {
 		if vr.Err == nil {
-			return "pass", vr.Domain
+			passed = append(passed, vr.Domain)
 		}
 	}
+	if len(passed) > 0 {
+		return "pass", passed[0], passed
+	}
 	if dkim.IsPermFail(verifs[0].Err) {
-		return "permerror", verifs[0].Domain
+		return "permerror", verifs[0].Domain, nil
 	}
 	if dkim.IsTempFail(verifs[0].Err) {
-		return "temperror", verifs[0].Domain
+		return "temperror", verifs[0].Domain, nil
 	}
-	return "fail", verifs[0].Domain
+	return "fail", verifs[0].Domain, nil
 }
 
-func (v *Verifier) evaluateDMARC(ctx context.Context, bodyPath, mailFrom string, state SessionState) (result, policy string) {
-	fromDomain := domainFromAddress(extractFromHeader(bodyPath))
-	if fromDomain == "" {
-		fromDomain = domainFromAddress(mailFrom)
-	}
-	if fromDomain == "" {
-		return "none", ""
+func (v *Verifier) evaluateDMARC(ctx context.Context, fromDomain string, fromOK bool, mailFrom string, state SessionState, dkimPassed []string) (result, policy string) {
+	// RFC 7489 6.6.1: no From, several, or several mailboxes in it are "typically rejected"; anything
+	// softer would let a second From field slip a forged one past the policy.
+	if !fromOK {
+		return "fail", "reject"
 	}
 	rec, err := dmarc.LookupWithOptions(fromDomain, &dmarc.LookupOptions{
 		LookupTXT: v.lookupTXT(ctx),
@@ -190,7 +198,7 @@ func (v *Verifier) evaluateDMARC(ctx context.Context, bodyPath, mailFrom string,
 	}
 
 	spfAligned := spfAligned(state.SPFMailFrom, fromDomain, mailFrom, rec.SPFAlignment)
-	dkimAligned := dkimAligned(state.DKIM, fromDomain, bodyPath, rec.DKIMAlignment)
+	dkimAligned := dkimAligned(dkimPassed, fromDomain, rec.DKIMAlignment)
 	if spfAligned || dkimAligned {
 		return "pass", ""
 	}
@@ -215,15 +223,15 @@ func spfAligned(spfResult, fromDomain, mailFrom string, mode dmarc.AlignmentMode
 	return domainsAlign(envDomain, fromDomain, mode)
 }
 
-func dkimAligned(dkimResult, fromDomain, bodyPath string, mode dmarc.AlignmentMode) bool {
-	if dkimResult != "pass" {
-		return false
+// dkimAligned reports whether a passing signature's d= aligns with From. Only verified signatures
+// count: any DKIM-Signature field could name the victim's domain.
+func dkimAligned(passed []string, fromDomain string, mode dmarc.AlignmentMode) bool {
+	for _, d := range passed {
+		if domainsAlign(d, fromDomain, mode) {
+			return true
+		}
 	}
-	domain := dkimSigningDomain(bodyPath)
-	if domain == "" {
-		return false
-	}
-	return domainsAlign(domain, fromDomain, mode)
+	return false
 }
 
 func domainsAlign(authDomain, fromDomain string, mode dmarc.AlignmentMode) bool {
@@ -235,12 +243,14 @@ func domainsAlign(authDomain, fromDomain string, mode dmarc.AlignmentMode) bool 
 	return orgDomain(authDomain) == orgDomain(fromDomain)
 }
 
+// orgDomain is the Organizational Domain (RFC 7489 3.2): the public suffix plus one label, from the
+// Public Suffix List. Taking the last two labels made attacker.co.uk align with victim.co.uk.
 func orgDomain(domain string) string {
-	parts := strings.Split(domain, ".")
-	if len(parts) < 2 {
-		return domain
+	org, err := publicsuffix.EffectiveTLDPlusOne(domain)
+	if err != nil {
+		return domain // a public suffix itself, or a single label
 	}
-	return parts[len(parts)-2] + "." + parts[len(parts)-1]
+	return org
 }
 
 func domainFromAddress(addr string) string {
@@ -254,47 +264,25 @@ func domainFromAddress(addr string) string {
 	return dnsname.ToASCII(addr[i+1:])
 }
 
-func extractFromHeader(bodyPath string) string {
-	b, err := os.ReadFile(bodyPath)
+// headerFromDomain returns the domain of the message's RFC5322.From and whether DMARC can evaluate it:
+// exactly one From field holding exactly one mailbox (RFC 7489 6.6.1), parsed with unfolding and
+// comments as RFC 5322 defines them.
+func headerFromDomain(bodyPath string) (string, bool) {
+	f, err := os.Open(bodyPath)
 	if err != nil {
-		return ""
+		return "", false
 	}
-	lines := strings.Split(string(b), "\n")
-	for _, line := range lines {
-		line = strings.TrimRight(line, "\r")
-		if line == "" {
-			break
-		}
-		if strings.HasPrefix(strings.ToLower(line), "from:") {
-			return strings.TrimSpace(line[5:])
-		}
+	defer f.Close()
+	msg, err := netmail.ReadMessage(bufio.NewReader(f))
+	if err != nil || len(msg.Header["From"]) != 1 {
+		return "", false
 	}
-	return ""
-}
-
-func dkimSigningDomain(bodyPath string) string {
-	b, err := os.ReadFile(bodyPath)
-	if err != nil {
-		return ""
+	list, err := msg.Header.AddressList("From")
+	if err != nil || len(list) != 1 {
+		return "", false
 	}
-	// ponytail: scan first DKIM-Signature d= only; full parse is in dkim.Verify.
-	for _, line := range strings.Split(string(b), "\n") {
-		line = strings.TrimRight(line, "\r")
-		if line == "" {
-			break
-		}
-		lower := strings.ToLower(line)
-		if !strings.HasPrefix(lower, "dkim-signature:") {
-			continue
-		}
-		for _, part := range strings.Split(line, ";") {
-			part = strings.TrimSpace(part)
-			if strings.HasPrefix(strings.ToLower(part), "d=") {
-				return strings.TrimSpace(part[2:])
-			}
-		}
-	}
-	return ""
+	d := domainFromAddress(list[0].Address)
+	return d, d != ""
 }
 
 func spfResultString(res spflib.Result) string {
@@ -321,13 +309,21 @@ func spfResultString(res spflib.Result) string {
 // lookupTXT binds DNS lookup implementations to the request context.
 func (v *Verifier) lookupTXT(ctx context.Context) func(string) ([]string, error) {
 	return func(name string) ([]string, error) {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
 		name = dnsname.ToASCII(name) // DKIM d= may carry U-labels (RFC 8616 4)
-		if v.cfg.LookupTXT != nil {
-			return v.cfg.LookupTXT(ctx, name)
+		var txts []string
+		err := ctx.Err()
+		if err == nil {
+			if v.cfg.LookupTXT != nil {
+				txts, err = v.cfg.LookupTXT(ctx, name)
+			} else {
+				txts, err = net.DefaultResolver.LookupTXT(ctx, name)
+			}
 		}
-		return net.DefaultResolver.LookupTXT(ctx, name)
+		// Our timeout is a transient DNS failure (RFC 6376 6.1.2: TEMPFAIL); unwrapped, the library
+		// took it for a missing key and reported permerror.
+		if err != nil && ctx.Err() != nil {
+			return nil, &net.DNSError{Err: ctx.Err().Error(), Name: name, IsTimeout: true}
+		}
+		return txts, err
 	}
 }

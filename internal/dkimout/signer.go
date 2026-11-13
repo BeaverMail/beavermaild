@@ -4,12 +4,15 @@ package dkimout
 import (
 	"bytes"
 	"crypto"
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
 	"fmt"
+	netmail "net/mail"
+	"net/textproto"
 	"os"
 	"strings"
 
@@ -41,6 +44,10 @@ func New(cfg Config) (*Signer, error) {
 	if err != nil {
 		return nil, err
 	}
+	// RFC 8301 3.2: signers MUST use RSA keys of at least 1024 bits (verifiers reject shorter ones).
+	if k, ok := key.(*rsa.PrivateKey); ok && k.N.BitLen() < 1024 {
+		return nil, fmt.Errorf("dkimout: RSA key of %d bits in %s, at least 1024 required (2048 recommended)", k.N.BitLen(), cfg.KeyPath)
+	}
 	return &Signer{
 		selector: strings.TrimSpace(cfg.Selector),
 		domain:   strings.TrimSpace(strings.ToLower(cfg.Domain)),
@@ -57,9 +64,6 @@ func (s *Signer) Sign(returnPath string, raw []byte) ([]byte, error) {
 	if returnPath == "" {
 		return raw, nil
 	}
-	if hasSelectorSignature(raw, s.selector) {
-		return raw, nil
-	}
 	domain := s.domain
 	if domain == "" {
 		var err error
@@ -74,6 +78,10 @@ func (s *Signer) Sign(returnPath string, raw []byte) ([]byte, error) {
 		Selector: s.selector,
 		Signer:   s.signer,
 		Hash:     crypto.SHA256,
+		// RFC 6376 5.4.1: "relaxed" survives the refolding intermediaries do to person-to-person mail.
+		HeaderCanonicalization: dkim.CanonicalizationRelaxed,
+		BodyCanonicalization:   dkim.CanonicalizationRelaxed,
+		HeaderKeys:             headerKeys(raw),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("dkimout: sign: %w", err)
@@ -121,17 +129,38 @@ func domainFromAddress(addr string) (string, error) {
 	return dnsname.ToASCII(addr[at+1:]), nil
 }
 
-// hasSelectorSignature reports whether raw already contains s=<selector> in a DKIM-Signature header.
-func hasSelectorSignature(raw []byte, selector string) bool {
-	selector = strings.ToLower(strings.TrimSpace(selector))
-	if selector == "" {
-		return false
+// coreFields are the header fields signed when present (RFC 6376 5.4.1, plus the MIME fields that
+// decide how the body renders); trace and client fields (Received, X-*) are left out.
+var coreFields = []string{
+	"From", "Reply-To", "Subject", "Date", "To", "Cc", "Message-ID", "In-Reply-To", "References",
+	"Resent-Date", "Resent-From", "Resent-To", "Resent-Cc",
+	"List-Id", "List-Help", "List-Unsubscribe", "List-Subscribe", "List-Post", "List-Owner", "List-Archive",
+	"MIME-Version", "Content-Type", "Content-Transfer-Encoding",
+}
+
+// oversigned fields appear once in a valid message: they are listed once more than present, so a
+// copy added in transit breaks the signature (RFC 6376 8.15, "h=from:from").
+var oversigned = map[string]bool{"From": true, "Reply-To": true, "Subject": true, "Date": true, "To": true, "Cc": true, "Message-ID": true}
+
+// headerKeys is the h= list for raw: each present core field as many times as it occurs, plus one for
+// the oversigned ones. From is always listed (RFC 6376 5.4). nil (sign every field, the library
+// default) only for a header block net/mail cannot read.
+func headerKeys(raw []byte) []string {
+	msg, err := netmail.ReadMessage(bytes.NewReader(raw))
+	if err != nil {
+		return nil
 	}
-	lower := bytes.ToLower(raw)
-	if !bytes.Contains(lower, []byte("dkim-signature:")) {
-		return false
+	var keys []string
+	for _, name := range coreFields {
+		n := len(msg.Header[textproto.CanonicalMIMEHeaderKey(name)])
+		if oversigned[name] && (n > 0 || name == "From") {
+			n++
+		}
+		for range n {
+			keys = append(keys, name)
+		}
 	}
-	return bytes.Contains(lower, []byte("s="+selector))
+	return keys
 }
 
 // GenerateKey writes a 2048-bit RSA private key PEM to path.
@@ -158,13 +187,17 @@ func PublicKeyDNS(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	rsaKey, ok := key.(*rsa.PrivateKey)
-	if !ok {
-		return "", fmt.Errorf("dkimout: need RSA key for DNS record")
+	switch k := key.(type) {
+	case *rsa.PrivateKey:
+		pubDER, err := x509.MarshalPKIXPublicKey(&k.PublicKey)
+		if err != nil {
+			return "", err
+		}
+		return "v=DKIM1; k=rsa; p=" + base64.StdEncoding.EncodeToString(pubDER), nil
+	case ed25519.PrivateKey:
+		// RFC 8463 4: p= is the raw 32-octet public key, not a SubjectPublicKeyInfo.
+		return "v=DKIM1; k=ed25519; p=" + base64.StdEncoding.EncodeToString(k.Public().(ed25519.PublicKey)), nil
+	default:
+		return "", fmt.Errorf("dkimout: unsupported key type %T for a DNS record", key)
 	}
-	pubDER, err := x509.MarshalPKIXPublicKey(&rsaKey.PublicKey)
-	if err != nil {
-		return "", err
-	}
-	return "v=DKIM1; k=rsa; p=" + base64.StdEncoding.EncodeToString(pubDER), nil
 }

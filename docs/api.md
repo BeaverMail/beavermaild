@@ -277,6 +277,12 @@ Set `dkim_enabled: true` on the domain (POST or PATCH). The server generates the
 - in every Domain object as `dkim_dns_name` / `dkim_dns_value`;
 - in `GET /domains/{domain}/dns-recommended` as the `TXT` row, together with MX, SPF and autoconfig records.
 
+Outgoing mail is signed with the key of its sender's domain (relaxed/relaxed, core header fields,
+single fields signed once more against additions). Delivery notifications (DSNs) are not signed: the
+ones sent to remote senders answer inbound mail whose sender can be forged, and with `RET=FULL` they
+carry the original message, so a signature would hand anyone our DKIM signature on text of their
+choice.
+
 Key rotation and importing your own key are not available through the API.
 
 ### Recommended DNS records
