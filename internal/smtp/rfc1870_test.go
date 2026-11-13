@@ -42,6 +42,7 @@ func TestRFC1870ServerLimit(t *testing.T) {
 
 	for _, st := range []struct{ send, want string }{
 		{"MAIL FROM:<x@example.org> SIZE=10 SIZE=20", "501"},
+		{"MAIL FROM:<x@example.org> BODY=7BIT BODY=8BITMIME", "501"}, // RFC 6152 3
 		{"MAIL FROM:<x@example.org> SIZE=99999999999999999999", "552"},
 		{"MAIL FROM:<x@example.org> SIZE=123456789012345678901", "501"}, // 21 digits
 	} {

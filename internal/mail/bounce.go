@@ -4,6 +4,7 @@ package mail
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -246,6 +247,9 @@ func dsnMessageID() string {
 
 // SMTPStatusFromError maps a delivery error to an enhanced status code string.
 func SMTPStatusFromError(err error) string {
+	if errors.Is(err, ErrNeeds7Bit) {
+		return "5.6.3" // conversion required and not possible (RFC 3463)
+	}
 	type coded interface {
 		error
 		Permanent() bool

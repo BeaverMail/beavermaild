@@ -167,6 +167,9 @@
   The client sends SIZE= only to servers offering SIZE (a strict server answered 555 and the
   delivery failed), and a message over the server's announced SIZE fails permanently without
   being transferred.
+- SMTP 8BITMIME (RFC 6152): one BODY per MAIL (501). A message with 8-bit content is no longer
+  sent as is to a next hop without 8BITMIME: as in Exim, the delivery fails for good with status
+  5.6.3 before MAIL (no 8-bit to 7-bit conversion).
   - SEARCH BODY and TEXT also match the decoded text of base64 and quoted-printable parts, and TEXT
     the decoded RFC 2047 header words (no charset conversion: UTF-8 and US-ASCII parts).
 

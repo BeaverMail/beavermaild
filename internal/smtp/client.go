@@ -173,6 +173,10 @@ func SendReply(ctx context.Context, addr, mailFrom, rcptTo string, data []byte, 
 	if caps.SizeLimit > 0 && len(data) > caps.SizeLimit {
 		return "", &DeliveryError{Err: fmt.Errorf("smtp client: message of %d octets over the server's SIZE %d", len(data), caps.SizeLimit), Permanent: true}
 	}
+	// RFC 6152 3: 8-bit content never goes to a server without 8BITMIME; fail before MAIL (5.6.3).
+	if !caps.EightBitMIME && mail.Has8Bit(data) {
+		return "", &DeliveryError{Err: mail.ErrNeeds7Bit, Permanent: true}
+	}
 	tc.d = clientDataTimeout
 	mailLine := mailFromLine(mailFrom, data, caps, opts.User != "" && opts.Password != "")
 	rcptLine := fmt.Sprintf("RCPT TO:<%s>", rcptTo)

@@ -46,8 +46,9 @@ func parseMailArg(arg string) (address string, declaredSize int, params MailPara
 	for _, field := range strings.Fields(rest) {
 		upper := strings.ToUpper(field)
 		key, val, hasVal := strings.Cut(upper, "=")
-		// RET and ENVID at most once each (RFC 3461 4.5), SIZE too (RFC 1870 6): 501.
-		if (key == "RET" || key == "ENVID" || key == "SIZE") && seen[key] {
+		// RET and ENVID at most once each (RFC 3461 4.5), SIZE (RFC 1870 6) and BODY (RFC 6152 3)
+		// too: 501.
+		if (key == "RET" || key == "ENVID" || key == "SIZE" || key == "BODY") && seen[key] {
 			return "", 0, MailParams{}, false
 		}
 		seen[key] = true
