@@ -103,7 +103,19 @@ func prependHeader(raw []byte, name, value string) []byte {
 // for which drop(value) is true; drop nil removes them all. The body is left untouched.
 func stripHeaderFields(raw []byte, name string, drop func(value string) bool) []byte {
 	out := make([]byte, 0, len(raw))
-	dropping := false
+	var field []byte // the current field: its first line and continuation lines
+	flush := func() {
+		if len(field) == 0 {
+			return
+		}
+		// drop sees the whole value, continuation lines included: deciding on the first line alone
+		// let "Authentication-Results:" + an authserv-id on the next line through.
+		if n, val, ok := bytes.Cut(field, []byte(":")); !ok || !strings.EqualFold(strings.TrimSpace(string(n)), name) ||
+			drop != nil && !drop(string(val)) {
+			out = append(out, field...)
+		}
+		field = nil
+	}
 	rest := raw
 	for len(rest) > 0 {
 		line := rest
@@ -112,24 +124,18 @@ func stripHeaderFields(raw []byte, name string, drop func(value string) bool) []
 		}
 		rest = rest[len(line):]
 		if len(bytes.TrimRight(line, "\r\n")) == 0 { // end of header
+			flush()
 			out = append(out, line...)
 			return append(out, rest...)
 		}
 		if line[0] == ' ' || line[0] == '\t' {
-			if !dropping {
-				out = append(out, line...)
-			}
+			field = append(field, line...)
 			continue
 		}
-		dropping = false
-		if n, val, ok := bytes.Cut(line, []byte(":")); ok && strings.EqualFold(strings.TrimSpace(string(n)), name) {
-			if drop == nil || drop(string(val)) {
-				dropping = true
-				continue
-			}
-		}
-		out = append(out, line...)
+		flush()
+		field = append(field, line...)
 	}
+	flush()
 	return out
 }
 

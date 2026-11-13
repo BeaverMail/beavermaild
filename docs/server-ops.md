@@ -47,6 +47,15 @@ Each inbound `MAIL FROM` costs DNS work chosen by the sender (SPF, null MX check
 the limits above bound it per connection and per address. Null MX answers are cached for an hour;
 only well-formed sender domains are checked.
 
+## Authentication-Results (RFC 8601)
+
+Inbound mail gets an `Authentication-Results: <smtp.hostname>; ...` field above our `Received`, with
+the SPF, DKIM, DMARC and ARC results. Reported domains are checked before they are written (a domain
+name, or an IP literal in quotes; anything else is left out), SPF reports the envelope domain only,
+ARC only `none`/`pass`/`fail`. Any `Authentication-Results` field that already claims our hostname is
+removed from every accepted message, submission included, even with mail-auth off: downstream filters
+and mail clients can trust the field bearing our name.
+
 ## Null MX (RFC 7505)
 
 Mail to a domain that publishes a null MX (`MX 0 .`) fails at the first attempt, without retries; the

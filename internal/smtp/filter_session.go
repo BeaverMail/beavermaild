@@ -284,27 +284,55 @@ func (s *session) deliverAfterFilter(ctx context.Context, raw []byte) error {
 	if len(out.Headers) > 0 {
 		raw = appendFilterHeaders(raw, out.Headers)
 	}
-	if s.authDone && !s.submission {
-		raw = prependAuthResults(raw, s.hostname, mailauth.AuthResults(s.hostname, s.mailFrom, s.heloDomain, s.authState))
-	}
 	// RFC 5321 §4.4: every SMTP server that accepts a message records its hop on top.
 	raw = prependHeader(raw, "Received", s.receivedField(time.Now()))
+	// RFC 8601 §5: fields claiming our authserv-id did not come from us, on every path (submission,
+	// mail-auth off included); §4: ours goes above our Received.
+	raw = stripAuthResults(raw, s.hostname)
+	if s.authDone && !s.submission {
+		raw = prependHeader(raw, "Authentication-Results", mailauth.AuthResults(s.hostname, s.mailFrom, s.heloDomain, s.authState))
+	}
 	return s.finishDelivery(ctx, raw)
 }
 
-// prependAuthResults removes Authentication-Results fields that claim our authserv-id
-// (RFC 8601 §5: a sender could forge them) and puts ours at the top.
-func prependAuthResults(raw []byte, authservID, value string) []byte {
-	return prependHeader(stripAuthResults(raw, authservID), "Authentication-Results", value)
-}
-
-// stripAuthResults drops "Authentication-Results: <authservID>[ version];..." fields.
+// stripAuthResults drops "Authentication-Results: <authservID>[ version];..." fields (RFC 8601 §5:
+// a sender could forge them). The authserv-id is compared after removing comments and quotes, which
+// the grammar allows around it ([CFWS] authserv-id, a MIME value).
 func stripAuthResults(raw []byte, authservID string) []byte {
 	return stripHeaderFields(raw, "Authentication-Results", func(val string) bool {
-		id, _, _ := strings.Cut(strings.TrimSpace(val), ";")
+		id, _, _ := strings.Cut(stripComments(val), ";")
 		fields := strings.Fields(id)
-		return len(fields) > 0 && strings.EqualFold(fields[0], authservID)
+		// A trailing dot names the same host (absolute form): "mx.example.net." is ours too.
+		return len(fields) > 0 && strings.EqualFold(strings.TrimSuffix(strings.Trim(fields[0], `"`), "."), strings.TrimSuffix(authservID, "."))
 	})
+}
+
+// stripComments removes RFC 5322 comments (nested, with quoted-pairs) outside quoted strings.
+func stripComments(s string) string {
+	var b strings.Builder
+	depth, quoted := 0, false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c == '\\' && (depth > 0 || quoted) && i+1 < len(s):
+			if depth == 0 {
+				b.WriteByte(c)
+				b.WriteByte(s[i+1])
+			}
+			i++
+		case c == '"' && depth == 0:
+			quoted = !quoted
+			b.WriteByte(c)
+		case c == '(' && !quoted:
+			depth++
+			b.WriteByte(' ')
+		case c == ')' && !quoted && depth > 0:
+			depth--
+		case depth == 0:
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
 }
 
 // authApplies reports whether SPF/DKIM/DMARC describe this transaction. Not on submission:

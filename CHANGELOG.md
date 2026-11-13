@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Security (Authentication-Results, RFC 8601): a sender could forge results under our name. The EHLO
+  argument went into `smtp.helo=` as is (`EHLO x;dkim=pass ...`); a DKIM `d=` such as `evil(` opened
+  a comment that hid our DMARC result; a forged field with our authserv-id survived when the id was
+  on a continuation line or after a comment, on submission, or with mail-auth off. Reported domains
+  are now validated, forged fields are removed from every accepted message, SPF reports the domain
+  only, ARC reports only registered results, and our field sits above our `Received`.
+
 - DKIM signing (RFC 6376, 8301, 8463): outgoing mail that carried another server's `s=beaver`
   signature, or mentioned DKIM in its text, went out unsigned; it is now always signed. Signatures use
   relaxed/relaxed canonicalization, sign only the core header fields (From, To, Cc, Subject, Date,

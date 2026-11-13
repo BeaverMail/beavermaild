@@ -379,11 +379,12 @@ func TestSMTPAddsAuthenticationResults(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := string(raw)
-	// Top of a locally delivered message: Return-Path, our Received, our Authentication-Results.
+	// Top of a locally delivered message: Return-Path, our Authentication-Results above our Received
+	// (RFC 8601 4, Appendix B.3), SPF reported for the domain only (2.7.2).
 	rp := strings.Index(got, "Return-Path: <sender@example.com>")
-	rcv := strings.Index(got, "Received: from helo.example")
 	ar := strings.Index(got, "Authentication-Results: mx.example.net;")
-	if rp != 0 || rcv <= rp || ar <= rcv || !strings.Contains(got, "spf=fail smtp.mailfrom=sender@example.com") {
+	rcv := strings.Index(got, "Received: from helo.example")
+	if rp != 0 || ar <= rp || rcv <= ar || !strings.Contains(got, "spf=fail smtp.mailfrom=example.com") {
 		t.Fatalf("trace/auth headers missing or out of order:\n%s", got)
 	}
 	if strings.Count(got, "Authentication-Results:") != 1 {
