@@ -13,11 +13,11 @@ import (
 
 	"github.com/emersion/go-msgauth/dkim"
 	"github.com/miekg/dns"
-	spflib "github.com/wttw/spf"
 
 	"github.com/BeaverMail/beavermaild/dmarc"
 	"github.com/BeaverMail/beavermaild/internal/dnsname"
 	"github.com/BeaverMail/beavermaild/internal/mailauth/arc"
+	"github.com/BeaverMail/beavermaild/internal/spf"
 )
 
 // Config controls which mail-auth checks run and DNS timeouts.
@@ -28,7 +28,7 @@ type Config struct {
 	DKIMEnabled  bool
 	DMARCEnabled bool
 	ARCEnabled   bool
-	SPFResolver  spflib.Resolver
+	SPFResolver  spf.Resolver // test seam; nil reads /etc/resolv.conf
 	LookupTXT    func(context.Context, string) ([]string, error)
 	DomainExists func(context.Context, string) (bool, error) // test seam; nil asks the SPF resolver
 }
@@ -51,7 +51,7 @@ func (s SessionState) Wire() SessionState { return s }
 // Verifier runs SPF, DKIM, and DMARC checks for one SMTP session.
 type Verifier struct {
 	cfg Config
-	spf *spflib.Checker
+	spf *spf.Checker
 }
 
 // New builds a Verifier from host config. Returns nil when disabled.
@@ -62,11 +62,12 @@ func New(cfg Config) *Verifier {
 	if cfg.DNSTimeout <= 0 {
 		cfg.DNSTimeout = 5 * time.Second
 	}
-	spf := spflib.NewChecker()
-	if cfg.SPFResolver != nil {
-		spf.Resolver = cfg.SPFResolver
+	resolver := cfg.SPFResolver
+	if resolver == nil {
+		resolver = spf.NewSystemResolver()
 	}
-	return &Verifier{cfg: cfg, spf: spf}
+	// SPF has its own time limit, at least 20 s (RFC 7208 4.6.4), not the DKIM/DMARC one.
+	return &Verifier{cfg: cfg, spf: &spf.Checker{Resolver: resolver, Timeout: cfg.DNSTimeout}}
 }
 
 // Enabled reports whether mail-auth checks are active.
@@ -74,21 +75,19 @@ func (v *Verifier) Enabled() bool {
 	return v != nil && v.cfg.Enabled
 }
 
-// CheckSPF evaluates SPF for mailFrom (empty uses HELO identity per RFC 7208).
+// CheckSPF evaluates SPF for mailFrom; an empty one checks the HELO identity, whose sender is
+// postmaster@<helo> (RFC 7208 2.3, 2.4).
 func (v *Verifier) CheckSPF(ctx context.Context, ip net.IP, mailFrom, helo string) string {
 	if v == nil || !v.cfg.Enabled || !v.cfg.SPFEnabled {
 		return ""
 	}
-	ctx, cancel := context.WithTimeout(ctx, v.cfg.DNSTimeout)
-	defer cancel()
-	var res spflib.Result
+	domain, sender := dnsname.ToASCII(helo), mailFrom
 	if mailFrom == "" {
-		res = v.spf.SPF(ctx, ip, "", helo)
+		sender = "postmaster@" + domain
 	} else {
-		domain := strings.TrimSuffix(domainFromAddress(mailFrom), ".") + "."
-		res = v.spf.CheckHost(ctx, ip, domain, mailFrom, helo)
+		domain = domainFromAddress(mailFrom)
 	}
-	return spfResultString(res)
+	return string(v.spf.CheckHost(ctx, ip, domain, sender, helo))
 }
 
 // FinishEom verifies DKIM and DMARC on the message at bodyPath and updates state.
@@ -265,27 +264,6 @@ func headerFromDomain(bodyPath string) (string, bool) {
 	}
 	d := domainFromAddress(list[0].Address)
 	return d, d != ""
-}
-
-func spfResultString(res spflib.Result) string {
-	switch res.Type {
-	case spflib.Pass:
-		return "pass"
-	case spflib.Fail:
-		return "fail"
-	case spflib.Softfail:
-		return "softfail"
-	case spflib.Neutral:
-		return "neutral"
-	case spflib.None:
-		return "none"
-	case spflib.Temperror:
-		return "temperror"
-	case spflib.Permerror:
-		return "permerror"
-	default:
-		return "none"
-	}
 }
 
 // lookupTXT binds DNS lookup implementations to the request context.

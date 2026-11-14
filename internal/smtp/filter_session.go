@@ -363,6 +363,12 @@ func (s *session) checkSPFMailFrom(ctx context.Context) {
 	if ip == nil {
 		return
 	}
+	// Null sender: the MAIL FROM identity is postmaster@<HELO> (RFC 7208 2.4), the check EHLO already
+	// ran; running it again doubled the DNS work.
+	if s.mailFrom == "" && s.authState.SPFEhlo != "" {
+		s.authState.SPFMailFrom = s.authState.SPFEhlo
+		return
+	}
 	s.authState.SPFMailFrom = s.mailAuth.CheckSPF(ctx, ip, s.mailFrom, s.heloDomain)
 }
 

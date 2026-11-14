@@ -3,6 +3,7 @@ package httpapi
 import (
 	"testing"
 
+	"github.com/BeaverMail/beavermaild/internal/smtp"
 	"github.com/BeaverMail/beavermaild/internal/storage"
 )
 
@@ -26,5 +27,23 @@ func TestDNSRecommendedSRV(t *testing.T) {
 	}
 	if len(want) != 0 {
 		t.Fatalf("missing SRV %v", want)
+	}
+}
+
+// RFC 7208 audit L8: the EHLO name gets "v=spf1 a -all" so null-sender notifications pass SPF; not
+// when a relay delivers or the name is not a domain.
+func TestHeloSPFRecord(t *testing.T) {
+	rec, ok := heloSPFRecord(&smtp.RemoteConfig{MXOptions: smtp.ClientOptions{HeloName: "mx.hosted.example"}})
+	if !ok || rec.Type != "TXT" || rec.Host != "mx.hosted.example" || rec.Value != "v=spf1 a -all" {
+		t.Fatalf("%+v %v", rec, ok)
+	}
+	for _, remote := range []*smtp.RemoteConfig{
+		nil,
+		{Relay: "relay.example:587", MXOptions: smtp.ClientOptions{HeloName: "mx.hosted.example"}},
+		{MXOptions: smtp.ClientOptions{HeloName: "localhost"}},
+	} {
+		if rec, ok := heloSPFRecord(remote); ok {
+			t.Errorf("row %+v for %+v", rec, remote)
+		}
 	}
 }

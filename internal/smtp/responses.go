@@ -45,6 +45,7 @@ const (
 	replyTooManyBadRcpts     = "421 4.7.0 Too many invalid recipients, closing connection"
 	replyTooManyUnknown      = "421 4.7.0 Too many unrecognized commands, closing connection"
 	replyTooManyMail         = "421 4.7.0 Too many transactions, closing connection"
+	replyTooManyHelo         = "421 4.7.0 Too many EHLO commands, closing connection"
 	replyTooManyFromIP       = "421 4.7.0 Too many connections from your address"
 	replyLocalError          = "451 4.3.0 Local error in processing"
 	replyOutboundUnavailable = "451 4.3.0 Outbound delivery unavailable"
@@ -70,4 +71,8 @@ const (
 	// MaxIdleMail MAIL commands that led to no accepted message end an inbound session: a loop of
 	// MAIL/RSET with throwaway sender domains only makes us query the DNS.
 	MaxIdleMail = 10
+	// MaxHeloPerSession EHLO/HELO commands end an inbound session: each one runs an SPF check of its
+	// argument (up to ~110 DNS queries and 20 s, RFC 7208 4.6.4). A client sends two (before and
+	// after STARTTLS).
+	MaxHeloPerSession = 10
 )

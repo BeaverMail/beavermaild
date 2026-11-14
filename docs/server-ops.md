@@ -42,9 +42,12 @@ Received: from client.example.org (client.example.org [192.0.2.10])
 | MAIL commands that delivered nothing | 10 | same: a MAIL/RSET loop with throwaway sender domains only makes the server query the DNS |
 | unknown recipients (when they outnumber good ones) | 10 | `421 4.7.0 Too many invalid recipients` (address harvesting) |
 | unrecognized commands | 10 | `421 4.7.0 Too many unrecognized commands` |
+| EHLO/HELO commands per inbound session | 10 | `421 4.7.0 Too many EHLO commands`: each one runs an SPF check of its argument |
 
-Each inbound `MAIL FROM` costs DNS work chosen by the sender (SPF, null MX check, 5 s timeout each);
-the limits above bound it per connection and per address. Null MX answers are cached for an hour;
+Each inbound `MAIL FROM` costs DNS work chosen by the sender: the null MX check (5 s timeout) and SPF,
+whose record may ask for at most 10 DNS-querying terms (about 110 queries at worst, RFC 7208 4.6.4) within
+20 s (`mail_auth.dns_timeout_ms` when larger); the limits above bound it per connection and per address.
+SPF reads the name servers from `/etc/resolv.conf` once, at startup: restart after changing it. Null MX answers are cached for an hour;
 only well-formed sender domains are checked.
 
 ## Authentication-Results (RFC 8601)

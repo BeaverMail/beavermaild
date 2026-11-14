@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/BeaverMail/beavermaild/internal/directory"
+	"github.com/BeaverMail/beavermaild/internal/smtp"
 	"github.com/BeaverMail/beavermaild/internal/storage"
 )
 
@@ -111,8 +112,30 @@ func (s *Server) handleDomainDNSRecommended(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	dkimName, dkimVal, dkimErr := s.dir.DKIMDNSRecord(dom)
+	recs := dnsRecommendedRecords(dom, dkimName, dkimVal, dkimErr, s.services)
+	if rec, ok := heloSPFRecord(s.remote); ok {
+		recs = append(recs, rec)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"domain":  dom.Name,
-		"records": dnsRecommendedRecords(dom, dkimName, dkimVal, dkimErr, s.services),
+		"records": recs,
 	})
+}
+
+// heloSPFRecord is the SPF record for the name this server gives in EHLO (RFC 7208 2.3). Delivery
+// notifications go out with a null sender, so SPF checks postmaster@<that name> (2.4); with this
+// record they pass SPF, and DMARC too since their From is MAILER-DAEMON@<that name>. No row when
+// a relay delivers (the relay's own EHLO is the one checked) or the name is not a domain.
+func heloSPFRecord(remote *smtp.RemoteConfig) (dnsRecordDTO, bool) {
+	if remote == nil || remote.Relay != "" {
+		return dnsRecordDTO{}, false
+	}
+	helo := strings.TrimSuffix(remote.MXOptions.HeloName, ".")
+	if !strings.Contains(helo, ".") || strings.HasPrefix(helo, "[") {
+		return dnsRecordDTO{}, false
+	}
+	return dnsRecordDTO{
+		Type: "TXT", Host: helo, Value: "v=spf1 a -all",
+		Note: "server hostname, the same for every domain: publish once in its zone. Its A/AAAA records must be the address the server sends from",
+	}, true
 }

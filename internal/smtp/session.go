@@ -79,6 +79,7 @@ type session struct {
 	// Session-wide abuse counters (RFC 5321 7.8).
 	goodRcpts, badRcpts, unknownCmds int
 	mailCmds, accepted               int // inbound: MAIL commands and messages accepted (DNS-work limits)
+	heloCmds                         int // inbound: EHLO/HELO commands (each one is an SPF check)
 	// postmasters caches ResolvePostmaster per tenant: it scans every account, and a client could
 	// otherwise repeat RCPT TO:<postmaster@...> up to MaxRecipients times per transaction.
 	postmasters map[uint32][]storage.Account
@@ -284,6 +285,11 @@ func (s *session) dispatch(ctx context.Context, cmd, arg string, mailBlocked boo
 		domain, _, _ := strings.Cut(strings.TrimSpace(arg), " ")
 		if domain == "" {
 			return false, false, s.writef(replySyntaxHelo)
+		}
+		if !s.submission {
+			if s.heloCmds++; s.heloCmds > MaxHeloPerSession {
+				return true, false, s.writef(replyTooManyHelo)
+			}
 		}
 		s.reset()
 		s.heloDomain = domain

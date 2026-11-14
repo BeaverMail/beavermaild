@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- SPF (RFC 7208): new implementation written from the RFC (`internal/spf`), replacing the
+  `wttw/spf` library. A record could make the server send hundreds of DNS queries per message: `ptr`
+  did not count toward the limit of 10 DNS terms (40 `ptr` = 441 queries); a valid record with
+  exactly 10 DNS terms got `permerror` because the record lookup itself was counted. The HELO check
+  now uses `postmaster@<helo>` as sender (macros `%{s}`, `%{l}`, `%{o}`), address literals and
+  single-label names are `none` without a query, check_host() gets 20 s (was 5), the resolver is
+  built once (it raced on first use), and a null sender reuses the EHLO result. `exp` is not
+  fetched. `dns-recommended` adds `v=spf1 a -all` for `smtp.hostname`, so delivery notifications
+  pass SPF and DMARC. Covered by 96 table tests written from the RFC, section by section. On port 25
+  a session ends after 10 EHLO/HELO commands (`421 4.7.0`): each one is an SPF check.
+
 - Security (DMARC, RFC 9989): a From address in any subdomain escaped its domain's policy, because
   only `_dmarc.<From domain>` was queried (`ceo@billing.victim.example` got `dmarc=none` under
   `p=reject`). Policy discovery and the organizational domain now use the RFC 9989 DNS Tree Walk

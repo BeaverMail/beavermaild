@@ -297,6 +297,7 @@ yet) and must not be published as is.
 |--------|-------|-----|
 | `_dmarc.<domain>` TXT | `v=DMARC1; p=none; rua=mailto:dmarc-reports@<domain>` | Aggregate reports, no change to delivery. Tighten `p` after the reports show all legitimate mail passing (RFC 9989, Appendix B.2). |
 | `_smtp._tls.<domain>` TXT | `v=TLSRPTv1; rua=mailto:tls-reports@<domain>` | Daily reports of TLS failures when other servers deliver to this domain (RFC 8460). |
+| `<smtp.hostname>` TXT | `v=spf1 a -all` | The name this server gives in EHLO. Delivery notifications leave with a null sender, so SPF checks that name (RFC 7208 2.4): with this record they pass SPF, and DMARC since their From is `MAILER-DAEMON@<smtp.hostname>`. The same row for every domain, published once. Not returned when a relay (`smtp.relay`) delivers or the hostname is not a domain. |
 
 The server accepts mail for `dmarc-reports@` and `tls-reports@` on every hosted domain and stores it as reports
 (read them with `GET /domains/{domain}/reports`); no mailbox is needed and a catch-all does not capture them. Because

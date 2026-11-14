@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -567,5 +568,48 @@ func TestSMTPFilterRejectAtRcptDropsRecipient(t *testing.T) {
 	}
 	if msgs, err := inbox.List(ctx, acc.ID, mail.InboxMailboxID); err != nil || len(msgs) != 0 {
 		t.Fatalf("inbox %d, %v", len(msgs), err)
+	}
+}
+
+// countingSPFResolver is spfResolver counting its queries.
+type countingSPFResolver struct{ n *atomic.Int64 }
+
+func (c countingSPFResolver) Resolve(ctx context.Context, req *dns.Msg) (*dns.Msg, error) {
+	c.n.Add(1)
+	return spfResolver{}.Resolve(ctx, req)
+}
+
+// RFC 7208 audit L7: with a null sender the MAIL FROM identity is postmaster@<HELO>, already checked
+// at EHLO: the result is reused, not computed again.
+func TestSMTPNullSenderReusesHELOSPF(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	_, inbox, dir := openSMTPTestStore(t, ctx)
+	filter := &captureFilter{}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var queries atomic.Int64
+	verifier := mailauth.New(mailauth.Config{Enabled: true, SPFEnabled: true, SPFResolver: countingSPFResolver{&queries}})
+	srv := smtp.NewServer(log.New("error"), ln.Addr().String(), dir, inbox, nil, "", "", smtp.Options{Filter: filter, MailAuth: verifier})
+	sctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() { _ = srv.ServeListener(sctx, ln) }()
+	time.Sleep(20 * time.Millisecond)
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	read := bufio.NewReader(conn)
+	expect(t, read, "220")
+	send(t, conn, "HELO helo.example")
+	expect(t, read, "250")
+	send(t, conn, "MAIL FROM:<>")
+	expect(t, read, "250")
+	mailAuth := filter.authAt(smtp.FilterPhaseMail)
+	if mailAuth == nil || mailAuth.SPFMailFrom != "pass" || queries.Load() != 1 {
+		t.Fatalf("mail auth %+v after %d queries", mailAuth, queries.Load())
 	}
 }

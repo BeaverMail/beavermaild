@@ -3,6 +3,7 @@ package smtp_test
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"net"
 	"strings"
 	"testing"
@@ -103,4 +104,18 @@ func TestInboundIdleMailLimit(t *testing.T) {
 	}
 	send(t, conn, "MAIL FROM:<x@throwaway.example.org>")
 	expect(t, read, "421 4.7.0 Too many transactions")
+}
+
+// RFC 7208 audit review S1: every EHLO runs an SPF check of its argument; a client looping EHLO with
+// new names made the server query the DNS without bound. Past MaxHeloPerSession the session ends.
+func TestInboundHeloLimit(t *testing.T) {
+	t.Parallel()
+	conn, read := dialInbound(t, inboundServer(t, smtp.Options{}))
+	expect(t, read, "220")
+	for i := range smtp.MaxHeloPerSession {
+		send(t, conn, fmt.Sprintf("HELO h%d.example.org", i))
+		expect(t, read, "250")
+	}
+	send(t, conn, "HELO again.example.org")
+	expect(t, read, "421 4.7.0 Too many EHLO")
 }
