@@ -15,9 +15,9 @@ func TestAuthResults(t *testing.T) {
 			"mx.example.net;\r\n\tspf=pass smtp.mailfrom=example.org;\r\n\tdkim=pass header.d=example.org;\r\n\tdmarc=pass header.from=example.org;\r\n\tarc=none",
 		},
 		{
-			"null sender uses helo, dmarc policy comment", "", "mail.example.org",
+			"null sender uses helo, dmarc policy", "", "mail.example.org",
 			SessionState{SPFEhlo: "softfail", DMARC: "fail", DMARCPolicy: "reject", FromDomain: "example.org"},
-			"mx.example.net;\r\n\tspf=softfail smtp.helo=mail.example.org;\r\n\tdmarc=fail (p=reject) header.from=example.org",
+			"mx.example.net;\r\n\tspf=softfail smtp.helo=mail.example.org;\r\n\tdmarc=fail policy.dmarc=reject header.from=example.org",
 		},
 		{"nothing checked", "a@example.org", "h", SessionState{}, "mx.example.net; none"},
 		// A1: the HELO argument is the client's text; anything but a domain or an IP literal is left out.
@@ -36,7 +36,7 @@ func TestAuthResults(t *testing.T) {
 		// that swallowed the DMARC result after it.
 		{
 			"forged d=", "", "", SessionState{DKIM: "permerror", DKIMDomain: "evil(", DMARC: "fail", DMARCPolicy: "reject", FromDomain: "bank.example"},
-			"mx.example.net;\r\n\tdkim=permerror;\r\n\tdmarc=fail (p=reject) header.from=bank.example",
+			"mx.example.net;\r\n\tdkim=permerror;\r\n\tdmarc=fail policy.dmarc=reject header.from=bank.example",
 		},
 		// Review R1: d=evil@bank.example (a failing signature) is not a domain; it was cut to bank.example.
 		{"d= with @", "", "", SessionState{DKIM: "permerror", DKIMDomain: "evil@bank.example"}, "mx.example.net;\r\n\tdkim=permerror"},

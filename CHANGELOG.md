@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Security (DMARC, RFC 9989): a From address in any subdomain escaped its domain's policy, because
+  only `_dmarc.<From domain>` was queried (`ceo@billing.victim.example` got `dmarc=none` under
+  `p=reject`). Policy discovery and the organizational domain now use the RFC 9989 DNS Tree Walk
+  (at most 8 queries, `psd=`), which replaces the Public Suffix List; `sp`, `np` and `t=y` apply;
+  record syntax errors fall back to defaults instead of `permerror`, a record without `p` counts as
+  `p=none` when it has a `rua`, and two DMARC records count as none. If the existence query behind
+  `np` fails, `sp`/`p` applies (deviation from RFC 9989 5.3.6, which applies no policy). With a null sender, SPF passing
+  on the HELO domain now aligns (RFC 9989 3.2.4), so DSNs can pass DMARC via SPF.
+  Authentication-Results reports `policy.dmarc=` instead of a `(p=…)` comment. The antispam plugin's
+  `scan -mail-auth` uses the same code (new public package `dmarc`), and a `p=none` failure weighs 0
+  (`DMARC_POLICY_SOFTFAIL`, was 0.1: RFC 9989 5.4).
+- Security (DMARC/TLS reports, RFC 9990 8): the gzip parts of a report message may expand to 32 MiB
+  in total and multipart nesting stops at 8 levels (a small gzip bomb exhausted memory); each report
+  is parsed once on arrival and cached, where every report list request used to decompress all of
+  them again; each domain keeps at most the newest 1000 reports and 256 MiB per kind, older ones are
+  deleted on arrival.
+
 - Security (Authentication-Results, RFC 8601): a sender could forge results under our name. The EHLO
   argument went into `smtp.helo=` as is (`EHLO x;dkim=pass ...`); a DKIM `d=` such as `evil(` opened
   a comment that hid our DMARC result; a forged field with our authserv-id survived when the id was

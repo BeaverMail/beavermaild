@@ -91,7 +91,8 @@ func TestDMARCAlignsOnlyPassingSignatures(t *testing.T) {
 	}
 }
 
-// K2: relaxed alignment uses the Public Suffix List, not the last two labels.
+// K2: relaxed alignment uses the Organizational Domain, not the last two labels (now from the RFC 9989
+// Tree Walk, see package dmarc).
 func TestDMARCOrganizationalDomain(t *testing.T) {
 	t.Parallel()
 	dns, key := newDNS(t)
@@ -152,19 +153,68 @@ func TestDKIMTooManySignatures(t *testing.T) {
 	}
 }
 
-// K2: the Organizational Domain comes from the Public Suffix List (RFC 7489 3.2).
-func TestOrgDomain(t *testing.T) {
+// D1 (RFC 9989 audit): a From in a subdomain without its own record gets the parent's policy.
+// Before, only _dmarc.<From domain> was queried: dmarc=none, p=reject escaped.
+func TestDMARCSubdomainInheritsPolicy(t *testing.T) {
 	t.Parallel()
-	for in, want := range map[string]string{
-		"attacker.co.uk":    "attacker.co.uk", // was "co.uk", shared with every .co.uk domain
-		"mail.victim.co.uk": "victim.co.uk",
-		"a.b.example.com":   "example.com",
-		"user.github.io":    "user.github.io", // private suffix: each user is its own organization
-		"co.uk":             "co.uk",
-		"localhost":         "localhost",
-	} {
-		if got := orgDomain(in); got != want {
-			t.Errorf("orgDomain(%q) = %q, want %q", in, got, want)
-		}
+	dns, _ := newDNS(t)
+	if st := eom(t, dns, time.Second, msgFrom("<ceo@billing.victim.example>")); st.DMARC != "fail" || st.DMARCPolicy != "reject" {
+		t.Fatalf("dmarc %q %q, want fail reject", st.DMARC, st.DMARCPolicy)
+	}
+}
+
+// D3: with a null MAIL FROM, SPF passing on the HELO domain is the SPF identity (RFC 9989 3.2.4,
+// postmaster@<HELO>). Before, a null sender never aligned, so DSNs could pass DMARC only via DKIM.
+func TestDMARCNullSenderUsesHELO(t *testing.T) {
+	t.Parallel()
+	dns, _ := newDNS(t)
+	path := filepath.Join(t.TempDir(), "msg.eml")
+	if err := os.WriteFile(path, []byte(msgFrom("<mailer-daemon@mx.victim.example>")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	v := New(Config{Enabled: true, DMARCEnabled: true, DNSTimeout: time.Second, LookupTXT: dns.lookup})
+	st := v.FinishEom(context.Background(), path, "", "mx.victim.example", SessionState{SPFMailFrom: "pass"})
+	if st.DMARC != "pass" {
+		t.Fatalf("null sender, SPF pass on HELO: dmarc %q", st.DMARC)
+	}
+	st = v.FinishEom(context.Background(), path, "", "mx.attacker.example", SessionState{SPFMailFrom: "pass"})
+	if st.DMARC != "fail" {
+		t.Fatalf("unaligned HELO: dmarc %q", st.DMARC)
+	}
+}
+
+// D5: np applies to a From domain that does not exist, through the DomainExists seam.
+func TestDMARCNonExistentSubdomain(t *testing.T) {
+	t.Parallel()
+	dns, _ := newDNS(t)
+	dns.records["_dmarc.victim.example"] = "v=DMARC1; p=none; np=reject"
+	path := filepath.Join(t.TempDir(), "msg.eml")
+	if err := os.WriteFile(path, []byte(msgFrom("<ceo@ghost.victim.example>")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	v := New(Config{Enabled: true, DKIMEnabled: true, DMARCEnabled: true, DNSTimeout: time.Second, LookupTXT: dns.lookup,
+		DomainExists: func(_ context.Context, d string) (bool, error) { return d != "ghost.victim.example", nil }})
+	if st := v.FinishEom(context.Background(), path, "", "", SessionState{}); st.DMARC != "fail" || st.DMARCPolicy != "reject" {
+		t.Fatalf("dmarc %q %q, want fail reject", st.DMARC, st.DMARCPolicy)
+	}
+}
+
+// Review: a From domain the DNS cannot hold (a label over 63 octets) does not exist, so np applies;
+// asking the resolver failed and gave temperror.
+func TestDomainExistsInvalidName(t *testing.T) {
+	t.Parallel()
+	v := New(Config{Enabled: true})
+	if ok, err := v.domainExists(context.Background(), strings.Repeat("a", 64)+".victim.example"); ok || err != nil {
+		t.Fatalf("exists %v err %v", ok, err)
+	}
+}
+
+// Review: a d= in U-labels aligns with the From domain in A-labels (RFC 8616 4).
+func TestDMARCUnicodeSigningDomain(t *testing.T) {
+	t.Parallel()
+	dns, key := newDNS(t)
+	dns.records["_dmarc.xn--mnchen-3ya.example"] = "v=DMARC1; p=reject"
+	if st := eom(t, dns, time.Second, sign(t, key, "münchen.example", msgFrom("<a@xn--mnchen-3ya.example>"))); st.DMARC != "pass" {
+		t.Fatalf("dkim %q dmarc %q", st.DKIM, st.DMARC)
 	}
 }

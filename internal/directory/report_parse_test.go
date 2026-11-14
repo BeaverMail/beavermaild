@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -343,5 +344,74 @@ func TestParseCorruptReport(t *testing.T) {
 	}
 	if !bytes.Equal(after, []byte(broken)) {
 		t.Fatal("parsing modified the stored raw report")
+	}
+}
+
+// R1 (RFC 9990 8.1): a gzip bomb is cut at maxReportPayload instead of being expanded in memory.
+// Before, the whole payload was read: a few MB of gzip took GBs on every report list request.
+func TestParseReportGzipBomb(t *testing.T) {
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	_, _ = zw.Write([]byte("<feedback>"))
+	_, _ = zw.Write(make([]byte, maxReportPayload+1024))
+	_ = zw.Close()
+	raw := reportMessage("application/gzip", "bomb.xml.gz", base64.StdEncoding.EncodeToString(buf.Bytes()))
+	log, _ := parseLogger()
+	res := ParseReport(log, "dmarc", []byte(raw))
+	if res.DMARC != nil || !strings.Contains(strings.Join(res.Problems, ";"), "over 32 MiB") {
+		t.Fatalf("parsed %v, problems %v", res.DMARC != nil, res.Problems)
+	}
+}
+
+// Review S1: the gzip budget covers the whole message. Before, each part had its own 32 MiB and all
+// of them stayed in memory: many small bombs in one message added up to GBs.
+func TestParseReportGzipBudgetPerMessage(t *testing.T) {
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	_, _ = zw.Write(make([]byte, maxReportPayload/3+1))
+	_ = zw.Close()
+	part := base64.StdEncoding.EncodeToString(buf.Bytes())
+	var b strings.Builder
+	b.WriteString("Content-Type: multipart/mixed; boundary=b\r\n\r\n")
+	for range 4 {
+		b.WriteString("--b\r\nContent-Type: application/gzip\r\nContent-Transfer-Encoding: base64\r\n\r\n" + part + "\r\n")
+	}
+	b.WriteString("--b--\r\n")
+	out, problems := reportPayloads([]byte(b.String()))
+	total := 0
+	for _, p := range out {
+		total += len(p.data)
+	}
+	if total > maxReportPayload || !strings.Contains(strings.Join(problems, ";"), "over 32 MiB") {
+		t.Fatalf("kept %d bytes, problems %v", total, problems)
+	}
+}
+
+// Review S2: multipart nesting past maxMIMEDepth is not walked.
+func TestParseReportMIMEDepth(t *testing.T) {
+	body := "<feedback/>"
+	for i := range maxMIMEDepth + 3 {
+		bd := fmt.Sprintf("b%d", i)
+		body = "Content-Type: multipart/mixed; boundary=" + bd + "\r\n\r\n--" + bd + "\r\n" + body + "\r\n--" + bd + "--\r\n"
+	}
+	out, problems := reportPayloads([]byte(body))
+	if len(out) != 0 || !strings.Contains(strings.Join(problems, ";"), "nested deeper") {
+		t.Fatalf("payloads %d problems %v", len(out), problems)
+	}
+}
+
+// Review S3: a parsed aggregate report reads back from the cache unchanged.
+func TestParseStoredReportCacheRoundTrip(t *testing.T) {
+	raw := reportMessage("application/gzip", "r.xml.gz", gzipB64(t, dmarcXML))
+	path, err := SaveDomainReport(t.TempDir(), 1, "dmarc", "a@b.test", "dmarc-reports@x.test", []byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := ParseStoredReport(nil, "dmarc", path)
+	if first.DMARC == nil {
+		t.Fatalf("not parsed: %v", first.Problems)
+	}
+	if again := ParseStoredReport(nil, "dmarc", path); !reflect.DeepEqual(again, first) {
+		t.Fatalf("cache round trip differs:\n%+v\n%+v", again.DMARC, first.DMARC)
 	}
 }

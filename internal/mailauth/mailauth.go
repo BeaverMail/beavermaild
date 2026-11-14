@@ -4,6 +4,7 @@ package mailauth
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"net"
 	netmail "net/mail"
 	"os"
@@ -11,10 +12,10 @@ import (
 	"time"
 
 	"github.com/emersion/go-msgauth/dkim"
-	"github.com/emersion/go-msgauth/dmarc"
+	"github.com/miekg/dns"
 	spflib "github.com/wttw/spf"
-	"golang.org/x/net/publicsuffix"
 
+	"github.com/BeaverMail/beavermaild/dmarc"
 	"github.com/BeaverMail/beavermaild/internal/dnsname"
 	"github.com/BeaverMail/beavermaild/internal/mailauth/arc"
 )
@@ -29,6 +30,7 @@ type Config struct {
 	ARCEnabled   bool
 	SPFResolver  spflib.Resolver
 	LookupTXT    func(context.Context, string) ([]string, error)
+	DomainExists func(context.Context, string) (bool, error) // test seam; nil asks the SPF resolver
 }
 
 // SessionState holds per-transaction auth results for filter wire encoding.
@@ -104,7 +106,7 @@ func (v *Verifier) FinishEom(ctx context.Context, bodyPath, mailFrom, helo strin
 		state.DKIM, state.DKIMDomain, dkimPassed = v.verifyDKIM(ctx, bodyPath)
 	}
 	if v.cfg.DMARCEnabled {
-		dmarcRes, policy := v.evaluateDMARC(ctx, fromDomain, fromOK, mailFrom, state, dkimPassed)
+		dmarcRes, policy := v.evaluateDMARC(ctx, fromDomain, fromOK, mailFrom, helo, state, dkimPassed)
 		state.DMARC = dmarcRes
 		state.DMARCPolicy = policy
 	}
@@ -178,79 +180,59 @@ func (v *Verifier) verifyDKIM(ctx context.Context, bodyPath string) (result, dom
 	return "fail", verifs[0].Domain, nil
 }
 
-func (v *Verifier) evaluateDMARC(ctx context.Context, fromDomain string, fromOK bool, mailFrom string, state SessionState, dkimPassed []string) (result, policy string) {
+// evaluateDMARC applies RFC 9989 (package dmarc) to the message.
+func (v *Verifier) evaluateDMARC(ctx context.Context, fromDomain string, fromOK bool, mailFrom, helo string, state SessionState, dkimPassed []string) (result, policy string) {
 	// RFC 7489 6.6.1: no From, several, or several mailboxes in it are "typically rejected"; anything
 	// softer would let a second From field slip a forged one past the policy.
 	if !fromOK {
 		return "fail", "reject"
 	}
-	rec, err := dmarc.LookupWithOptions(fromDomain, &dmarc.LookupOptions{
-		LookupTXT: v.lookupTXT(ctx),
-	})
-	if err != nil {
-		if dmarc.IsTempFail(err) {
-			return "temperror", ""
-		}
-		if err == dmarc.ErrNoPolicy {
-			return "none", ""
-		}
-		return "permerror", ""
-	}
-
-	spfAligned := spfAligned(state.SPFMailFrom, fromDomain, mailFrom, rec.SPFAlignment)
-	dkimAligned := dkimAligned(dkimPassed, fromDomain, rec.DKIMAlignment)
-	if spfAligned || dkimAligned {
-		return "pass", ""
-	}
 	if state.SPFMailFrom == "" && state.DKIM == "" {
-		return "none", ""
+		return "none", "" // neither SPF nor DKIM ran
 	}
-	pol := string(rec.Policy)
-	if pol == "" {
-		pol = "unspecified"
-	}
-	return "fail", pol
-}
-
-func spfAligned(spfResult, fromDomain, mailFrom string, mode dmarc.AlignmentMode) bool {
-	if spfResult != "pass" {
-		return false
-	}
-	envDomain := domainFromAddress(mailFrom)
-	if envDomain == "" {
-		return false
-	}
-	return domainsAlign(envDomain, fromDomain, mode)
-}
-
-// dkimAligned reports whether a passing signature's d= aligns with From. Only verified signatures
-// count: any DKIM-Signature field could name the victim's domain.
-func dkimAligned(passed []string, fromDomain string, mode dmarc.AlignmentMode) bool {
-	for _, d := range passed {
-		if domainsAlign(d, fromDomain, mode) {
-			return true
+	var spfDomain string
+	if state.SPFMailFrom == "pass" {
+		// RFC 9989 3.2.4: with a null MAIL FROM the SPF identity is postmaster@<HELO>.
+		spfDomain = helo
+		if mailFrom != "" {
+			spfDomain = domainFromAddress(mailFrom)
 		}
 	}
-	return false
-}
-
-func domainsAlign(authDomain, fromDomain string, mode dmarc.AlignmentMode) bool {
-	authDomain = dnsname.ToASCII(authDomain)
-	fromDomain = dnsname.ToASCII(fromDomain)
-	if mode == dmarc.AlignmentStrict {
-		return authDomain == fromDomain
+	dkimDomains := make([]string, len(dkimPassed))
+	for i, d := range dkimPassed {
+		dkimDomains[i] = dnsname.ToASCII(d) // d= may carry U-labels (RFC 8616 4)
 	}
-	return orgDomain(authDomain) == orgDomain(fromDomain)
+	lookup := v.lookupTXT(ctx)
+	res := dmarc.Evaluate(ctx, dmarc.Resolver{
+		LookupTXT: func(_ context.Context, name string) ([]string, error) { return lookup(name) },
+		Exists:    v.domainExists,
+	}, fromDomain, dnsname.ToASCII(spfDomain), dkimDomains)
+	return res.Result, res.Policy
 }
 
-// orgDomain is the Organizational Domain (RFC 7489 3.2): the public suffix plus one label, from the
-// Public Suffix List. Taking the last two labels made attacker.co.uk align with victim.co.uk.
-func orgDomain(domain string) string {
-	org, err := publicsuffix.EffectiveTLDPlusOne(domain)
+// domainExists reports whether domain exists (RFC 8020: only NXDOMAIN says it does not), for the
+// DMARC np tag. net cannot tell NXDOMAIN from "no records of this type", so it asks the SPF resolver.
+func (v *Verifier) domainExists(ctx context.Context, domain string) (bool, error) {
+	if v.cfg.DomainExists != nil {
+		return v.cfg.DomainExists(ctx, domain)
+	}
+	// A name the DNS cannot hold does not exist; asking would fail and turn np into temperror.
+	if _, ok := dns.IsDomainName(domain); !ok {
+		return false, nil
+	}
+	m := new(dns.Msg)
+	m.SetQuestion(dns.Fqdn(domain), dns.TypeA)
+	r, err := v.spf.Resolver.Resolve(ctx, m)
 	if err != nil {
-		return domain // a public suffix itself, or a single label
+		return false, err
 	}
-	return org
+	switch r.Rcode {
+	case dns.RcodeNameError:
+		return false, nil
+	case dns.RcodeSuccess:
+		return true, nil
+	}
+	return false, fmt.Errorf("dns %s: %s", domain, dns.RcodeToString[r.Rcode])
 }
 
 func domainFromAddress(addr string) string {

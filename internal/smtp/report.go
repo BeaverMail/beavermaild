@@ -29,6 +29,10 @@ func (s *session) storeReport(ctx context.Context, t rcptTarget, raw []byte) err
 	if err != nil {
 		return err
 	}
-	_, err = directory.SaveDomainReport(s.dir.DataDir(), dom.ID, t.report, s.mailFrom, t.address, raw)
-	return err
+	path, err := directory.SaveDomainReport(s.dir.DataDir(), dom.ID, t.report, s.mailFrom, t.address, raw)
+	if err != nil {
+		return err
+	}
+	directory.ParseStoredReport(s.log, t.report, path) // parse once on arrival (bounded), cached for listings
+	return nil
 }

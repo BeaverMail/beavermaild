@@ -85,7 +85,7 @@ func (s *Server) handleDomainReports(w http.ResponseWriter, r *http.Request) {
 	items := make([]reportItem, 0, len(stored))
 	parsed := make([]directory.ParsedReport, 0, len(stored))
 	for _, st := range stored {
-		res := directory.ParseReport(s.log, st.Meta.Kind, st.Raw)
+		res := directory.ParseStoredReport(s.log, st.Meta.Kind, st.Path)
 		problems := append(append([]string{}, st.Problems...), res.Problems...)
 		items = append(items, reportItem{
 			ReportMeta: st.Meta,

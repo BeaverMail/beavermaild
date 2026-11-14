@@ -102,7 +102,7 @@ Common fields:
 | `ehlo_domain` | helo+ | string | Client EHLO/HELO name |
 | `iprev_ptr` / `iprev_result` | connect+ | string | Client PTR lookup |
 | `asn` / `country` | connect+ | uint / string | Optional ASN lookup (host `smtp.asn_lookup`; default off) |
-| `auth` | mail+ / eom | object | Host mail-auth results (`spf_ehlo`, `spf_mail_from`, `dkim`, `dmarc`, `dmarc_policy`, `arc`) |
+| `auth` | mail+ / eom | object | Host mail-auth results (`spf_ehlo`, `spf_mail_from`, `dkim`, `dmarc`, `dmarc_policy`, `arc`). `dmarc_policy` is set on `dmarc: fail`: the policy to apply (`none`, `quarantine`, `reject`) after `sp`/`np` and `t=y` (RFC 9989) |
 
 Response v2.2 optional fields: `score` (float), `tags` (string array), `headers` (map appended on accept).
 

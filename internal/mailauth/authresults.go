@@ -43,7 +43,7 @@ func AuthResults(authservID, mailFrom, helo string, st SessionState) string {
 	if st.DMARC != "" {
 		m := "dmarc=" + st.DMARC
 		if st.DMARCPolicy != "" {
-			m += " (p=" + st.DMARCPolicy + ")"
+			m += " policy.dmarc=" + st.DMARCPolicy // RFC 9989 9.1: the policy to apply, after t=
 		}
 		if d := pvalueDomain(st.FromDomain); d != "" {
 			m += " header.from=" + d

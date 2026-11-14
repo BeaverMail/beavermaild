@@ -351,3 +351,11 @@ func TestPhishWeight(t *testing.T) {
 		t.Errorf("different: %v", w)
 	}
 }
+
+// D9 (RFC 9989 audit): a DMARC failure under p=none MUST NOT change handling (RFC 9989 5.4); the
+// symbol stays for visibility but weighs nothing. It was rspamd's 0.1.
+func TestDMARCNoneWeighsNothing(t *testing.T) {
+	if s := defaultScores["DMARC_POLICY_SOFTFAIL"]; s != 0 {
+		t.Fatalf("DMARC_POLICY_SOFTFAIL = %v", s)
+	}
+}

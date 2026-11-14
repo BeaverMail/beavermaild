@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"mime"
 	"net/mail"
 	"os"
@@ -34,6 +35,49 @@ type ReportMeta struct {
 	ContentType string `json:"content_type"` // top-level media type ("" if unreadable)
 	Format      string `json:"format"`       // presumed payload format: gzip|xml|json|unknown
 	File        string `json:"file"`         // raw message file name
+}
+
+// Report store bounds per domain and kind. Anyone can mail dmarc-reports@ and tls-reports@ (RFC 9990
+// 8.2): without a bound the store filled the disk. The oldest reports go first, so ingest never stops.
+const (
+	maxReportsPerKind     = 1000
+	maxReportBytesPerKind = 256 << 20
+)
+
+// pruneReports deletes the oldest reports in dir (names sort by arrival time) past the bounds.
+func pruneReports(dir string, maxCount int, maxBytes int64) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	type rep struct {
+		name string
+		size int64
+	}
+	var reps []rep
+	var total int64
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".eml") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue // removed meanwhile
+		}
+		reps = append(reps, rep{e.Name(), info.Size()})
+		total += info.Size()
+	}
+	// ReadDir returns names sorted: oldest first.
+	for i := 0; len(reps)-i > maxCount || (total > maxBytes && len(reps)-i > 1); i++ {
+		base := strings.TrimSuffix(reps[i].name, ".eml")
+		for _, f := range []string{base + ".eml", base + ".json", base + ".parsed.json"} {
+			if err := os.Remove(filepath.Join(dir, f)); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+		}
+		total -= reps[i].size
+	}
+	return nil
 }
 
 // SaveDomainReport writes the raw (unparsed) report message plus its metadata under
@@ -78,6 +122,7 @@ func SaveDomainReport(dataDir string, domainID uint32, kind, from, to string, ra
 	if err := os.WriteFile(filepath.Join(dir, name+".json"), wire, 0o600); err != nil {
 		return "", fmt.Errorf("directory: report store: %w", err)
 	}
+	_ = pruneReports(dir, maxReportsPerKind, maxReportBytesPerKind) // the report is saved: failing it now would make the sender resend it; the next save prunes again
 	return rawPath, nil
 }
 
@@ -85,8 +130,39 @@ func SaveDomainReport(dataDir string, domainID uint32, kind, from, to string, ra
 // message. Problems lists store-level read issues (e.g. unreadable metadata).
 type StoredReport struct {
 	Meta     ReportMeta
-	Raw      []byte
+	Path     string // raw message file; read by ParseStoredReport, not by the listing
 	Problems []string
+}
+
+// parsedCacheVersion changes whenever ParseReport's output changes, so older caches are parsed again.
+const parsedCacheVersion = 1
+
+type parsedCache struct {
+	Version int          `json:"version"`
+	Report  ParsedReport `json:"report"`
+}
+
+// ParseStoredReport returns the parse of the raw report at rawPath, from the cache file beside it
+// when present, else parsing it and writing the cache. A report is decompressed once, not on every
+// listing: anyone can fill the store, and each listing used to expand every report again
+// (RFC 9990 8.1). The raw message is never modified.
+func ParseStoredReport(log *slog.Logger, kind, rawPath string) ParsedReport {
+	cachePath := strings.TrimSuffix(rawPath, ".eml") + ".parsed.json"
+	if b, err := os.ReadFile(cachePath); err == nil {
+		var c parsedCache
+		if json.Unmarshal(b, &c) == nil && c.Version == parsedCacheVersion {
+			return c.Report
+		}
+	}
+	raw, err := os.ReadFile(rawPath)
+	if err != nil {
+		return ParsedReport{Kind: kind, Format: "unknown", Problems: []string{"raw message unreadable: " + err.Error()}}
+	}
+	res := ParseReport(log, kind, raw)
+	if b, err := json.Marshal(parsedCache{parsedCacheVersion, res}); err == nil {
+		_ = os.WriteFile(cachePath, b, 0o600) // without the cache the next listing parses again
+	}
+	return res
 }
 
 // ListDomainReports reads every stored report of the domain across kinds, newest
@@ -129,11 +205,7 @@ func ListDomainReports(dataDir string, domainID uint32) ([]StoredReport, error) 
 			}
 			// Kind and file name always follow the file system, not the metadata.
 			st.Meta.Kind, st.Meta.File = kind, f.Name()
-			raw, err := os.ReadFile(filepath.Join(root, kind, f.Name()))
-			if err != nil {
-				st.Problems = append(st.Problems, "raw message unreadable: "+err.Error())
-			}
-			st.Raw = raw
+			st.Path = filepath.Join(root, kind, f.Name())
 			out = append(out, st)
 		}
 	}

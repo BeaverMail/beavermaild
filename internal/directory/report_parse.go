@@ -122,12 +122,20 @@ func reportPayloads(raw []byte) ([]reportPayload, []string) {
 	}
 	var out []reportPayload
 	var problems []string
-	walkMIMEPart(textproto.MIMEHeader(msg.Header), readAll(msg.Body), &out, &problems)
+	budget := maxReportPayload
+	walkMIMEPart(textproto.MIMEHeader(msg.Header), readAll(msg.Body), 0, &budget, &out, &problems)
 	return out, problems
 }
 
 // walkMIMEPart decodes one MIME part and recurses into multipart bodies.
-func walkMIMEPart(header textproto.MIMEHeader, body []byte, out *[]reportPayload, problems *[]string) {
+// budget is what gzip parts may still expand to, for the whole message: kept per part, many small
+// bombs added up in memory.
+func walkMIMEPart(header textproto.MIMEHeader, body []byte, depth int, budget *int, out *[]reportPayload, problems *[]string) {
+	// Each level holds a copy of its body: unbounded nesting cost depth x size in memory.
+	if depth > maxMIMEDepth {
+		*problems = append(*problems, fmt.Sprintf("mime: nested deeper than %d, ignored", maxMIMEDepth))
+		return
+	}
 	ct, params, err := mime.ParseMediaType(header.Get("Content-Type"))
 	if err != nil {
 		ct = ""
@@ -154,7 +162,7 @@ func walkMIMEPart(header textproto.MIMEHeader, body []byte, out *[]reportPayload
 				*problems = append(*problems, "mime: "+err.Error())
 				return
 			}
-			walkMIMEPart(part.Header, readAll(part), out, problems)
+			walkMIMEPart(part.Header, readAll(part), depth+1, budget, out, problems)
 		}
 	}
 	data := body
@@ -163,7 +171,14 @@ func walkMIMEPart(header textproto.MIMEHeader, body []byte, out *[]reportPayload
 		if err != nil {
 			*problems = append(*problems, "gzip: "+err.Error())
 		} else {
-			data = readAll(gz)
+			// RFC 9990 8.1: a few MB of gzip can expand to many GB; past the cap the part is dropped.
+			data = readAll(io.LimitReader(gz, int64(*budget)+1))
+			if len(data) > *budget {
+				*problems = append(*problems, fmt.Sprintf("gzip: payload over %d MiB, not parsed", maxReportPayload>>20))
+				*budget = 0
+				return
+			}
+			*budget -= len(data)
 			if err := gz.Close(); err != nil {
 				*problems = append(*problems, "gzip: "+err.Error())
 			}
@@ -171,6 +186,13 @@ func walkMIMEPart(header textproto.MIMEHeader, body []byte, out *[]reportPayload
 	}
 	*out = append(*out, reportPayload{contentType: ct, filename: filename, data: data})
 }
+
+// maxReportPayload caps what the gzip parts of one report message expand to. Large providers send
+// aggregate reports of a few MB. maxMIMEDepth bounds multipart nesting (reports are one or two deep).
+const (
+	maxReportPayload = 32 << 20
+	maxMIMEDepth     = 8
+)
 
 // decodeTransferEncoding undoes the Content-Transfer-Encoding of a part body.
 // A broken encoding is a note, not a failure: the raw body is kept as-is.

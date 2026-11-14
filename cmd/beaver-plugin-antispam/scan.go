@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -15,9 +14,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BeaverMail/beavermaild/dmarc"
 	"github.com/BeaverMail/beavermaild/plugin"
 	"github.com/emersion/go-msgauth/dkim"
-	"github.com/emersion/go-msgauth/dmarc"
 )
 
 type scanRow struct {
@@ -217,32 +216,9 @@ func verifyAuth(raw []byte) *authResults {
 	if from == "" {
 		return a
 	}
-	policyDomain := from
-	rec, err := dmarc.Lookup(from)
-	if errors.Is(err, dmarc.ErrNoPolicy) && esld(from) != from {
-		policyDomain = esld(from)
-		rec, err = dmarc.Lookup(policyDomain)
-	}
-	switch {
-	case errors.Is(err, dmarc.ErrNoPolicy):
-		return a
-	case err != nil && dmarc.IsTempFail(err):
-		a.DMARC = "temperror"
-		return a
-	case err != nil:
-		a.DMARC = "permerror"
-		return a
-	}
-	for _, d := range passDomains {
-		if d == from || (rec.DKIMAlignment != dmarc.AlignmentStrict && esld(d) == esld(from)) {
-			a.DMARC = "pass"
-			return a
-		}
-	}
-	a.DMARC = "fail"
-	a.DMARCPolicy = string(rec.Policy)
-	if policyDomain != from && rec.SubdomainPolicy != "" {
-		a.DMARCPolicy = string(rec.SubdomainPolicy)
-	}
+	// shortcut: Exists is nil, so np is never applied (net cannot tell NXDOMAIN from NODATA);
+	// fine for an offline scan, the live verdict comes from the server.
+	res := dmarc.Evaluate(context.Background(), dmarc.Resolver{LookupTXT: net.DefaultResolver.LookupTXT}, from, "", passDomains)
+	a.DMARC, a.DMARCPolicy = res.Result, res.Policy
 	return a
 }

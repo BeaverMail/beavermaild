@@ -83,7 +83,7 @@ message URLs, so URL and DBL checks see the final link.
 
 | Group | Symbols (rspamd names) |
 |-------|------------------------|
-| Mail auth (host `mail_auth`) | `R_SPF_*`, `R_DKIM_*`, `DMARC_POLICY_*`, `DMARC_NA`, `ARC_*`; with `trusted-domains.txt`: `WHITELIST_DMARC` (-7), `BLACKLIST_DMARC` (+6) |
+| Mail auth (host `mail_auth`) | `R_SPF_*`, `R_DKIM_*`, `DMARC_POLICY_*`, `DMARC_NA`, `ARC_*`; with `trusted-domains.txt`: `WHITELIST_DMARC` (-7), `BLACKLIST_DMARC` (+6). `DMARC_POLICY_SOFTFAIL` (failure under `p=none`) weighs 0, not rspamd's 0.1: RFC 9989 5.4 |
 | HELO / rDNS | `HFILTER_HELO_BADIP`, `_BAREIP`, `HFILTER_HELO_1..5`, `HFILTER_HOSTNAME_1..5` (dynamic/pool PTR names), `HFILTER_HOSTNAME_UNKNOWN`, `RDNS_NONE`, `RDNS_DNSFAIL` (0) |
 | Envelope / links | `HFILTER_FROM_BOUNCE`, `HFILTER_RCPT_BOUNCEMOREONE`, `HFILTER_URL_ONLY`, `HFILTER_URL_ONELINE` |
 | Message-ID | `MISSING_MID`, `INVALID_MSGID`, `MID_BARE_IP`, `MID_RHS_NOT_FQDN`, `MID_MISSING_BRACKETS`, `MID_CONTAINS_FROM`, `MID_END_EQ_FROM_USER_PART`, ... |
@@ -110,7 +110,7 @@ with an invalid config logs the error and runs on defaults. After replacing the 
 
 `scan` scores stored messages as if received now from `-client-ip`: dates are judged against the message's top
 `Received` header, the envelope sender comes from `Return-Path`, `-mail-auth` re-verifies DKIM and DMARC (DKIM
-alignment only, no SPF), `-rbl` enables Spamhaus lookups. The redirector and hfilter DNS checks never run in scans.
+alignment only, no SPF, no `np` policy), `-rbl` enables Spamhaus lookups. The redirector and hfilter DNS checks never run in scans.
 Output is TSV (`mailbox uid score action symbols`) on stdout, in `-o` file, or JSON lines on stderr with `-json`.
 
 ## Host settings that feed the plugin

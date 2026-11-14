@@ -302,7 +302,9 @@ The server accepts mail for `dmarc-reports@` and `tls-reports@` on every hosted 
 (read them with `GET /domains/{domain}/reports`); no mailbox is needed and a catch-all does not capture them. Because
 the report address is in the same domain as the policy, no `_report._dmarc` authorization record is required
 (RFC 9990, Section 4). If the domain already has a DMARC record, add the `rua` to it instead of publishing a second
-one.
+one (two DMARC records count as none). Each domain keeps the newest 1000 reports and at most 256 MiB per kind
+(DMARC, TLS); older ones are deleted as new ones arrive. A compressed report expanding past 32 MiB is listed as
+not parsed. Each report is parsed once, on arrival, and the result kept beside it (`<file>.parsed.json`).
 
 **MTA-STS is not returned**: publishing `_mta-sts.<domain>` requires serving the policy at
 `https://mta-sts.<domain>/.well-known/mta-sts.txt` with a valid certificate (RFC 8461, Section 3), and this server
