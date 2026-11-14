@@ -15,8 +15,9 @@ import (
 //		dkim=pass header.d=example.org;
 //		dmarc=pass header.from=example.org
 //
-// mailFrom is the envelope sender ("" for a null sender, then SPF is reported for helo).
-func AuthResults(authservID, mailFrom, helo string, st SessionState) string {
+// mailFrom is the envelope sender ("" for a null sender, then SPF is reported for helo); remoteIP
+// the SMTP client, reported with arc (RFC 8617 6).
+func AuthResults(authservID, mailFrom, helo, remoteIP string, st SessionState) string {
 	var methods []string
 	switch {
 	case mailFrom != "" && st.SPFMailFrom != "":
@@ -50,13 +51,12 @@ func AuthResults(authservID, mailFrom, helo string, st SessionState) string {
 		}
 		methods = append(methods, m)
 	}
-	// RFC 8617 10.1 registers only none, pass and fail for arc (RFC 8601 4: results MUST be
-	// registered): an invalid chain is a failure, a DNS error is left unreported.
-	switch st.ARC {
-	case "none", "pass", "fail":
-		methods = append(methods, "arc="+st.ARC)
-	case "invalid":
-		methods = append(methods, "arc=fail")
+	if st.ARC != "" {
+		m := "arc=" + st.ARC // none, pass or fail only (RFC 8617 4.4, 5.2.1)
+		if ip := net.ParseIP(remoteIP); ip != nil {
+			m += " smtp.remote-ip=" + pvalueIP(ip)
+		}
+		methods = append(methods, m)
 	}
 	if len(methods) == 0 {
 		return authservID + "; none" // RFC 8601 §2.2: no method was applied
@@ -91,4 +91,12 @@ func pvalueDomain(s string) string {
 		}
 	}
 	return d
+}
+
+// pvalueIP: an IPv4 address is a MIME token; IPv6 has ":" (a tspecial), so it is quoted (RFC 8601 2.2).
+func pvalueIP(ip net.IP) string {
+	if ip.To4() != nil {
+		return ip.To4().String()
+	}
+	return `"` + ip.String() + `"`
 }

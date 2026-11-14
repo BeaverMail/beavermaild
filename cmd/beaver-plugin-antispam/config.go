@@ -207,7 +207,9 @@ var defaultScores = map[string]float64{
 	"R_DKIM_ALLOW": -0.1, "R_DKIM_NA": 0, "DMARC_POLICY_ALLOW": -0.5, "DMARC_POLICY_REJECT": 2,
 	// DMARC_POLICY_SOFTFAIL is 0, not rspamd's 0.1: a p=none failure MUST NOT change handling (RFC 9989 5.4).
 	"DMARC_POLICY_QUARANTINE": 1.5, "DMARC_POLICY_SOFTFAIL": 0, "DMARC_NA": 0, "DMARC_DNSFAIL": 0,
-	"DMARC_BAD_POLICY": 0, "ARC_ALLOW": -1, "ARC_REJECT": 1, "ARC_INVALID": 0.5, "ARC_DNSFAIL": 0, "ARC_NA": 0,
+	// ARC_REJECT is 0, not rspamd's 1: a failed chain MUST be treated as no chain (RFC 8617 5.2).
+	// ARC_ALLOW needs a sealer in trusted-domains.txt; ARC_ALLOW_UNTRUSTED (any sealer) weighs 0.
+	"DMARC_BAD_POLICY": 0, "ARC_ALLOW": -1, "ARC_ALLOW_UNTRUSTED": 0, "ARC_REJECT": 0, "ARC_NA": 0,
 	// whitelist_group.conf
 	"WHITELIST_DMARC": -7, "BLACKLIST_DMARC": 6,
 	// hfilter_group.conf

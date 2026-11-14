@@ -41,6 +41,7 @@ type SessionState struct {
 	DMARC       string
 	DMARCPolicy string
 	ARC         string
+	ARCSealer   string // on arc=pass: d= of the newest ARC-Seal, for trust decisions (RFC 8617 9.4)
 	DKIMDomain  string // d= of the passing signature (else the first one), for Authentication-Results
 	FromDomain  string // RFC5322.From domain DMARC evaluated, for Authentication-Results
 }
@@ -110,19 +111,20 @@ func (v *Verifier) FinishEom(ctx context.Context, bodyPath, mailFrom, helo strin
 		state.DMARCPolicy = policy
 	}
 	if v.cfg.ARCEnabled {
-		state.ARC = v.verifyARC(ctx, bodyPath)
+		state.ARC, state.ARCSealer = v.verifyARC(ctx, bodyPath)
 	}
 	return state
 }
 
 // verifyARC validates the inbound Authenticated Received Chain (RFC 8617).
-func (v *Verifier) verifyARC(ctx context.Context, bodyPath string) string {
+func (v *Verifier) verifyARC(ctx context.Context, bodyPath string) (string, string) {
 	f, err := os.Open(bodyPath)
 	if err != nil {
-		return "temperror"
+		return "", "" // not checked
 	}
 	defer f.Close()
-	return string(arc.Verify(ctx, f, v.arcLookupTXT()))
+	result, sealer := arc.Verify(ctx, f, v.arcLookupTXT())
+	return string(result), sealer
 }
 
 // arcLookupTXT binds the verifier DNS seam to the ARC lookup signature.

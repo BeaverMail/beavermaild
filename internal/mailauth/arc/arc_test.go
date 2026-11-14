@@ -37,7 +37,7 @@ func generatedKey(t *testing.T) *rsa.PrivateKey {
 
 // TestVerifyNone checks the normalized result for a message without ARC fields.
 func TestVerifyNone(t *testing.T) {
-	result := Verify(context.Background(), strings.NewReader("From: a@example.test\r\n\r\nbody\r\n"), func(context.Context, string) ([]string, error) {
+	result, _ := Verify(context.Background(), strings.NewReader("From: a@example.test\r\n\r\nbody\r\n"), func(context.Context, string) ([]string, error) {
 		t.Fatal("unexpected DNS lookup")
 		return nil, nil
 	})
@@ -52,7 +52,7 @@ func TestVerifyCanonicalizations(t *testing.T) {
 		t.Run(canonical, func(t *testing.T) {
 			key := generatedKey(t)
 			raw := buildChain(t, key, canonical, 1)
-			if result := Verify(context.Background(), bytes.NewReader(raw), keyLookup(t, key)); result != ResultPass {
+			if result, _ := Verify(context.Background(), bytes.NewReader(raw), keyLookup(t, key)); result != ResultPass {
 				t.Fatalf("result = %q, want pass", result)
 			}
 		})
@@ -63,7 +63,7 @@ func TestVerifyCanonicalizations(t *testing.T) {
 func TestVerifyTwoSetChain(t *testing.T) {
 	key := generatedKey(t)
 	raw := buildChain(t, key, "relaxed/relaxed", 2)
-	if result := Verify(context.Background(), bytes.NewReader(raw), keyLookup(t, key)); result != ResultPass {
+	if result, _ := Verify(context.Background(), bytes.NewReader(raw), keyLookup(t, key)); result != ResultPass {
 		t.Fatalf("result = %q, want pass", result)
 	}
 }
@@ -73,7 +73,7 @@ func TestVerifyTamperedBody(t *testing.T) {
 	key := generatedKey(t)
 	raw := buildChain(t, key, "relaxed/relaxed", 1)
 	raw = bytes.Replace(raw, []byte("Body \t value"), []byte("changed"), 1)
-	if result := Verify(context.Background(), bytes.NewReader(raw), keyLookup(t, key)); result != ResultFail {
+	if result, _ := Verify(context.Background(), bytes.NewReader(raw), keyLookup(t, key)); result != ResultFail {
 		t.Fatalf("result = %q, want fail", result)
 	}
 }
@@ -89,8 +89,8 @@ func TestVerifyMalformedChain(t *testing.T) {
 	}
 	for name, raw := range tests {
 		t.Run(name, func(t *testing.T) {
-			if result := Verify(context.Background(), bytes.NewReader(raw), keyLookup(t, key)); result != ResultInvalid {
-				t.Fatalf("result = %q, want invalid", result)
+			if result, _ := Verify(context.Background(), bytes.NewReader(raw), keyLookup(t, key)); result != ResultFail {
+				t.Fatalf("result = %q, want fail", result)
 			}
 		})
 	}
@@ -101,30 +101,30 @@ func TestVerifyAdvertisedFailure(t *testing.T) {
 	key := generatedKey(t)
 	raw := buildChain(t, key, "relaxed/relaxed", 1)
 	raw = bytes.Replace(raw, []byte("cv=none"), []byte("cv=fail"), 1)
-	if result := Verify(context.Background(), bytes.NewReader(raw), keyLookup(t, key)); result != ResultFail {
+	if result, _ := Verify(context.Background(), bytes.NewReader(raw), keyLookup(t, key)); result != ResultFail {
 		t.Fatalf("result = %q, want fail", result)
 	}
 }
 
-// TestVerifyDNSError checks transient resolver failures remain distinguishable.
+// RFC 8617 5.2.1: every error, a DNS one included, is a permanent fail (it was temperror).
 func TestVerifyDNSError(t *testing.T) {
 	key := generatedKey(t)
 	raw := buildChain(t, key, "simple/simple", 1)
 	lookup := func(context.Context, string) ([]string, error) {
 		return nil, errors.New("resolver unavailable")
 	}
-	if result := Verify(context.Background(), bytes.NewReader(raw), lookup); result != ResultTempError {
-		t.Fatalf("result = %q, want temperror", result)
+	if result, _ := Verify(context.Background(), bytes.NewReader(raw), lookup); result != ResultFail {
+		t.Fatalf("result = %q, want fail", result)
 	}
 }
 
 // TestVerifyStrictLimits checks the fixed message-size resource boundary.
 func TestVerifyStrictLimits(t *testing.T) {
 	raw := append([]byte("From: a@example.test\r\n\r\n"), bytes.Repeat([]byte("x"), maxMessageSize)...)
-	if result := Verify(context.Background(), bytes.NewReader(raw), func(context.Context, string) ([]string, error) {
+	if result, _ := Verify(context.Background(), bytes.NewReader(raw), func(context.Context, string) ([]string, error) {
 		return nil, nil
-	}); result != ResultInvalid {
-		t.Fatalf("result = %q, want invalid", result)
+	}); result != ResultNone {
+		t.Fatalf("result = %q, want none (no ARC field)", result)
 	}
 }
 
@@ -147,6 +147,12 @@ func keyLookup(t *testing.T, key *rsa.PrivateKey) LookupTXT {
 // buildChain constructs and signs a complete one-domain ARC chain.
 func buildChain(t *testing.T, key *rsa.PrivateKey, canonical string, count int) []byte {
 	t.Helper()
+	return buildChainDomain(t, key, canonical, count, "example.test")
+}
+
+// buildChainDomain is buildChain with every signature under domain.
+func buildChainDomain(t *testing.T, key *rsa.PrivateKey, canonical string, count int, domain string) []byte {
+	t.Helper()
 	body := []byte("Body \t value \r\n\r\n")
 	headers := []header{
 		{name: "from", raw: "From: Sender <sender@example.test>"},
@@ -167,16 +173,16 @@ func buildChain(t *testing.T, key *rsa.PrivateKey, canonical string, count int) 
 		ams := header{
 			name: "arc-message-signature",
 			raw: fmt.Sprintf(
-				"ARC-Message-Signature: i=%d; a=rsa-sha256; c=%s; d=example.test; s=arc;\r\n\th=from:subject; bh=%s; b=",
-				i, canonical, base64.StdEncoding.EncodeToString(bh[:])),
+				"ARC-Message-Signature: i=%d; a=rsa-sha256; c=%s; d=%s; s=arc;\r\n\th=from:subject; bh=%s; b=",
+				i, canonical, domain, base64.StdEncoding.EncodeToString(bh[:])),
 		}
 		var amsInput bytes.Buffer
 		headerMode := strings.Split(canonical, "/")[0]
 		from, _ := selectHeader(headers, "from", 0)
 		subject, _ := selectHeader(headers, "subject", 0)
-		amsInput.WriteString(canonicalizeHeader(from, headerMode, false))
-		amsInput.WriteString(canonicalizeHeader(subject, headerMode, false))
-		amsInput.WriteString(canonicalizeHeader(ams, headerMode, true))
+		amsInput.WriteString(canonicalizeHeader(from, headerMode))
+		amsInput.WriteString(canonicalizeHeader(subject, headerMode))
+		amsInput.WriteString(canonicalizeSignature(ams, headerMode))
 		ams.raw += sign(t, key, amsInput.Bytes())
 		parsedAMS, err := parseSignature(ams, false)
 		if err != nil {
@@ -185,15 +191,19 @@ func buildChain(t *testing.T, key *rsa.PrivateKey, canonical string, count int) 
 		seal := header{
 			name: "arc-seal",
 			raw: fmt.Sprintf(
-				"ARC-Seal: i=%d; a=rsa-sha256; d=example.test; s=arc; cv=%s; b=",
-				i, cv),
+				"ARC-Seal: i=%d; a=rsa-sha256; d=%s; s=arc; cv=%s; b=",
+				i, domain, cv),
 		}
 		sets = append(sets, set{aar: aar, ams: parsedAMS, as: signature{header: seal}})
 		var sealInput bytes.Buffer
 		for n, current := range sets {
-			sealInput.WriteString(canonicalizeHeader(current.aar, "relaxed", false))
-			sealInput.WriteString(canonicalizeHeader(current.ams.header, "relaxed", false))
-			sealInput.WriteString(canonicalizeHeader(current.as.header, "relaxed", n == len(sets)-1))
+			sealInput.WriteString(canonicalizeHeader(current.aar, "relaxed"))
+			sealInput.WriteString(canonicalizeHeader(current.ams.header, "relaxed"))
+			if n < len(sets)-1 {
+				sealInput.WriteString(canonicalizeHeader(current.as.header, "relaxed"))
+			} else {
+				sealInput.WriteString(canonicalizeSignature(current.as.header, "relaxed"))
+			}
 		}
 		seal.raw += sign(t, key, sealInput.Bytes())
 		parsedSeal, err := parseSignature(seal, true)

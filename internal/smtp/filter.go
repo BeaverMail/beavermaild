@@ -35,6 +35,7 @@ type FilterAuth struct {
 	DMARC       string `json:"dmarc,omitempty"`
 	DMARCPolicy string `json:"dmarc_policy,omitempty"`
 	ARC         string `json:"arc,omitempty"`
+	ARCSealer   string `json:"arc_sealer,omitempty"`
 }
 
 // FilterRequest is one SMTP filter check sent to a daemon plugin.

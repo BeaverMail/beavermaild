@@ -174,12 +174,12 @@ func TestAuthMapping(t *testing.T) {
 		a    authResults
 		want []string
 	}{
-		{authResults{SPFMailFrom: "pass", DKIM: "pass", DMARC: "pass", ARC: "pass"}, []string{"R_SPF_ALLOW", "R_DKIM_ALLOW", "DMARC_POLICY_ALLOW", "ARC_ALLOW"}},
+		{authResults{SPFMailFrom: "pass", DKIM: "pass", DMARC: "pass", ARC: "pass"}, []string{"R_SPF_ALLOW", "R_DKIM_ALLOW", "DMARC_POLICY_ALLOW"}}, // arc=pass: checkARC
 		{authResults{SPFMailFrom: "fail", DKIM: "fail", DMARC: "fail", DMARCPolicy: "reject"}, []string{"R_SPF_FAIL", "R_DKIM_REJECT", "DMARC_POLICY_REJECT"}},
 		{authResults{SPFEhlo: "softfail", DMARC: "fail", DMARCPolicy: "quarantine"}, []string{"R_SPF_SOFTFAIL", "DMARC_POLICY_QUARANTINE"}},
 		{authResults{DMARC: "fail", DMARCPolicy: "none"}, []string{"DMARC_POLICY_SOFTFAIL"}},
-		{authResults{SPFMailFrom: "temperror", DKIM: "temperror", DMARC: "temperror", ARC: "temperror"}, []string{"R_SPF_DNSFAIL", "R_DKIM_TEMPFAIL", "DMARC_DNSFAIL", "ARC_DNSFAIL"}},
-		{authResults{SPFMailFrom: "permerror", DKIM: "permerror", ARC: "invalid"}, []string{"R_SPF_PERMFAIL", "R_DKIM_PERMFAIL", "ARC_INVALID"}},
+		{authResults{SPFMailFrom: "temperror", DKIM: "temperror", DMARC: "temperror"}, []string{"R_SPF_DNSFAIL", "R_DKIM_TEMPFAIL", "DMARC_DNSFAIL"}},
+		{authResults{SPFMailFrom: "permerror", DKIM: "permerror", ARC: "fail"}, []string{"R_SPF_PERMFAIL", "R_DKIM_PERMFAIL", "ARC_REJECT"}},
 		{authResults{SPFMailFrom: "none", DKIM: "none", DMARC: "none", ARC: "none"}, []string{"R_SPF_NA", "R_DKIM_NA", "DMARC_NA", "ARC_NA"}},
 	}
 	for _, tc := range tests {
@@ -357,5 +357,28 @@ func TestPhishWeight(t *testing.T) {
 func TestDMARCNoneWeighsNothing(t *testing.T) {
 	if s := defaultScores["DMARC_POLICY_SOFTFAIL"]; s != 0 {
 		t.Fatalf("DMARC_POLICY_SOFTFAIL = %v", s)
+	}
+}
+
+// RFC 8617 audit X5: a passing chain earns ARC_ALLOW only when the newest sealer (or a parent
+// domain) is in trusted-domains.txt; anyone can seal their own spam (RFC 8617 9.4). X4: a failed
+// chain is treated as no chain and weighs nothing.
+func TestCheckARC(t *testing.T) {
+	f := newFilter(defaultConfig(), Lists{Trusted: map[string]bool{"lists.example.com": true}}, nil)
+	for _, tc := range []struct {
+		a    authResults
+		want string
+	}{
+		{authResults{ARC: "pass", ARCSealer: "lists.example.com"}, "ARC_ALLOW"},
+		{authResults{ARC: "pass", ARCSealer: "relay.lists.example.com"}, "ARC_ALLOW"},
+		{authResults{ARC: "pass", ARCSealer: "spammer.example"}, "ARC_ALLOW_UNTRUSTED"},
+		{authResults{ARC: "pass"}, "ARC_ALLOW_UNTRUSTED"},
+	} {
+		r := newResult()
+		f.checkARC(&tc.a, r)
+		expectSyms(t, r, []string{tc.want}, nil)
+	}
+	if defaultScores["ARC_ALLOW_UNTRUSTED"] != 0 || defaultScores["ARC_REJECT"] != 0 || defaultScores["ARC_ALLOW"] >= 0 {
+		t.Fatalf("scores: untrusted %v reject %v allow %v", defaultScores["ARC_ALLOW_UNTRUSTED"], defaultScores["ARC_REJECT"], defaultScores["ARC_ALLOW"])
 	}
 }

@@ -46,6 +46,7 @@ type authResults struct {
 	DMARC       string `json:"dmarc,omitempty"`
 	DMARCPolicy string `json:"dmarc_policy,omitempty"`
 	ARC         string `json:"arc,omitempty"`
+	ARCSealer   string `json:"arc_sealer,omitempty"`
 }
 
 type response struct {
@@ -135,6 +136,7 @@ func (f *Filter) evaluate(ctx context.Context, req *request, raw []byte) verdict
 
 	checkGTUBE(f.cfg.GTUBE, msg, r)
 	checkAuth(req.Auth, r)
+	f.checkARC(req.Auth, r)
 	f.checkWhitelist(msg, req.Auth, r)
 	f.checkSpamtrap(req.To, r)
 	if !local {

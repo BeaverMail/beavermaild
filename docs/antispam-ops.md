@@ -83,7 +83,7 @@ message URLs, so URL and DBL checks see the final link.
 
 | Group | Symbols (rspamd names) |
 |-------|------------------------|
-| Mail auth (host `mail_auth`) | `R_SPF_*`, `R_DKIM_*`, `DMARC_POLICY_*`, `DMARC_NA`, `ARC_*`; with `trusted-domains.txt`: `WHITELIST_DMARC` (-7), `BLACKLIST_DMARC` (+6). `DMARC_POLICY_SOFTFAIL` (failure under `p=none`) weighs 0, not rspamd's 0.1: RFC 9989 5.4 |
+| Mail auth (host `mail_auth`) | `R_SPF_*`, `R_DKIM_*`, `DMARC_POLICY_*`, `DMARC_NA`, `ARC_*`; with `trusted-domains.txt`: `WHITELIST_DMARC` (-7), `BLACKLIST_DMARC` (+6). `DMARC_POLICY_SOFTFAIL` (failure under `p=none`) weighs 0, not rspamd's 0.1: RFC 9989 5.4. ARC: `ARC_ALLOW` (-1) only when the newest sealer or a parent domain is in `trusted-domains.txt`, any other valid chain is `ARC_ALLOW_UNTRUSTED` (0): anyone can seal their own mail (RFC 8617 9.4); `ARC_REJECT` (a failed chain) weighs 0, not rspamd's 1, as a failed chain counts as no chain (RFC 8617 5.2) |
 | HELO / rDNS | `HFILTER_HELO_BADIP`, `_BAREIP`, `HFILTER_HELO_1..5`, `HFILTER_HOSTNAME_1..5` (dynamic/pool PTR names), `HFILTER_HOSTNAME_UNKNOWN`, `RDNS_NONE`, `RDNS_DNSFAIL` (0) |
 | Envelope / links | `HFILTER_FROM_BOUNCE`, `HFILTER_RCPT_BOUNCEMOREONE`, `HFILTER_URL_ONLY`, `HFILTER_URL_ONELINE` |
 | Message-ID | `MISSING_MID`, `INVALID_MSGID`, `MID_BARE_IP`, `MID_RHS_NOT_FQDN`, `MID_MISSING_BRACKETS`, `MID_CONTAINS_FROM`, `MID_END_EQ_FROM_USER_PART`, ... |

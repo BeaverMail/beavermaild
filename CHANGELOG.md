@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- ARC (RFC 8617): no chain sealed by another server could verify. The signature field was hashed
+  with a trailing CRLF (RFC 6376 3.7 says without), so every forwarded or mailing-list message
+  got `arc=fail` and +1 from the antispam plugin; the tests
+  signed with the same code and never noticed (they now check against an independent DKIM signer).
+  Also: an empty body under relaxed canonicalization is the null input, `ed25519-sha256` is
+  supported, an `l=` shorter than the body fails, keys are looked up once per message, results are
+  only `none`/`pass`/`fail` (DNS errors are `fail`, 5.2.1) and Authentication-Results adds
+  `smtp.remote-ip`. Antispam: a valid chain earns `ARC_ALLOW` (-1) only when its newest sealer is in
+  `trusted-domains.txt`, otherwise `ARC_ALLOW_UNTRUSTED` (0); `ARC_REJECT` weighs 0 (a failed chain
+  counts as none, 5.2). The filter protocol carries the sealer as `auth.arc_sealer`. Tag lists follow
+  RFC 6376 3.2: tag names are case-sensitive, an empty tag-spec is a syntax error, unknown ARC-Seal
+  tags are ignored (only `h=` fails a seal), and an empty `c=` is an error.
+
 - SPF (RFC 7208): new implementation written from the RFC (`internal/spf`), replacing the
   `wttw/spf` library. A record could make the server send hundreds of DNS queries per message: `ptr`
   did not count toward the limit of 10 DNS terms (40 `ptr` = 441 queries); a valid record with

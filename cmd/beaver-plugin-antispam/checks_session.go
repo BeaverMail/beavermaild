@@ -51,10 +51,12 @@ func checkAuth(a *authResults, r *result) {
 	case "none":
 		r.add("DMARC_NA", 1)
 	}
-	arc := map[string]string{"pass": "ARC_ALLOW", "fail": "ARC_REJECT", "invalid": "ARC_INVALID",
-		"temperror": "ARC_DNSFAIL", "none": "ARC_NA"}
-	if s := arc[a.ARC]; s != "" {
-		r.add(s, 1)
+	// arc=pass is scored by checkARC, which knows the trusted sealers.
+	switch a.ARC {
+	case "fail":
+		r.add("ARC_REJECT", 1)
+	case "none":
+		r.add("ARC_NA", 1)
 	}
 }
 
@@ -73,6 +75,20 @@ func domainOf(addr string) string {
 		return ""
 	}
 	return strings.TrimSuffix(strings.ToLower(strings.Trim(addr[i+1:], "<> ")), ".")
+}
+
+// checkARC scores a valid chain. ARC proves who sealed the message, not that the sealer is honest:
+// anyone with a domain can seal their own spam (RFC 8617 9.4). Only a sealer in trusted-domains.txt
+// earns ARC_ALLOW; any other passing chain is ARC_ALLOW_UNTRUSTED, which weighs nothing.
+func (f *Filter) checkARC(a *authResults, r *result) {
+	if a == nil || a.ARC != "pass" {
+		return
+	}
+	if a.ARCSealer != "" && f.trusted(strings.ToLower(a.ARCSealer)) {
+		r.add("ARC_ALLOW", 1, a.ARCSealer)
+		return
+	}
+	r.add("ARC_ALLOW_UNTRUSTED", 1, a.ARCSealer)
 }
 
 // checkWhitelist ports the WHITELIST_DMARC rule of rspamd's whitelist plugin over trusted-domains.txt:

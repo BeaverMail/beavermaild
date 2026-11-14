@@ -84,6 +84,7 @@ func (s *session) authWire() *FilterAuth {
 		DMARC:       w.DMARC,
 		DMARCPolicy: w.DMARCPolicy,
 		ARC:         w.ARC,
+		ARCSealer:   w.ARCSealer,
 	}
 }
 
@@ -290,7 +291,7 @@ func (s *session) deliverAfterFilter(ctx context.Context, raw []byte) error {
 	// mail-auth off included); §4: ours goes above our Received.
 	raw = stripAuthResults(raw, s.hostname)
 	if s.authDone && !s.submission {
-		raw = prependHeader(raw, "Authentication-Results", mailauth.AuthResults(s.hostname, s.mailFrom, s.heloDomain, s.authState))
+		raw = prependHeader(raw, "Authentication-Results", mailauth.AuthResults(s.hostname, s.mailFrom, s.heloDomain, s.clientIP(), s.authState))
 	}
 	return s.finishDelivery(ctx, raw)
 }

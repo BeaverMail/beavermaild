@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto"
+	"crypto/ed25519"
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
@@ -12,9 +13,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"strconv"
 	"strings"
+
+	"github.com/BeaverMail/beavermaild/internal/dnsname"
 )
 
 const (
@@ -25,15 +27,14 @@ const (
 	maxTagValue    = 64 << 10
 )
 
-// Result is a normalized ARC chain validation outcome.
+// Result is a Chain Validation Status (RFC 8617 4.4): only none, pass and fail exist, and every
+// error, DNS included, is a permanent fail (5.2.1).
 type Result string
 
 const (
-	ResultPass      Result = "pass"
-	ResultFail      Result = "fail"
-	ResultInvalid   Result = "invalid"
-	ResultTempError Result = "temperror"
-	ResultNone      Result = "none"
+	ResultPass Result = "pass"
+	ResultFail Result = "fail"
+	ResultNone Result = "none"
 )
 
 // LookupTXT resolves a DNS TXT owner name using the caller's context.
@@ -61,63 +62,62 @@ type set struct {
 	as  signature
 }
 
-type validationError struct {
-	result Result
-	err    error
-}
-
-// Error reports the internal validation reason.
-func (e *validationError) Error() string { return e.err.Error() }
-
-// Unwrap exposes the underlying parser, DNS, or crypto error.
-func (e *validationError) Unwrap() error { return e.err }
-
-// Verify validates one ARC chain, using lookup for DKIM key TXT records.
-func Verify(ctx context.Context, r io.Reader, lookup LookupTXT) Result {
-	if lookup == nil {
-		return ResultTempError
-	}
-	msg, err := readMessage(r)
-	if err != nil {
-		return ResultInvalid
-	}
+// Verify validates one ARC chain, using lookup for DKIM key TXT records. On pass, sealer is the
+// d= of the most recent ARC-Seal: the one ADMD vouching for the chain (RFC 8617 9).
+func Verify(ctx context.Context, r io.Reader, lookup LookupTXT) (result Result, sealer string) {
+	msg, readErr := readMessage(r)
 	sets, present, err := collectSets(msg.headers)
 	if !present {
-		return ResultNone
+		return ResultNone, "" // also an unreadable header block: no chain to rely on either way
 	}
-	if err != nil {
-		return ResultInvalid
-	}
-	if sets[len(sets)-1].as.tags["cv"] == "fail" {
-		return ResultFail
+	if readErr != nil || err != nil || lookup == nil {
+		return ResultFail, ""
 	}
 	for i, s := range sets {
 		wantCV := "pass"
 		if i == 0 {
 			wantCV = "none"
 		}
-		if s.as.tags["cv"] != wantCV {
-			return ResultInvalid
+		if s.as.tags["cv"] != wantCV { // also covers cv=fail on the newest set (5.2 steps 2, 3C)
+			return ResultFail, ""
 		}
 	}
-	if err := verifyAMS(ctx, msg, sets[len(sets)-1].ams, lookup); err != nil {
-		return resultOf(err)
+	keys := keyCache{lookup: lookup, seen: map[string]keyAnswer{}}
+	if err := verifyAMS(ctx, msg, sets[len(sets)-1].ams, &keys); err != nil {
+		return ResultFail, ""
 	}
 	for i := len(sets) - 1; i >= 0; i-- {
-		if err := verifySeal(ctx, sets[:i+1], lookup); err != nil {
-			return resultOf(err)
+		if err := verifySeal(ctx, sets[:i+1], &keys); err != nil {
+			return ResultFail, ""
 		}
 	}
-	return ResultPass
+	// d= may be a U-label (RFC 8617 4.1.4); trust lists hold A-labels.
+	return ResultPass, dnsname.ToASCII(strings.TrimSuffix(sets[len(sets)-1].as.tags["d"], "."))
 }
 
-// resultOf maps a validation failure to the public result vocabulary.
-func resultOf(err error) Result {
-	var validation *validationError
-	if errors.As(err, &validation) {
-		return validation.result
+// keyCache resolves each selector._domainkey name once per message: sets of one chain often share
+// a key, and a crafted chain could ask for the same name 51 times (RFC 8617 9.2).
+type keyCache struct {
+	lookup LookupTXT
+	seen   map[string]keyAnswer
+}
+
+type keyAnswer struct {
+	key crypto.PublicKey
+	err error
+}
+
+func (c *keyCache) get(ctx context.Context, name string) (crypto.PublicKey, error) {
+	if a, ok := c.seen[name]; ok {
+		return a.key, a.err
 	}
-	return ResultInvalid
+	records, err := c.lookup(ctx, name)
+	var key crypto.PublicKey
+	if err == nil {
+		key, err = parsePublicKey(records)
+	}
+	c.seen[name] = keyAnswer{key, err}
+	return key, err
 }
 
 // readMessage reads and parses a bounded RFC 5322 message.
@@ -126,9 +126,7 @@ func readMessage(r io.Reader) (message, error) {
 	if err != nil {
 		return message{}, err
 	}
-	if len(data) > maxMessageSize {
-		return message{}, errors.New("message exceeds ARC verification limit")
-	}
+	tooLarge := len(data) > maxMessageSize
 	data = normalizeCRLF(data)
 	at := bytes.Index(data, []byte("\r\n\r\n"))
 	if at < 0 || at > maxHeaderSize {
@@ -137,6 +135,10 @@ func readMessage(r io.Reader) (message, error) {
 	headers, err := parseHeaders(data[:at])
 	if err != nil {
 		return message{}, err
+	}
+	if tooLarge {
+		// The header still tells whether a chain is there (then it fails: it cannot be checked).
+		return message{headers: headers}, errors.New("message exceeds ARC verification limit")
 	}
 	return message{headers: headers, body: data[at+4:]}, nil
 }
@@ -253,7 +255,7 @@ func instanceOf(h header) (int, error) {
 		return 0, errors.New("missing ARC instance delimiter")
 	}
 	tag := strings.SplitN(value[:semi], "=", 2)
-	if len(tag) != 2 || strings.TrimSpace(strings.ToLower(tag[0])) != "i" {
+	if len(tag) != 2 || strings.TrimSpace(tag[0]) != "i" {
 		return 0, errors.New("ARC instance must be first")
 	}
 	return parseInstanceValue(tag[1])
@@ -325,15 +327,13 @@ func parseSignature(h header, seal bool) (signature, error) {
 			return signature{}, fmt.Errorf("missing ARC signature tag %s", name)
 		}
 	}
-	if strings.ToLower(tags["a"]) != "rsa-sha256" {
+	if a := strings.ToLower(tags["a"]); a != "rsa-sha256" && a != "ed25519-sha256" { // RFC 8301, 8463
 		return signature{}, errors.New("unsupported ARC signature algorithm")
 	}
 	if seal {
-		allowed := map[string]bool{"i": true, "a": true, "b": true, "d": true, "s": true, "t": true, "cv": true}
-		for name := range tags {
-			if !allowed[name] {
-				return signature{}, errors.New("unsupported ARC-Seal tag")
-			}
+		// Unknown tags are ignored (RFC 6376 3.2); only h= MUST fail a seal (RFC 8617 4.1.3).
+		if _, ok := tags["h"]; ok {
+			return signature{}, errors.New("ARC-Seal with h=")
 		}
 		cv := strings.ToLower(tags["cv"])
 		if cv != "none" && cv != "pass" && cv != "fail" {
@@ -357,19 +357,24 @@ func headerValue(h header) (string, error) {
 	return strings.TrimSpace(value), nil
 }
 
-// parseTags parses a semicolon-delimited DKIM tag list and rejects duplicates.
+// parseTags parses a DKIM tag-list (RFC 6376 3.2): tag-spec *( ";" tag-spec ) [ ";" ]. Tag names
+// are case-sensitive ("A=" is an unknown tag, not a=) and only the last tag-spec may be empty.
 func parseTags(value string) (map[string]string, error) {
 	tags := make(map[string]string)
-	for _, field := range strings.Split(value, ";") {
+	fields := strings.Split(value, ";")
+	for n, field := range fields {
 		field = strings.TrimSpace(field)
 		if field == "" {
-			continue
+			if n == len(fields)-1 && n > 0 {
+				break // trailing ";"
+			}
+			return nil, errors.New("empty ARC tag-spec")
 		}
 		parts := strings.SplitN(field, "=", 2)
 		if len(parts) != 2 {
 			return nil, errors.New("malformed ARC signature tag")
 		}
-		name := strings.ToLower(strings.TrimSpace(parts[0]))
+		name := strings.TrimSpace(parts[0])
 		if name == "" {
 			return nil, errors.New("empty ARC signature tag")
 		}
@@ -382,53 +387,54 @@ func parseTags(value string) (map[string]string, error) {
 }
 
 // verifyAMS validates the newest message signature and its body hash.
-func verifyAMS(ctx context.Context, msg message, sig signature, lookup LookupTXT) error {
-	headerCanon, bodyCanon, err := canonicalization(sig.tags["c"])
-	if err != nil {
-		return invalid(err)
-	}
-	names := strings.Split(strings.ToLower(sig.tags["h"]), ":")
-	selected := make([]header, 0, len(names))
-	used := make(map[string]int)
+func verifyAMS(ctx context.Context, msg message, sig signature, keys *keyCache) error {
 	signedFrom := false
-	for _, name := range names {
+	for _, name := range strings.Split(strings.ToLower(sig.tags["h"]), ":") {
 		name = strings.TrimSpace(name)
 		if name == "" || name == "authentication-results" || strings.HasPrefix(name, "arc-") {
-			return invalid(errors.New("forbidden AMS signed header"))
+			return errors.New("forbidden AMS signed header") // 4.1.2
 		}
-		if name == "from" {
-			signedFrom = true
-		}
-		h, ok := selectHeader(msg.headers, name, used[name])
-		if !ok {
-			used[name]++
-			continue
-		}
-		used[name]++
-		selected = append(selected, h)
+		signedFrom = signedFrom || name == "from"
 	}
 	if !signedFrom {
-		return invalid(errors.New("AMS does not sign From"))
+		return errors.New("AMS does not sign From") // RFC 6376 5.4
+	}
+	return verifyMessageSignature(ctx, msg, sig.header, sig.tags, keys)
+}
+
+// verifyMessageSignature is DKIM verification (RFC 6376 6.1.3) of a signature field over msg.
+func verifyMessageSignature(ctx context.Context, msg message, sigHeader header, tags map[string]string, keys *keyCache) error {
+	if c, ok := tags["c"]; ok && c == "" {
+		return errors.New("empty c= tag") // c= needs a value; only an absent c= means simple/simple
+	}
+	headerCanon, bodyCanon, err := canonicalization(tags["c"])
+	if err != nil {
+		return err
 	}
 	body := canonicalizeBody(msg.body, bodyCanon)
-	if l := sig.tags["l"]; l != "" {
-		n, err := strconv.Atoi(l)
-		if err != nil || n < 0 || n > len(body) {
-			return invalid(errors.New("invalid AMS body length"))
+	if l := tags["l"]; l != "" {
+		// A shorter l= leaves text appended after signing unsigned; RFC 6376 8.2 lets verifiers
+		// refuse it, and a passing chain earns trust.
+		if n, err := strconv.Atoi(l); err != nil || n != len(body) {
+			return errors.New("AMS body length does not cover the body")
 		}
-		body = body[:n]
 	}
 	bodyHash := sha256.Sum256(body)
-	wantBodyHash, err := decodeBase64(sig.tags["bh"])
+	wantBodyHash, err := decodeBase64(tags["bh"])
 	if err != nil || !bytes.Equal(bodyHash[:], wantBodyHash) {
-		return failed(errors.New("AMS body hash mismatch"))
+		return errors.New("AMS body hash mismatch")
 	}
 	var signed bytes.Buffer
-	for _, h := range selected {
-		signed.WriteString(canonicalizeHeader(h, headerCanon, false))
+	used := make(map[string]int)
+	for _, name := range strings.Split(strings.ToLower(tags["h"]), ":") {
+		name = strings.TrimSpace(name)
+		if h, ok := selectHeader(msg.headers, name, used[name]); ok {
+			signed.WriteString(canonicalizeHeader(h, headerCanon))
+		}
+		used[name]++ // a field listed and absent counts as the null string (RFC 6376 5.4.2)
 	}
-	signed.WriteString(canonicalizeHeader(sig.header, headerCanon, true))
-	return verifySignature(ctx, signed.Bytes(), sig.tags, lookup)
+	signed.WriteString(canonicalizeSignature(sigHeader, headerCanon))
+	return verifySignature(ctx, signed.Bytes(), tags, keys)
 }
 
 // selectHeader applies DKIM's bottom-up repeated-header selection rule.
@@ -446,46 +452,57 @@ func selectHeader(headers []header, name string, skip int) (header, bool) {
 	return header{}, false
 }
 
-// verifySeal validates the newest seal over all ARC sets in its scope.
-func verifySeal(ctx context.Context, sets []set, lookup LookupTXT) error {
-	current := sets[len(sets)-1]
+// verifySeal validates the newest seal over all ARC sets in its scope (RFC 8617 5.1.1).
+func verifySeal(ctx context.Context, sets []set, keys *keyCache) error {
 	var signed bytes.Buffer
 	for i, s := range sets {
-		signed.WriteString(canonicalizeHeader(s.aar, "relaxed", false))
-		signed.WriteString(canonicalizeHeader(s.ams.header, "relaxed", false))
-		signed.WriteString(canonicalizeHeader(s.as.header, "relaxed", i == len(sets)-1))
+		signed.WriteString(canonicalizeHeader(s.aar, "relaxed"))
+		signed.WriteString(canonicalizeHeader(s.ams.header, "relaxed"))
+		if i < len(sets)-1 {
+			signed.WriteString(canonicalizeHeader(s.as.header, "relaxed"))
+		}
 	}
-	return verifySignature(ctx, signed.Bytes(), current.as.tags, lookup)
+	signed.WriteString(canonicalizeSignature(sets[len(sets)-1].as.header, "relaxed"))
+	return verifySignature(ctx, signed.Bytes(), sets[len(sets)-1].as.tags, keys)
 }
 
-// verifySignature resolves and validates an RSA-SHA256 ARC signature.
-func verifySignature(ctx context.Context, signed []byte, tags map[string]string, lookup LookupTXT) error {
+// verifySignature checks b= over signed with the key at s._domainkey.d.
+func verifySignature(ctx context.Context, signed []byte, tags map[string]string, keys *keyCache) error {
 	domain := strings.TrimSuffix(strings.TrimSpace(tags["d"]), ".")
 	selector := strings.TrimSpace(tags["s"])
 	if domain == "" || selector == "" || strings.ContainsAny(domain+selector, "\r\n\t ") {
-		return invalid(errors.New("invalid ARC key identity"))
+		return errors.New("invalid ARC key identity")
 	}
-	records, err := lookup(ctx, selector+"._domainkey."+domain)
+	key, err := keys.get(ctx, selector+"._domainkey."+domain)
 	if err != nil {
-		return temporary(err)
+		return err
 	}
-	key, err := parsePublicKey(records)
+	sig, err := decodeBase64(tags["b"])
 	if err != nil {
-		return invalid(err)
-	}
-	signature, err := decodeBase64(tags["b"])
-	if err != nil {
-		return invalid(errors.New("invalid ARC signature encoding"))
+		return errors.New("invalid ARC signature encoding")
 	}
 	digest := sha256.Sum256(signed)
-	if err := rsa.VerifyPKCS1v15(key, crypto.SHA256, digest[:], signature); err != nil {
-		return failed(errors.New("ARC signature mismatch"))
+	switch k := key.(type) {
+	case *rsa.PublicKey:
+		if strings.ToLower(tags["a"]) != "rsa-sha256" {
+			return errors.New("key type does not match a=")
+		}
+		return rsa.VerifyPKCS1v15(k, crypto.SHA256, digest[:], sig)
+	case ed25519.PublicKey:
+		if strings.ToLower(tags["a"]) != "ed25519-sha256" {
+			return errors.New("key type does not match a=")
+		}
+		if !ed25519.Verify(k, digest[:], sig) { // RFC 8463 3: Ed25519 over the SHA-256 hash
+			return errors.New("ARC signature mismatch")
+		}
+		return nil
 	}
-	return nil
+	return errors.New("unsupported ARC key")
 }
 
-// parsePublicKey parses one bounded DKIM RSA key record.
-func parsePublicKey(records []string) (*rsa.PublicKey, error) {
+// parsePublicKey parses one bounded DKIM key record: RSA of 1024-8192 bits (RFC 8301) or Ed25519
+// (RFC 8463).
+func parsePublicKey(records []string) (crypto.PublicKey, error) {
 	var record string
 	for _, candidate := range records {
 		if strings.Contains(strings.ToLower(candidate), "p=") {
@@ -505,9 +522,6 @@ func parsePublicKey(records []string) (*rsa.PublicKey, error) {
 	if v := strings.ToUpper(tags["v"]); v != "" && v != "DKIM1" {
 		return nil, errors.New("unsupported ARC key version")
 	}
-	if k := strings.ToLower(tags["k"]); k != "" && k != "rsa" {
-		return nil, errors.New("unsupported ARC key type")
-	}
 	if h := strings.ToLower(tags["h"]); h != "" && !colonListContains(h, "sha256") {
 		return nil, errors.New("ARC key disallows SHA-256")
 	}
@@ -517,6 +531,16 @@ func parsePublicKey(records []string) (*rsa.PublicKey, error) {
 	der, err := decodeBase64(tags["p"])
 	if err != nil || len(der) == 0 {
 		return nil, errors.New("invalid or revoked ARC key")
+	}
+	switch strings.ToLower(tags["k"]) {
+	case "", "rsa":
+	case "ed25519":
+		if len(der) != ed25519.PublicKeySize {
+			return nil, errors.New("invalid Ed25519 key")
+		}
+		return ed25519.PublicKey(der), nil
+	default:
+		return nil, errors.New("unsupported ARC key type")
 	}
 	var key *rsa.PublicKey
 	if parsed, parseErr := x509.ParsePKIXPublicKey(der); parseErr == nil {
@@ -563,19 +587,25 @@ func canonicalization(value string) (string, string, error) {
 	return headerCanon, bodyCanon, nil
 }
 
-// canonicalizeHeader applies DKIM simple or relaxed header canonicalization.
-func canonicalizeHeader(h header, mode string, emptySignature bool) string {
-	raw := h.raw
-	if emptySignature {
-		raw = stripBValue(raw)
-	}
+// canonicalizeHeader applies DKIM simple or relaxed header canonicalization (RFC 6376 3.4.1, 3.4.2).
+func canonicalizeHeader(h header, mode string) string {
+	return canonicalizeRaw(h.raw, mode) + "\r\n"
+}
+
+// canonicalizeSignature is the signature field as hashed: b= empty and no trailing CRLF (RFC 6376
+// 3.7). The CRLF was included: no chain sealed by another implementation could verify.
+func canonicalizeSignature(h header, mode string) string {
+	return canonicalizeRaw(stripBValue(h.raw), mode)
+}
+
+func canonicalizeRaw(raw, mode string) string {
 	if mode == "simple" {
-		return raw + "\r\n"
+		return raw
 	}
 	colon := strings.IndexByte(raw, ':')
 	value := strings.ReplaceAll(raw[colon+1:], "\r\n", "")
 	value = compressWSP(strings.Trim(value, " \t"))
-	return strings.ToLower(raw[:colon]) + ":" + value + "\r\n"
+	return strings.ToLower(raw[:colon]) + ":" + value
 }
 
 // stripBValue removes only the b= value while preserving surrounding syntax.
@@ -621,6 +651,9 @@ func canonicalizeBody(body []byte, mode string) []byte {
 		lines = lines[:len(lines)-1]
 	}
 	if len(lines) == 0 {
+		if mode == "relaxed" {
+			return nil // RFC 6376 3.4.4: an empty body is the null input; only simple makes it CRLF
+		}
 		return []byte("\r\n")
 	}
 	return append(bytes.Join(lines, []byte("\r\n")), '\r', '\n')
@@ -656,22 +689,4 @@ func decodeBase64(value string) ([]byte, error) {
 		return r
 	}, value)
 	return base64.StdEncoding.DecodeString(value)
-}
-
-// invalid marks malformed or unsupported ARC input.
-func invalid(err error) error { return &validationError{result: ResultInvalid, err: err} }
-
-// failed marks a cryptographic ARC validation failure.
-func failed(err error) error { return &validationError{result: ResultFail, err: err} }
-
-// temporary marks a transient DNS or context failure.
-func temporary(err error) error {
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return &validationError{result: ResultTempError, err: err}
-	}
-	var dnsErr *net.DNSError
-	if errors.As(err, &dnsErr) && (dnsErr.IsNotFound || (!dnsErr.IsTemporary && !dnsErr.IsTimeout)) {
-		return invalid(err)
-	}
-	return &validationError{result: ResultTempError, err: err}
 }

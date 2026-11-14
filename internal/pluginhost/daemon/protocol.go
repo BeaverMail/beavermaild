@@ -18,6 +18,7 @@ type wireAuth struct {
 	DMARC       string `json:"dmarc,omitempty"`
 	DMARCPolicy string `json:"dmarc_policy,omitempty"`
 	ARC         string `json:"arc,omitempty"`
+	ARCSealer   string `json:"arc_sealer,omitempty"`
 }
 
 // FilterRequest is the host-to-plugin filter JSON line (protocol v2.2).
@@ -76,6 +77,7 @@ func encodeFilterRequest(req smtp.FilterRequest) FilterRequest {
 			DMARC:       req.Auth.DMARC,
 			DMARCPolicy: req.Auth.DMARCPolicy,
 			ARC:         req.Auth.ARC,
+			ARCSealer:   req.Auth.ARCSealer,
 		}
 	}
 	return out
