@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Security (RFC 5322, RFC 9989 11.5): on port 25 a message whose `From` is missing, repeated,
+  unparsable or holds several mailboxes, or that repeats a single field (`Subject`, `Date`, ...), is
+  refused with `554 5.6.0`. Before, it only got `dmarc=fail` (+2 in the antispam plugin) while the
+  IMAP ENVELOPE, through a lenient fallback parser, could show clients the forged address DMARC never
+  checked (`From: Bank <a@bank.example> junk`). Header fields in the obsolete form `From : x`
+  (RFC 5322 4.5) are now read as the field itself by DMARC, these checks, ENVELOPE and SEARCH.
+  Delivery status notifications now carry the required `Date` field, and `beaver send` adds `Date`
+  and `Message-ID`. Dates in obsolete form are read as RFC 5322 4.3 says (`EST`, `PDT`... with their
+  offset, 2-digit years from 50 as 19xx, 3-digit years, military zones) for SEARCH, SORT and THREAD.
+  ENVELOPE splits an address at its last `@` (`"a@b"@c` has host `c`).
+
 - ARC (RFC 8617): no chain sealed by another server could verify. The signature field was hashed
   with a trailing CRLF (RFC 6376 3.7 says without), so every forwarded or mailing-list message
   got `arc=fail` and +1 from the antispam plugin; the tests

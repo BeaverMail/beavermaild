@@ -262,6 +262,15 @@ func (s *session) deliverAfterFilter(ctx context.Context, raw []byte) error {
 		}
 		raw = completeSubmission(raw, s.hostname, time.Now())
 	}
+	if !s.submission {
+		if why := checkInboundHeaders(raw); why != "" {
+			if err := s.writef("554 5.6.0 Message rejected: %s (RFC 5322 3.6)", why); err != nil {
+				return err
+			}
+			s.reset()
+			return nil
+		}
+	}
 	out, err := s.filterEom(ctx, raw)
 	if err != nil {
 		s.log.Warn("smtp filter error", slog.Any("err", err))

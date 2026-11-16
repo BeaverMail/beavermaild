@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/BeaverMail/beavermaild/internal/rfc5322"
 )
 
 // SortKey is one RFC 5256 sort criterion.
@@ -123,7 +125,7 @@ func loadSortFields(m Message, load RawLoader) sortFields {
 	base, _ := BaseSubject(h.Subject)
 	f.subject = strings.ToUpper(base)
 	// DATE is the sent date; without a valid Date header it is the internal date (RFC 5256).
-	if t, err := mail.ParseDate(h.Date); err == nil {
+	if t, err := rfc5322.ParseDate(h.Date); err == nil {
 		f.date = t
 	}
 	return f

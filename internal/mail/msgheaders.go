@@ -3,8 +3,9 @@ package mail
 
 import (
 	"bytes"
-	"net/mail"
 	"strings"
+
+	"github.com/BeaverMail/beavermaild/internal/rfc5322"
 )
 
 // MsgHeaders holds parsed header fields used for SORT and THREAD.
@@ -21,7 +22,7 @@ type MsgHeaders struct {
 
 // ParseMsgHeaders reads common envelope headers from a raw message.
 func ParseMsgHeaders(raw []byte) MsgHeaders {
-	msg, err := mail.ReadMessage(bytes.NewReader(raw))
+	msg, err := rfc5322.ReadMessage(bytes.NewReader(raw))
 	if err != nil {
 		return MsgHeaders{}
 	}

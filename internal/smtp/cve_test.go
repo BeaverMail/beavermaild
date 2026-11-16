@@ -250,7 +250,7 @@ func TestSMTPSmugglingThroughBDAT(t *testing.T) {
 func TestBDATBareCRInHeader(t *testing.T) {
 	t.Parallel()
 	conn, read, inbox, dir := rfcDial(t, true)
-	msg := "Subject: hi\rBcc: victim@example.org\r\n\r\nbody\rmore\r\n"
+	msg := "From: sender@example.com\r\nSubject: hi\rBcc: victim@example.org\r\n\r\nbody\rmore\r\n"
 	send(t, conn, "MAIL FROM:<sender@example.org>")
 	expect(t, read, "250 ")
 	send(t, conn, "RCPT TO:<alice@localhost>")

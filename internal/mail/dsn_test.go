@@ -1,6 +1,8 @@
 package mail
 
 import (
+	"bytes"
+	netmail "net/mail"
 	"strings"
 	"testing"
 )
@@ -137,5 +139,28 @@ func TestBuildDSNFormat(t *testing.T) {
 	local.Action, local.Hostname = DSNActionFailed, "mailhost"
 	if out := string(BuildDSN(local)); !strings.Contains(out, "Reporting-MTA: x-local-hostname; mailhost\r\n") {
 		t.Errorf("undotted host reported as dns:\n%s", out)
+	}
+}
+
+// RFC 5322 3.6: Date and From are required in every message we generate; Message-ID SHOULD be there.
+func TestGeneratedMessagesHaveRequiredFields(t *testing.T) {
+	t.Parallel()
+	for name, raw := range map[string][]byte{
+		"dsn":    BuildDSN(DSNBuildOpts{ReturnPath: "a@example.com", FinalRcpt: "b@example.org", Action: DSNActionFailed, Status: "5.1.1", Hostname: "mx.example.net"}),
+		"simple": BuildSimpleMessage("a@example.com", "b@example.org", "hi"),
+	} {
+		msg, err := netmail.ReadMessage(bytes.NewReader(raw))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if _, err := msg.Header.Date(); err != nil {
+			t.Errorf("%s: Date: %v", name, err)
+		}
+		if _, err := msg.Header.AddressList("From"); err != nil {
+			t.Errorf("%s: From: %v", name, err)
+		}
+		if id := msg.Header.Get("Message-Id"); !strings.HasPrefix(id, "<") || !strings.Contains(id, "@") {
+			t.Errorf("%s: Message-ID %q", name, id)
+		}
 	}
 }

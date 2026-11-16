@@ -136,3 +136,13 @@ func TestEnvelopeSourceRoute(t *testing.T) {
 		t.Fatalf("got %s, want %s", got, want)
 	}
 }
+
+// RFC 5322 3.4.1: a quoted local part may contain "@"; the domain follows the last one. Splitting at
+// the first showed "a" at "bank.example@attacker.example".
+func TestEnvelopeQuotedLocalPartAt(t *testing.T) {
+	t.Parallel()
+	got := formatEnvelope([]byte("From: \"a@bank.example\"@attacker.example\r\n\r\nbody"))
+	if !strings.Contains(got, `"attacker.example"`) || strings.Contains(got, `"bank.example@attacker.example"`) {
+		t.Fatalf("ENVELOPE %s", got)
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // DSNBuildOpts configures one delivery status notification message.
@@ -58,6 +59,7 @@ func BuildDSN(opts DSNBuildOpts) []byte {
 	}
 	// RFC 3464 2.1: From is someone responsible for the mail system, reachable for replies.
 	b.WriteString("From: Mail Delivery System <MAILER-DAEMON@" + host + ">\r\n")
+	b.WriteString("Date: " + time.Now().Format(time.RFC1123Z) + "\r\n") // RFC 5322 3.6: required
 	b.WriteString("To: ")
 	b.WriteString(opts.ReturnPath)
 	b.WriteString("\r\nSubject: Delivery Status Notification (")

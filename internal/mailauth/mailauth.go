@@ -6,10 +6,11 @@ import (
 	"context"
 	"fmt"
 	"net"
-	netmail "net/mail"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/BeaverMail/beavermaild/internal/rfc5322"
 
 	"github.com/emersion/go-msgauth/dkim"
 	"github.com/miekg/dns"
@@ -256,7 +257,7 @@ func headerFromDomain(bodyPath string) (string, bool) {
 		return "", false
 	}
 	defer f.Close()
-	msg, err := netmail.ReadMessage(bufio.NewReader(f))
+	msg, err := rfc5322.ReadMessage(bufio.NewReader(f))
 	if err != nil || len(msg.Header["From"]) != 1 {
 		return "", false
 	}

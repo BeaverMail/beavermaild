@@ -4,11 +4,12 @@ package mail
 import (
 	"bytes"
 	"mime"
-	"net/mail"
 	"net/textproto"
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/BeaverMail/beavermaild/internal/rfc5322"
 )
 
 // HeaderCriterion is one IMAP SEARCH HEADER field/value pair (ANDed).
@@ -247,7 +248,7 @@ func matchSearchDay(t time.Time, since, before, on *time.Time) bool {
 }
 
 func parseMessageDate(raw []byte) (time.Time, bool) {
-	msg, err := mail.ReadMessage(bytes.NewReader(raw))
+	msg, err := rfc5322.ReadMessage(bytes.NewReader(raw))
 	if err != nil {
 		return time.Time{}, false
 	}
@@ -255,7 +256,7 @@ func parseMessageDate(raw []byte) (time.Time, bool) {
 	if date == "" {
 		return time.Time{}, false
 	}
-	t, err := mail.ParseDate(date)
+	t, err := rfc5322.ParseDate(date)
 	if err != nil {
 		return time.Time{}, false
 	}
@@ -264,7 +265,7 @@ func parseMessageDate(raw []byte) (time.Time, bool) {
 }
 
 func matchSearchHeaders(raw []byte, c SearchCriteria) bool {
-	msg, err := mail.ReadMessage(bytes.NewReader(raw))
+	msg, err := rfc5322.ReadMessage(bytes.NewReader(raw))
 	if err != nil {
 		return false
 	}

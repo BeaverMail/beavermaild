@@ -113,7 +113,7 @@ func TestSMTPBDATDeliver(t *testing.T) {
 	send(t, conn, "RCPT TO:<alice@localhost> NOTIFY=FAILURE")
 	expect(t, read, "250")
 
-	body := "Subject: bdat\r\n\r\nchunked"
+	body := "From: sender@example.com\r\nSubject: bdat\r\n\r\nchunked"
 	// RFC 3030: command line, then exactly len(body) bytes (no CRLF after), then one reply.
 	if _, err := fmt.Fprintf(conn, "BDAT %d LAST\r\n%s", len(body), body); err != nil {
 		t.Fatal(err)
@@ -170,7 +170,7 @@ func TestSMTPBDATMultiChunk(t *testing.T) {
 	expect(t, read, "250")
 
 	// Each chunk is the command line plus exactly n bytes; the reply follows the chunk.
-	part1 := "Subject: x\r\n\r\npart-1-"
+	part1 := "From: sender@example.com\r\nSubject: x\r\n\r\npart-1-"
 	part2 := "part-2"
 	if _, err := fmt.Fprintf(conn, "BDAT %d\r\n%s", len(part1), part1); err != nil {
 		t.Fatal(err)
@@ -220,7 +220,7 @@ func TestSMTPClientToServerBDAT(t *testing.T) {
 	go func() { _ = srv.ServeListener(sctx, ln) }()
 	time.Sleep(20 * time.Millisecond)
 
-	body := "Subject: e2e\r\n\r\nhello over bdat\r\n"
+	body := "From: sender@example.com\r\nSubject: e2e\r\n\r\nhello over bdat\r\n"
 	reply, err := smtp.SendReply(ctx, ln.Addr().String(), "sender@example.com", "alice@localhost", []byte(body), smtp.ClientOptions{})
 	if err != nil {
 		t.Fatal(err)

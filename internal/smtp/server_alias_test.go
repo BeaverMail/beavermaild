@@ -68,7 +68,7 @@ func TestSMTPAliasDelivery(t *testing.T) {
 	expect(t, read, "550")
 	send(t, conn, "DATA")
 	expect(t, read, "354")
-	send(t, conn, "Subject: hi")
+	send(t, conn, "From: sender@example.com\r\nSubject: hi")
 	send(t, conn, "")
 	send(t, conn, "hello team")
 	send(t, conn, ".")

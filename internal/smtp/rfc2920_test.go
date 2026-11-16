@@ -101,7 +101,7 @@ func TestRFC2920PipelinedGroup(t *testing.T) {
 	if len(writes) != 2 || strings.Count(writes[0], "\r\n") != 4 || !strings.HasPrefix(writes[1], "354") {
 		t.Fatalf("group replies written as %q, want RSET..RCPT in one write, then 354", writes)
 	}
-	send(t, conn, "Subject: x\r\n\r\nbody\r\n.")
+	send(t, conn, "From: sender@example.com\r\nSubject: x\r\n\r\nbody\r\n.")
 	expect(t, read, "250")
 
 	if _, err := conn.Write([]byte("MAIL FROM:<sender@example.com>\r\nRCPT TO:<ghost@localhost>\r\nDATA\r\n")); err != nil {

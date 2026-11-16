@@ -3,10 +3,11 @@ package mail
 
 import (
 	"context"
-	"net/mail"
 	"slices"
 	"strconv"
 	"time"
+
+	"github.com/BeaverMail/beavermaild/internal/rfc5322"
 )
 
 // ThreadNode is one node of a thread tree: a message (Seq > 0) or a dummy that only groups its
@@ -60,7 +61,7 @@ func ThreadReferencesContext(ctx context.Context, msgs []Message, expr SearchExp
 			}
 		}
 		date := time.Unix(m.Meta.ReceivedAt, 0)
-		if t, err := mail.ParseDate(h.Date); err == nil {
+		if t, err := rfc5322.ParseDate(h.Date); err == nil {
 			date = t
 		}
 

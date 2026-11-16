@@ -44,7 +44,7 @@ func TestRFC3461LocalSuccessDSN(t *testing.T) {
 		{"MAIL FROM:<alice@localhost> ENVID=job+2D42", "250"},
 		{"RCPT TO:<alice@localhost> NOTIFY=SUCCESS ORCPT=rfc822;Alice+40localhost", "250"},
 		{"DATA", "354"},
-		{"Subject: hi\r\n\r\nbody\r\n.", "250"},
+		{"From: sender@example.com\r\nSubject: hi\r\n\r\nbody\r\n.", "250"},
 	} {
 		send(t, conn, st.send)
 		expect(t, read, st.want)

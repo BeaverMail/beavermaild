@@ -70,6 +70,16 @@ check lets the mail through.
 DSN `Status` fields carry the remote server's enhanced code (`550 5.1.1` → `5.1.1`), with the class of
 the outcome (a `4xx` reply that ends in a failure at expiry is reported as `5.x.x`).
 
+## Inbound header checks (RFC 5322)
+
+On port 25 a message is refused after the data with `554 5.6.0 Message rejected: <reason> (RFC 5322
+3.6)` when its `From` is missing, repeated, unparsable or holds more than one mailbox, or when a field
+that may appear once (`Date`, `Subject`, `To`, `Message-ID`, …) is repeated. DMARC cannot evaluate
+such a `From`, and mail clients each read it their own way, so the domain they show may be one no
+check ever saw (RFC 9989 11.5); a repeated field lets a signed message show an unsigned value
+(RFC 6376 8.15). The check runs with mail-auth off too. The obsolete form with white space before the
+colon (`From : …`, RFC 5322 4.5) counts as the field itself.
+
 ## Submission header fixes (RFC 6409 §8)
 
 On authenticated submission (`:587`/`:465`) a missing or malformed `Message-ID` is added or

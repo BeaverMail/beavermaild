@@ -56,8 +56,8 @@ func TestRFC1870ServerLimit(t *testing.T) {
 		expect(t, read, "250")
 		send(t, conn, "DATA")
 		expect(t, read, "354")
-		// 29 octets of header, then 3 per line with CRLF (2 as stored with LF).
-		send(t, conn, "Subject: many-short-lines\r\n\r\n"+strings.Repeat("x\r\n", lines)+".")
+		// 55 octets of header, then 3 per line with CRLF (2 as stored with LF).
+		send(t, conn, "From: sender@example.com\r\nSubject: many-short-lines\r\n\r\n"+strings.Repeat("x\r\n", lines)+".")
 		l, err := read.ReadString('\n')
 		if err != nil {
 			t.Fatal(err)
@@ -67,7 +67,7 @@ func TestRFC1870ServerLimit(t *testing.T) {
 	if got := deliver(400); !strings.HasPrefix(got, "552") { // 1229 octets: 829 as stored
 		t.Fatalf("message over SIZE 1000 counted with CRLF: %q", got)
 	}
-	if got := deliver(320); !strings.HasPrefix(got, "250") { // 989 octets
+	if got := deliver(310); !strings.HasPrefix(got, "250") { // 985 octets
 		t.Fatalf("message under the limit: %q", got)
 	}
 }

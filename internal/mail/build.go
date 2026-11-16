@@ -1,11 +1,21 @@
 package mail
 
-import "strings"
+import (
+	"strings"
+	"time"
+)
 
-// BuildSimpleMessage returns a minimal RFC 5322 message for queue testing.
+// BuildSimpleMessage returns a minimal RFC 5322 message for queue testing: Date and From are
+// required, Message-ID SHOULD be present (3.6).
 func BuildSimpleMessage(from, to, body string) []byte {
+	host := "localhost"
+	if i := strings.LastIndexByte(from, '@'); i >= 0 && i < len(from)-1 {
+		host = from[i+1:]
+	}
 	var b strings.Builder
-	b.WriteString("From: ")
+	b.WriteString("Date: " + time.Now().Format(time.RFC1123Z))
+	b.WriteString("\r\nMessage-ID: <" + dsnMessageID() + "@" + host + ">")
+	b.WriteString("\r\nFrom: ")
 	b.WriteString(from)
 	b.WriteString("\r\nTo: ")
 	b.WriteString(to)

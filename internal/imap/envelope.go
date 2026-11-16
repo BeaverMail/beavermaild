@@ -9,11 +9,13 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/BeaverMail/beavermaild/internal/rfc5322"
 )
 
 // formatEnvelope builds the ten-slot ENVELOPE structure from RFC 822 headers.
 func formatEnvelope(raw []byte) string {
-	msg, err := mail.ReadMessage(bytes.NewReader(raw))
+	msg, err := rfc5322.ReadMessage(bytes.NewReader(raw))
 	if err != nil {
 		return envelopeNIL()
 	}
@@ -183,8 +185,10 @@ func formatMailbox(a *mail.Address) string {
 			route, addr = r, rest
 		}
 	}
-	mailbox, host, ok := strings.Cut(addr, "@")
-	if !ok || mailbox == "" || host == "" {
+	// The last "@": a quoted local part may hold one ("\"a@b\"@c" is the mailbox a@b at host c).
+	at := strings.LastIndexByte(addr, '@')
+	mailbox, host := addr[:max(at, 0)], addr[at+1:]
+	if at < 0 || mailbox == "" || host == "" {
 		return "(NIL NIL NIL NIL)"
 	}
 	return fmt.Sprintf("(%s %s %s %s)", nphrase(a.Name), nstring(route), nstring(mailbox), nstring(host))
