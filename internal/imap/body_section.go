@@ -2,11 +2,11 @@
 package imap
 
 import (
-	"bufio"
 	"bytes"
-	"net/textproto"
 	"strconv"
 	"strings"
+
+	"github.com/BeaverMail/beavermaild/mimetree"
 )
 
 // bodySectionFetch is one BODY[...] or RFC822.* literal item in a FETCH response.
@@ -217,40 +217,6 @@ func bodyFetchResponseName(itemName string) string {
 	return itemName
 }
 
-// mimeEntity is one MIME entity as raw slices of the message: header (with its blank line) and body.
-type mimeEntity struct {
-	header, body []byte
-	inDigest     bool // child of multipart/digest: no Content-Type means message/rfc822 (RFC 2046)
-}
-
-func splitEntity(raw []byte) mimeEntity {
-	// A part with no header fields starts with the blank line itself.
-	for _, nl := range []string{"\r\n", "\n"} {
-		if strings.HasPrefix(string(raw[:min(len(raw), 2)]), nl) {
-			return mimeEntity{header: raw[:len(nl)], body: raw[len(nl):]}
-		}
-	}
-	h, b := splitHeaderBody(raw)
-	return mimeEntity{header: h, body: b}
-}
-
-// mediaType returns the entity's lower-case media type and parameters, with the RFC 2046 default.
-func (e mimeEntity) mediaType() (string, map[string]string) {
-	hdr, _ := textproto.NewReader(bufio.NewReader(bytes.NewReader(e.header))).ReadMIMEHeader()
-	return entityMediaType(hdr.Get("Content-Type"), e.inDigest)
-}
-
-func entityMediaType(contentType string, inDigest bool) (string, map[string]string) {
-	if strings.TrimSpace(contentType) == "" {
-		if inDigest {
-			return "message/rfc822", map[string]string{}
-		}
-		return "text/plain", map[string]string{}
-	}
-	mt, params := parseMediaType(contentType)
-	return strings.ToLower(mt), params
-}
-
 // extractBodySection returns the bytes of BODY[section] (RFC 3501 6.4.5), exactly as stored.
 func extractBodySection(raw []byte, section string, hdrFields []string) []byte {
 	upper := strings.ToUpper(strings.TrimSpace(section))
@@ -269,155 +235,69 @@ func extractBodySection(raw []byte, section string, hdrFields []string) []byte {
 		if text == "" {
 			return raw
 		}
-		return messageText(splitEntity(raw), text, hdrFields)
+		h, b := splitHeaderBody(raw)
+		return messageText(h, b, text, hdrFields)
 	}
-	part, ok := findPart(raw, path)
+	part, ok := findPart(mimetree.Parse(raw), path)
 	if !ok {
 		return []byte{}
 	}
 	switch text {
 	case "":
-		return part.body
+		return part.Body
 	case "MIME":
-		return part.header
+		return part.Header
 	}
 	// HEADER/TEXT of a part refer to the message a message/rfc822 part encapsulates; other parts
 	// are answered from their own header and body.
-	if mt, _ := part.mediaType(); mt == "message/rfc822" {
-		part = splitEntity(part.body)
+	if part.Type == "message/rfc822" && len(part.Children) == 1 {
+		part = part.Children[0]
 	}
-	return messageText(part, text, hdrFields)
+	return messageText(part.Header, part.Body, text, hdrFields)
 }
 
-func messageText(e mimeEntity, text string, fields []string) []byte {
+func messageText(header, body []byte, text string, fields []string) []byte {
 	switch text {
 	case "HEADER":
-		return e.header
+		return header
 	case "TEXT":
-		return e.body
+		return body
 	case "HEADER.FIELDS":
-		return filterHeaderFields(e.header, fields, true)
+		return filterHeaderFields(header, fields, true)
 	case "HEADER.FIELDS.NOT":
-		return filterHeaderFields(e.header, fields, false)
+		return filterHeaderFields(header, fields, false)
 	}
 	return []byte{}
 }
 
-// maxMIMEDepth bounds how many multipart and message/rfc822 levels any MIME walk enters (the
-// Dovecot limit since CVE-2020-12100). Each level scans its whole body for its boundary, so an
-// unbounded walk costs O(depth x size): a 1.8 MB message nested 24000 deep took 12.8 s per
-// BODYSTRUCTURE, and any SMTP sender can deliver one. Deeper parts are one opaque leaf.
-const maxMIMEDepth = 100
-
-// opaqueTooDeep reports whether a part of media type mt, found at maxMIMEDepth, is shown as an
-// application/octet-stream leaf instead of being entered.
-func opaqueTooDeep(mt string) bool {
-	return strings.HasPrefix(mt, "multipart/") || mt == "message/rfc822"
-}
-
-// findPart walks a part path: numbers index multipart children; a non-multipart message has a
-// single part 1 (itself); a message/rfc822 part continues into the message it encapsulates.
-func findPart(raw []byte, path []int) (mimeEntity, bool) {
-	// depth counts levels as BODYSTRUCTURE does: +1 into a multipart child, +1 into the message a
-	// message/rfc822 part encapsulates. Past maxMIMEDepth both show and treat a part as a leaf.
-	cur, isMessage, depth := splitEntity(raw), true, 0
+// findPart walks a part path in the tree: numbers index multipart children; a non-multipart
+// message has a single part 1 (itself); a message/rfc822 part continues into the message it
+// encapsulates. Opaque parts (past the depth or part limit) are leaves, as BODYSTRUCTURE shows them.
+func findPart(root *mimetree.Part, path []int) (*mimetree.Part, bool) {
+	cur, isMessage := root, true
 	for i, n := range path {
-		var part mimeEntity
-		partDepth := depth
-		mt, params := cur.mediaType()
-		if depth >= maxMIMEDepth && opaqueTooDeep(mt) {
-			mt = "application/octet-stream"
-		}
+		var part *mimetree.Part
 		switch {
-		case strings.HasPrefix(mt, "multipart/"):
-			children := splitMultipart(cur.body, params["boundary"])
-			if n > len(children) {
-				return mimeEntity{}, false
+		case cur.IsMultipart():
+			if n > len(cur.Children) {
+				return nil, false
 			}
-			part = splitEntity(children[n-1])
-			part.inDigest = mt == "multipart/digest"
-			partDepth = depth + 1
+			part = cur.Children[n-1]
 		case isMessage && n == 1:
 			part = cur
 		default:
-			return mimeEntity{}, false
+			return nil, false
 		}
 		if i == len(path)-1 {
 			return part, true
 		}
-		if pt, _ := part.mediaType(); pt == "message/rfc822" && partDepth < maxMIMEDepth {
-			cur, isMessage, depth = splitEntity(part.body), true, partDepth+1
+		if part.Type == "message/rfc822" && len(part.Children) == 1 {
+			cur, isMessage = part.Children[0], true
 		} else {
-			cur, isMessage, depth = part, false, partDepth
+			cur, isMessage = part, false
 		}
 	}
-	return mimeEntity{}, false
-}
-
-// splitMultipart returns the raw body parts between "--boundary" delimiter lines; the line break
-// before each delimiter belongs to the delimiter (RFC 2046), the preamble and epilogue are dropped.
-func splitMultipart(body []byte, boundary string) [][]byte {
-	if boundary == "" {
-		return nil
-	}
-	delim := []byte("--" + boundary)
-	var parts [][]byte
-	start := -1
-	for pos := 0; ; {
-		i := indexLineStart(body, pos, delim)
-		if i < 0 {
-			return parts
-		}
-		if !delimiterEnds(body[i+len(delim):]) {
-			pos = i + 1 // "--b10" is not the delimiter of boundary "b1"
-			continue
-		}
-		if start >= 0 {
-			end := i
-			if end >= start+2 && body[end-2] == '\r' && body[end-1] == '\n' {
-				end -= 2
-			} else if end >= start+1 && body[end-1] == '\n' {
-				end--
-			}
-			parts = append(parts, body[start:max(end, start)])
-		}
-		after := i + len(delim)
-		if bytes.HasPrefix(body[after:], []byte("--")) {
-			return parts
-		}
-		nl := bytes.IndexByte(body[after:], '\n')
-		if nl < 0 {
-			return parts
-		}
-		start = after + nl + 1
-		pos = start
-	}
-}
-
-// delimiterEnds reports whether rest, the bytes after "--boundary", completes a delimiter line:
-// "--" (close delimiter) or optional linear white space up to the end of the line (RFC 2046 5.1.1).
-func delimiterEnds(rest []byte) bool {
-	if bytes.HasPrefix(rest, []byte("--")) {
-		return true
-	}
-	line, _, _ := bytes.Cut(rest, []byte("\n"))
-	return len(bytes.Trim(line, " \t\r")) == 0
-}
-
-// indexLineStart finds sep at the start of a line at or after from.
-func indexLineStart(b []byte, from int, sep []byte) int {
-	for from <= len(b) {
-		i := bytes.Index(b[from:], sep)
-		if i < 0 {
-			return -1
-		}
-		i += from
-		if i == 0 || b[i-1] == '\n' {
-			return i
-		}
-		from = i + 1
-	}
-	return -1
+	return nil, false
 }
 
 // parseSectionPath parses "1.2.3" (empty for none); every number must be positive.

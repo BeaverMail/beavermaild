@@ -2,32 +2,32 @@
 package imap
 
 import (
-	"bufio"
 	"bytes"
 	"maps"
 	"mime"
 	"net/mail"
-	"net/textproto"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/BeaverMail/beavermaild/mimetree"
 )
 
 // formatBodyStructure returns the RFC 3501 BODYSTRUCTURE parenthesized list for raw.
-func formatBodyStructure(raw []byte) string { return formatBodyPart(raw, true, 0) }
+func formatBodyStructure(raw []byte) string { return formatPart(mimetree.Parse(raw), true) }
 
 // formatBody is the non-extensible BODY form: BODYSTRUCTURE without extension data.
-func formatBody(raw []byte) string { return formatBodyPart(raw, false, 0) }
+func formatBody(raw []byte) string { return formatPart(mimetree.Parse(raw), false) }
 
-// formatBodyPart describes the message raw, depth levels of nesting down. Header and body are
-// slices of raw, never copies: a message/rfc822 chain would otherwise hold one copy per level.
-func formatBodyPart(raw []byte, ext bool, depth int) string {
-	e := splitEntity(raw)
-	hdr, _ := textproto.NewReader(bufio.NewReader(bytes.NewReader(e.header))).ReadMIMEHeader()
-	mediaType, params := parseMediaType(hdr.Get("Content-Type"))
-	return formatMIMEPart(mediaType, params, hdr, e.body, ext, depth)
+// formatPart describes one part of the tree. Parts past the depth or part limit are opaque
+// application/octet-stream leaves, as BODY[n] and BINARY treat them.
+func formatPart(p *mimetree.Part, ext bool) string {
+	if p.IsMultipart() {
+		return formatMultipart(p, ext)
+	}
+	return formatLeafPart(p, ext, false)
 }
 
 func mimeGet(hdr map[string][]string, key string) string {
@@ -46,56 +46,27 @@ func formatInternalDate(receivedAt int64) string {
 	return `"` + t.Format("02-Jan-2006 15:04:05 -0700") + `"`
 }
 
-func parseMediaType(ct string) (mediaType string, params map[string]string) {
-	ct = strings.TrimSpace(ct)
-	if ct == "" {
-		return "text/plain", nil
-	}
-	mt, p, err := mime.ParseMediaType(ct)
-	if err != nil {
-		return "text/plain", nil
-	}
-	return mt, p
-}
-
-func formatMIMEPart(mediaType string, params map[string]string, hdr map[string][]string, body []byte, ext bool, depth int) string {
-	major, subtype, _ := strings.Cut(strings.ToLower(mediaType), "/")
-	if depth >= maxMIMEDepth && opaqueTooDeep(major+"/"+subtype) {
-		major, subtype, params = "application", "octet-stream", nil
-	}
-	if major == "multipart" {
-		return formatMultipart(subtype, params, hdr, body, ext, depth)
-	}
-	return formatLeafPart(major, subtype, params, hdr, body, ext, depth, false)
-}
-
 // formatDecodedPart is BODYPARTSTRUCTURE for a part URLFETCH returns decoded (RFC 5524 BINARY).
 // Its line count is 0, as Dovecot reports it (imaptest urlauth-binary). shortcut: RFC 5524 does
 // not define lines for decoded data, and counting them would match BODYSTRUCTURE; revisit with
 // the Dovecot team (see .specs/dovecot.md).
 func formatDecodedPart(raw []byte) string {
-	e := splitEntity(raw)
-	hdr, _ := textproto.NewReader(bufio.NewReader(bytes.NewReader(e.header))).ReadMIMEHeader()
-	mt, params := parseMediaType(hdr.Get("Content-Type"))
-	major, subtype, _ := strings.Cut(strings.ToLower(mt), "/")
-	if major == "multipart" {
-		return formatBodyStructure(raw)
+	p := mimetree.Parse(raw)
+	if p.IsMultipart() {
+		return formatPart(p, true)
 	}
-	return formatLeafPart(major, subtype, params, hdr, e.body, true, 0, true)
+	return formatLeafPart(p, true, true)
 }
 
-func formatMultipart(subtype string, params map[string]string, hdr map[string][]string, body []byte, ext bool, depth int) string {
-	boundary := params["boundary"]
-	if boundary == "" {
+func formatMultipart(p *mimetree.Part, ext bool) string {
+	subtype := strings.TrimPrefix(p.Type, "multipart/")
+	if p.Params["boundary"] == "" {
 		return `(("TEXT" "PLAIN" NIL NIL NIL "7BIT" 0 0) "` + strings.ToUpper(subtype) + `" NIL)`
 	}
-	// Same raw split as BODY[n]: sizes and encodings match the bytes FETCH returns.
+	// Same tree as BODY[n]: sizes and encodings match the bytes FETCH returns.
 	var parts []string
-	for _, child := range splitMultipart(body, boundary) {
-		e := splitEntity(child)
-		hdr, _ := textproto.NewReader(bufio.NewReader(bytes.NewReader(e.header))).ReadMIMEHeader()
-		mt, pr := entityMediaType(hdr.Get("Content-Type"), strings.EqualFold(subtype, "digest"))
-		parts = append(parts, formatMIMEPart(mt, pr, hdr, e.body, ext, depth+1))
+	for _, c := range p.Children {
+		parts = append(parts, formatPart(c, ext))
 	}
 	if len(parts) == 0 {
 		parts = append(parts, `("TEXT" "PLAIN" NIL NIL NIL "7BIT" 0 0)`)
@@ -108,7 +79,7 @@ func formatMultipart(subtype string, params map[string]string, hdr map[string][]
 	if !ext {
 		return "(" + strings.Join(parts, "") + ` "` + sub + `")`
 	}
-	return "(" + strings.Join(parts, "") + ` "` + sub + `" ` + formatIMAPParams(params) + " " + bodyExt(hdr) + ")"
+	return "(" + strings.Join(parts, "") + ` "` + sub + `" ` + formatIMAPParams(p.Params) + " " + bodyExt(p.MIME) + ")"
 }
 
 // bodyExt is the extension data shared by every part type (RFC 3501 7.4.2): disposition with its
@@ -137,13 +108,9 @@ func bodyExt(hdr map[string][]string) string {
 	return disp + " " + lang + " " + nstring(mimeGet(hdr, "Content-Location"))
 }
 
-func formatLeafPart(major, subtype string, params map[string]string, hdr map[string][]string, body []byte, ext bool, depth int, noLines bool) string {
-	if major == "" {
-		major = "text"
-	}
-	if subtype == "" {
-		subtype = "plain"
-	}
+func formatLeafPart(p *mimetree.Part, ext bool, noLines bool) string {
+	major, subtype, _ := strings.Cut(p.Type, "/")
+	params, hdr, body := p.Params, map[string][]string(p.MIME), p.Body
 	major = strings.ToUpper(major)
 	subtype = strings.ToUpper(subtype)
 	enc := mapEncoding(mimeGet(hdr, "Content-Transfer-Encoding"))
@@ -165,7 +132,7 @@ func formatLeafPart(major, subtype string, params map[string]string, hdr map[str
 	// body-type-msg: a message/rfc822 part also carries the inner ENVELOPE, BODYSTRUCTURE and line count.
 	if major == "MESSAGE" && subtype == "RFC822" {
 		return `("` + major + `" "` + subtype + `" ` + paramsStr + ` ` + id + ` ` + desc + ` "` + enc + `" ` + strconv.Itoa(size) +
-			` ` + formatEnvelope(body) + ` ` + formatBodyPart(body, ext, depth+1) + ` ` + strconv.Itoa(countLines(body)) + tail
+			` ` + formatEnvelope(body) + ` ` + formatPart(p.Children[0], ext) + ` ` + strconv.Itoa(countLines(body)) + tail
 	}
 	return `("` + major + `" "` + subtype + `" ` + paramsStr + ` ` + id + ` ` + desc + ` "` + enc + `" ` + strconv.Itoa(size) + tail
 }

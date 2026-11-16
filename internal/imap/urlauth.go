@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BeaverMail/beavermaild/mimetree"
+
 	"github.com/BeaverMail/beavermaild/internal/storage"
 )
 
@@ -279,15 +281,15 @@ func urlPartStructure(raw []byte, section string, decoded bool, data []byte) str
 	if !ok {
 		return "NIL"
 	}
-	part, ok := findPart(raw, path)
+	part, ok := findPart(mimetree.Parse(raw), path)
 	if !ok {
 		return "NIL"
 	}
 	if decoded {
-		hdr := filterHeaderFields(part.header, []string{"Content-Transfer-Encoding"}, false)
+		hdr := filterHeaderFields(part.Header, []string{"Content-Transfer-Encoding"}, false)
 		return formatDecodedPart(append(append([]byte{}, hdr...), data...))
 	}
-	return formatBodyStructure(append(append([]byte{}, part.header...), part.body...))
+	return formatPart(part, true)
 }
 
 // writeLiteral appends sep and data as a literal. Only binary (decoded) data may carry NUL, in a

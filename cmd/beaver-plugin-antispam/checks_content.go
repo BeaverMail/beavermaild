@@ -73,6 +73,10 @@ func checkMIMEParts(m *message, r *result) {
 		if p.broken {
 			r.add("BROKEN_CONTENT_TYPE", 1)
 		}
+		if p.opaque {
+			// Past the MIME depth or part limit: the client may still render what the filter skips.
+			r.add("MIME_PARSE_LIMIT", 1)
+		}
 		mt, _, _ := strings.Cut(p.ctype, "/")
 		if mt == "text" && !p.attachment {
 			textNonAtt++

@@ -80,6 +80,14 @@ check ever saw (RFC 9989 11.5); a repeated field lets a signed message show an u
 (RFC 6376 8.15). The check runs with mail-auth off too. The obsolete form with white space before the
 colon (`From : …`, RFC 5322 4.5) counts as the field itself.
 
+## MIME limits (IMAP)
+
+BODYSTRUCTURE, `BODY[n]` and `BINARY[n]` read a message's MIME structure down to 100 levels and up to
+10000 parts (Dovecot's limits). A multipart or `message/rfc822` part past either limit is shown as one
+`application/octet-stream` leaf; past the part limit, the rest of a multipart stays in its last part,
+so no byte is lost. A multipart with no close delimiter ends at the end of its body (RFC 2046 5.1.2).
+The antispam plugin reads the same structure.
+
 ## Submission header fixes (RFC 6409 §8)
 
 On authenticated submission (`:587`/`:465`) a missing or malformed `Message-ID` is added or

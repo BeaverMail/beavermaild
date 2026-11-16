@@ -89,9 +89,15 @@ message URLs, so URL and DBL checks see the final link.
 | Message-ID | `MISSING_MID`, `INVALID_MSGID`, `MID_BARE_IP`, `MID_RHS_NOT_FQDN`, `MID_MISSING_BRACKETS`, `MID_CONTAINS_FROM`, `MID_END_EQ_FROM_USER_PART`, ... |
 | Date / Subject | `MISSING_DATE`, `INVALID_DATE`, `DATE_IN_FUTURE`, `DATE_IN_PAST`, `SUBJ_ALL_CAPS`, `LONG_SUBJ`, `FAKE_REPLY`, `SUBJECT_*` |
 | Headers | `MISSING_FROM`, `MULTIPLE_FROM`, `FROM_INVALID`, `R_HTTP_URL_IN_FROM`, `*_NEEDS_ENCODING`, `*_EXCESS_BASE64/QP`, `MULTIPLE_UNIQUE_HEADERS`, `MISSING_ESSENTIAL_HEADERS`, `R_UNDISC_RCPT`, `REPLYTO_*`, `HEADER_*_EMPTY_DELIMITER`, `INVALID_FROM_8BIT`, ... |
-| MIME / attachments | `MISSING_MIME_VERSION`, `MIME_MA_MISSING_TEXT/HTML`, `CTYPE_MISSING_DISPOSITION`, `MIME_BASE64_TEXT_BOGUS`, `MIME_BAD_EXTENSION`, `MIME_DOUBLE_BAD_EXTENSION`, `MIME_ARCHIVE_IN_ARCHIVE`, `MIME_ENCRYPTED_ARCHIVE`, `MIME_BAD_UNICODE`, `MIME_BAD_ATTACHMENT` (ZIP contents are inspected) |
+| MIME / attachments | `MISSING_MIME_VERSION`, `MIME_MA_MISSING_TEXT/HTML`, `CTYPE_MISSING_DISPOSITION`, `MIME_BASE64_TEXT_BOGUS`, `MIME_BAD_EXTENSION`, `MIME_DOUBLE_BAD_EXTENSION`, `MIME_ARCHIVE_IN_ARCHIVE`, `MIME_ENCRYPTED_ARCHIVE`, `MIME_BAD_UNICODE`, `MIME_BAD_ATTACHMENT` (ZIP contents are inspected), `BROKEN_CONTENT_TYPE` (invalid `Content-Type`; `Content-Type`/`Content-Transfer-Encoding` repeated in a part; a malformed header line; a multipart with a transfer encoding), `MIME_PARSE_LIMIT` (+4: a part past 100 levels or 10000 parts, not read) |
 | HTML / URLs | `MIME_HTML_ONLY`, `HTML_SHORT_LINK_IMG_*`, `R_EMPTY_IMAGE`, `EXT_CSS`, `HTTP_TO_HTTPS`, `HTTP_TO_IP`, `URL_*` (numeric IP, user:password, no/suspicious TLD, RTL/zero-width, many dots, long, nested URLs), `PHISHING` (link text shows another domain) |
 | Other | `GTUBE`, `SPAMTRAP`, `RBL_SPAMHAUS_*`, `RECEIVED_SPAMHAUS_*`, `DBL_*`, `URL_REDIRECTOR_NESTED` |
+
+The filter reads the MIME tree the IMAP server shows clients (package `mimetree`): every part a
+client can display, attached `message/rfc822` messages included, base64 read as RFC 2045 6.8 says
+(characters outside the alphabet ignored) and text converted from its charset (for HTML as a browser
+does: byte order mark, `Content-Type` charset, then `<meta>`). Each leaf part is read
+up to 8 MiB.
 
 `beaver filter scan -json` lists every symbol with its score and options.
 

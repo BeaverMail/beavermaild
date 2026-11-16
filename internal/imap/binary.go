@@ -2,14 +2,11 @@
 package imap
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/base64"
 	"errors"
-	"io"
-	"mime/quotedprintable"
-	"net/textproto"
-	"strings"
+
+	"github.com/BeaverMail/beavermaild/mimetree"
 )
 
 // errUnknownCTE answers a BINARY fetch of a part whose transfer encoding cannot be decoded.
@@ -26,35 +23,15 @@ func binarySection(raw []byte, section string) ([]byte, error) {
 	if len(path) == 0 {
 		return raw, nil
 	}
-	part, ok := findPart(raw, path)
+	part, ok := findPart(mimetree.Parse(raw), path)
 	if !ok {
 		return []byte{}, nil
 	}
-	hdr, _ := textproto.NewReader(bufio.NewReader(bytes.NewReader(part.header))).ReadMIMEHeader()
-	switch strings.ToLower(strings.TrimSpace(hdr.Get("Content-Transfer-Encoding"))) {
-	case "", "7bit", "8bit", "binary":
-		return part.body, nil
-	case "base64":
-		// Keep only the alphabet (padding included goes too), as lenient readers do; a lone
-		// trailing character holds no full byte.
-		clean := bytes.Map(func(r rune) rune {
-			if r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '+' || r == '/' {
-				return r
-			}
-			return -1
-		}, part.body)
-		if len(clean)%4 == 1 {
-			clean = clean[:len(clean)-1]
-		}
-		out := make([]byte, base64.RawStdEncoding.DecodedLen(len(clean)))
-		n, _ := base64.RawStdEncoding.Decode(out, clean)
-		return out[:n], nil
-	case "quoted-printable":
-		out, _ := io.ReadAll(quotedprintable.NewReader(bytes.NewReader(escapeQPControls(part.body))))
-		return out, nil
-	default:
+	out, ok := mimetree.Decode(part.MIME.Get("Content-Transfer-Encoding"), part.Body)
+	if !ok {
 		return nil, errUnknownCTE
 	}
+	return out, nil
 }
 
 // base64NULParts re-encodes as base64 every leaf part whose body holds NUL, which no IMAP4rev1
@@ -71,35 +48,29 @@ func base64NULParts(raw []byte) []byte {
 	var edits []edit
 	// Every entity is a reslice of raw, so its offset is the capacity it lost.
 	offset := func(sub []byte) int { return cap(raw) - cap(sub) }
-	var walk func(e mimeEntity, depth int)
-	walk = func(e mimeEntity, depth int) {
-		mt, params := e.mediaType()
-		if depth >= maxMIMEDepth && opaqueTooDeep(mt) {
-			mt = "application/octet-stream" // a leaf, as BODYSTRUCTURE shows it
-		}
-		switch {
-		case strings.HasPrefix(mt, "multipart/"):
-			for _, child := range splitMultipart(e.body, params["boundary"]) {
-				ce := splitEntity(child)
-				ce.inDigest = mt == "multipart/digest"
-				walk(ce, depth+1)
+	var walk func(p *mimetree.Part)
+	walk = func(p *mimetree.Part) {
+		if len(p.Children) > 0 {
+			for _, c := range p.Children {
+				walk(c)
 			}
-		case mt == "message/rfc822":
-			walk(splitEntity(e.body), depth+1)
-		case bytes.IndexByte(e.body, 0) >= 0 && len(e.header) > 0:
-			hdr := filterHeaderFields(e.header, []string{"Content-Transfer-Encoding"}, false)
-			repl := append(hdr[:len(hdr)-2:len(hdr)-2], "Content-Transfer-Encoding: base64\r\n\r\n"...)
-			enc := base64.StdEncoding.EncodeToString(e.body)
-			for len(enc) > 76 {
-				repl = append(append(repl, enc[:76]...), '\r', '\n')
-				enc = enc[76:]
-			}
-			repl = append(append(repl, enc...), '\r', '\n')
-			start := offset(e.header)
-			edits = append(edits, edit{start, start + len(e.header) + len(e.body), repl})
+			return
 		}
+		if bytes.IndexByte(p.Body, 0) < 0 || len(p.Header) == 0 {
+			return
+		}
+		hdr := filterHeaderFields(p.Header, []string{"Content-Transfer-Encoding"}, false)
+		repl := append(hdr[:len(hdr)-2:len(hdr)-2], "Content-Transfer-Encoding: base64\r\n\r\n"...)
+		enc := base64.StdEncoding.EncodeToString(p.Body)
+		for len(enc) > 76 {
+			repl = append(append(repl, enc[:76]...), '\r', '\n')
+			enc = enc[76:]
+		}
+		repl = append(append(repl, enc...), '\r', '\n')
+		start := offset(p.Header)
+		edits = append(edits, edit{start, start + len(p.Header) + len(p.Body), repl})
 	}
-	walk(splitEntity(raw), 0)
+	walk(mimetree.Parse(raw))
 	var out []byte
 	last := 0
 	for _, ed := range edits {
@@ -107,26 +78,4 @@ func base64NULParts(raw []byte) []byte {
 		last = ed.end
 	}
 	return append(out, raw[last:]...)
-}
-
-// escapeQPControls writes as =XX the control bytes Go's quoted-printable reader rejects: it would
-// stop there and truncate the part. RFC 2045 6.7 asks for robust decoding, so they pass through.
-func escapeQPControls(b []byte) []byte {
-	var out []byte
-	for i, c := range b {
-		if c < ' ' && c != '\t' && c != '\r' && c != '\n' || c == 0x7f {
-			if out == nil {
-				out = append(make([]byte, 0, len(b)+8), b[:i]...)
-			}
-			out = append(out, '=', "0123456789ABCDEF"[c>>4], "0123456789ABCDEF"[c&15])
-			continue
-		}
-		if out != nil {
-			out = append(out, c)
-		}
-	}
-	if out == nil {
-		return b
-	}
-	return out
 }

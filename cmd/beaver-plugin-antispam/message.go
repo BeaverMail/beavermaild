@@ -3,11 +3,8 @@ package main
 
 import (
 	"bytes"
-	"encoding/base64"
 	"io"
 	"mime"
-	"mime/multipart"
-	"mime/quotedprintable"
 	"net/mail"
 	"net/textproto"
 	"net/url"
@@ -15,14 +12,17 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/BeaverMail/beavermaild/mimetree"
+	htmlcharset "golang.org/x/net/html/charset"
+	"golang.org/x/text/encoding"
+	"golang.org/x/text/encoding/htmlindex"
+
 	"golang.org/x/net/html"
 )
 
 const (
-	maxParts     = 256
-	maxDepth     = 8
 	maxURLs      = 512
-	maxPartBytes = 8 << 20
+	maxPartBytes = 8 << 20 // decoded and analysed per leaf part; the rest of a larger part is not read
 )
 
 type header struct {
@@ -53,6 +53,7 @@ type part struct {
 	filename   string
 	attachment bool
 	broken     bool
+	opaque     bool // not entered: past the MIME depth or part limit (mimetree)
 	isText     bool // text/plain or text/html content part
 	text       string
 	lines      int
@@ -73,7 +74,50 @@ type message struct {
 	raw     []byte
 }
 
-var wordDec = mime.WordDecoder{CharsetReader: func(_ string, r io.Reader) (io.Reader, error) { return r, nil }}
+// wordDec decodes RFC 2047 encoded-words in any charset x/text knows; others stay as raw bytes.
+var wordDec = mime.WordDecoder{CharsetReader: func(cs string, r io.Reader) (io.Reader, error) {
+	if e, err := htmlindex.Get(cs); err == nil && e != encoding.Replacement {
+		return e.NewDecoder().Reader(r), nil
+	}
+	return r, nil
+}}
+
+// toUTF8 converts text in charset to UTF-8, as the client shows it (RFC 2049 2). An unknown charset
+// keeps the raw bytes: the ASCII in them, URLs included, is still read.
+func toUTF8(b []byte, charset string) []byte {
+	switch strings.ToLower(charset) {
+	case "", "utf-8", "us-ascii":
+		return b
+	}
+	e, err := htmlindex.Get(charset)
+	if err != nil {
+		return b
+	}
+	return decodeWith(b, e)
+}
+
+// htmlToUTF8 converts an HTML part as a browser engine does (x/net/html/charset): byte order mark,
+// then the Content-Type charset, then a <meta> charset in the first 1024 bytes, then UTF-8 if the
+// bytes are. Ignoring <meta> let a part declare a charset there whose escape sequences, inside a
+// link, kept the filter from reading a URL the client shows.
+func htmlToUTF8(b []byte, contentType string) []byte {
+	e, _, _ := htmlcharset.DetermineEncoding(b, contentType)
+	return decodeWith(b, e)
+}
+
+// decodeWith decodes b with e. WHATWG maps some charsets (iso-2022-kr, hz-gb-2312...) to
+// "replacement", one U+FFFD for the whole text: the content would vanish for the filter while a
+// client that knows them shows it, so their bytes are kept.
+func decodeWith(b []byte, e encoding.Encoding) []byte {
+	if e == nil || e == encoding.Replacement {
+		return b
+	}
+	out, err := e.NewDecoder().Bytes(b)
+	if err != nil {
+		return b
+	}
+	return out
+}
 
 func decodeWords(s string) string {
 	if d, err := wordDec.DecodeHeader(s); err == nil {
@@ -84,18 +128,9 @@ func decodeWords(s string) string {
 
 func parseMessage(raw []byte) *message {
 	m := &message{raw: raw}
-	hdrEnd, bodyStart := len(raw), len(raw)
-	for _, sep := range []string{"\r\n\r\n", "\n\n"} {
-		if i := bytes.Index(raw, []byte(sep)); i >= 0 && i < hdrEnd {
-			hdrEnd, bodyStart = i, i+len(sep)
-		}
-	}
-	m.headers = parseHeaderBlock(string(raw[:hdrEnd]))
-	top := textproto.MIMEHeader{}
-	for _, h := range m.headers {
-		top.Add(textproto.CanonicalMIMEHeaderKey(h.name), h.raw)
-	}
-	m.parsePart(top, raw[bodyStart:], nil, 0)
+	tree := mimetree.Parse(raw)
+	m.headers = parseHeaderBlock(string(tree.Header))
+	m.addPart(tree, nil)
 	m.collectURLs()
 	return m
 }
@@ -169,80 +204,47 @@ func (m *message) addrs(name string) (list []*mail.Address, present, ok bool) {
 	return list, true, err == nil && len(list) > 0
 }
 
-func (m *message) parsePart(h textproto.MIMEHeader, body []byte, parent *part, depth int) {
-	if len(m.parts) >= maxParts {
-		return
+// addPart adds t and its subtree. The tree is the one IMAP shows clients (package mimetree): what
+// a client can display, the filter reads, message/rfc822 parts included.
+func (m *message) addPart(t *mimetree.Part, parent *part) {
+	p := &part{hdr: t.MIME, parent: parent, ctype: t.Type, params: t.Params}
+	if p.params == nil {
+		p.params = map[string]string{}
 	}
-	p := &part{hdr: h, parent: parent, ctype: "text/plain", params: map[string]string{}}
 	m.parts = append(m.parts, p)
-	if ct := h.Get("Content-Type"); ct != "" {
-		mt, params, err := mime.ParseMediaType(ct)
-		if err != nil || !strings.Contains(mt, "/") {
-			p.broken = true
-			mt = strings.ToLower(strings.TrimSpace(strings.SplitN(ct, ";", 2)[0]))
-		}
-		if strings.Contains(mt, "/") {
-			p.ctype = mt
-		}
-		if params != nil {
-			p.params = params
-		}
-	}
-	disp, dparams, _ := mime.ParseMediaType(h.Get("Content-Disposition"))
+	// Repeated Content-Type or Content-Transfer-Encoding, a malformed header line, an encoded
+	// multipart: each client reads them its own way, the filter cannot know which.
+	p.broken = t.BadType || t.BadHeader || t.BadEncoding || len(t.MIME["Content-Type"]) > 1 || len(t.MIME["Content-Transfer-Encoding"]) > 1 ||
+		t.IsMultipart() && t.Params["boundary"] == ""
+	p.opaque = t.Opaque || t.Truncated
+	disp, dparams, _ := mime.ParseMediaType(t.MIME.Get("Content-Disposition"))
 	p.filename = decodeWords(dparams["filename"])
 	if p.filename == "" {
 		p.filename = decodeWords(p.params["name"])
 	}
 	p.attachment = disp == "attachment" || (p.filename != "" && disp != "inline")
 
-	if strings.HasPrefix(p.ctype, "multipart/") {
-		if depth >= maxDepth || p.params["boundary"] == "" {
-			p.broken = true
-			return
+	if len(t.Children) > 0 || t.IsMultipart() {
+		for _, c := range t.Children {
+			m.addPart(c, p)
 		}
-		mr := multipart.NewReader(bytes.NewReader(body), p.params["boundary"])
-		for {
-			cp, err := mr.NextRawPart()
-			if err != nil {
-				if err != io.EOF {
-					p.broken = true
-				}
-				return
-			}
-			b, _ := io.ReadAll(io.LimitReader(cp, maxPartBytes))
-			m.parsePart(cp.Header, b, p, depth+1)
-		}
+		return
 	}
-	p.body = decodeCTE(h.Get("Content-Transfer-Encoding"), body)
+	body := t.Body
+	if len(body) > maxPartBytes {
+		body = body[:maxPartBytes]
+	}
+	p.body, _ = mimetree.Decode(t.MIME.Get("Content-Transfer-Encoding"), body)
 	if p.attachment || (p.ctype != "text/plain" && p.ctype != "text/html") {
 		return
 	}
 	p.isText = true
 	if p.ctype == "text/html" {
-		p.html, p.text = parseHTML(p.body)
+		p.html, p.text = parseHTML(htmlToUTF8(p.body, t.MIME.Get("Content-Type")))
 	} else {
-		p.text = string(p.body)
+		p.text = string(toUTF8(p.body, p.params["charset"]))
 	}
 	p.lines = strings.Count(strings.TrimSpace(p.text), "\n") + 1
-}
-
-func decodeCTE(cte string, body []byte) []byte {
-	switch strings.ToLower(strings.TrimSpace(cte)) {
-	case "base64":
-		clean := bytes.Map(func(r rune) rune {
-			if r == '\r' || r == '\n' || r == ' ' || r == '\t' {
-				return -1
-			}
-			return r
-		}, body)
-		out := make([]byte, base64.StdEncoding.DecodedLen(len(clean)))
-		n, _ := base64.StdEncoding.Decode(out, clean)
-		return out[:n]
-	case "quoted-printable":
-		out, _ := io.ReadAll(quotedprintable.NewReader(bytes.NewReader(body)))
-		return out
-	}
-	return body
 }
 
 var blockTags = map[string]bool{"br": true, "p": true, "div": true, "tr": true, "li": true, "h1": true, "h2": true, "h3": true, "table": true}

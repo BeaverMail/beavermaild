@@ -140,11 +140,32 @@ func decodedPartsContain(hdr textproto.MIMEHeader, r io.Reader, needle string, d
 	}
 	switch strings.ToLower(strings.TrimSpace(hdr.Get("Content-Transfer-Encoding"))) {
 	case "base64":
-		return readerContains(base64.NewDecoder(base64.StdEncoding, r), needle) // skips CR/LF
+		return readerContains(base64.NewDecoder(base64.RawStdEncoding, base64Alphabet{r}), needle)
 	case "quoted-printable":
 		return readerContains(quotedprintable.NewReader(r), needle)
 	}
 	return false
+}
+
+// base64Alphabet passes only the base64 alphabet: RFC 2045 6.8 says every other character, padding
+// included here, is ignored. Go's decoder stopped at the first one and the rest of the part was
+// never searched.
+type base64Alphabet struct{ r io.Reader }
+
+func (a base64Alphabet) Read(p []byte) (int, error) {
+	for {
+		n, err := a.r.Read(p)
+		k := 0
+		for _, c := range p[:n] {
+			if c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '+' || c == '/' {
+				p[k] = c
+				k++
+			}
+		}
+		if k > 0 || err != nil {
+			return k, err
+		}
+	}
 }
 
 // readerContains is rawContains over a stream. Chunks are cut on rune starts, so lowercasing them

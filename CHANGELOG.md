@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Security (MIME, RFC 2045/2046): a message of 32 MiB made of empty MIME parts (4.8 million of them)
+  cost 251 MB, 5 s and 22 GB of allocations on every IMAP FETCH BODYSTRUCTURE, and anyone could
+  deliver it. One MIME parser, new public package `mimetree`, now serves IMAP (BODYSTRUCTURE,
+  `BODY[n]`, `BINARY`) and the antispam plugin, with Dovecot's limits: 100 levels, 10000 parts.
+  The plugin had its own parser and missed content clients display: parts past depth 8 or after
+  part 256, attached `message/rfc822` messages, base64 bodies with a character outside the alphabet
+  (RFC 2045 6.8 says to ignore it; Go's decoder stopped), and text in UTF-16 or other charsets
+  (now converted, also in encoded-words; charsets WHATWG maps to "replacement", such as
+  `iso-2022-kr`, keep their bytes instead of becoming one U+FFFD; HTML parts follow the browser
+  rules, `<meta>` charset included). A malformed line in a part's
+  header no longer hides the fields after it: they are read, as lenient clients do. Ambiguous parts
+  count as `BROKEN_CONTENT_TYPE`: repeated `Content-Type` or `Content-Transfer-Encoding`, a
+  malformed header line, an encoded multipart (RFC 2045 6.4). A part past the limits adds
+  `MIME_PARSE_LIMIT` (+4). A header ends at its first empty line whatever the line ends: with
+  mixed line ends (BDAT stores them as received) the filter read body lines as header fields.
+  A multipart with no close delimiter keeps its last part in IMAP (RFC 2046 5.1.2; it was
+  dropped). SEARCH BODY/TEXT reads base64 the same way.
+
 - Security (RFC 5322, RFC 9989 11.5): on port 25 a message whose `From` is missing, repeated,
   unparsable or holds several mailboxes, or that repeats a single field (`Subject`, `Date`, ...), is
   refused with `554 5.6.0`. Before, it only got `dmarc=fail` (+2 in the antispam plugin) while the

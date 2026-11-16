@@ -112,8 +112,9 @@ func TestReadHeaderCapped(t *testing.T) {
 // comparing. Matching only the raw bytes missed every word of a base64 or quoted-printable body.
 func TestSearchTextDecodesTransferEncodings(t *testing.T) {
 	msgs := map[string]string{
-		"b64": "Subject: x\r\nContent-Transfer-Encoding: base64\r\n\r\naGVsbG8g\r\nd29ybGQ=\r\n",
-		"qp":  "Subject: x\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\nun caf=C3=A9 tr=\r\nes bon\r\n",
+		"b64":      "Subject: x\r\nContent-Transfer-Encoding: base64\r\n\r\naGVsbG8g\r\nd29ybGQ=\r\n",
+		"b64 junk": "Subject: x\r\nContent-Transfer-Encoding: base64\r\n\r\naGVs!bG8g\r\nd29y bGQ=\r\n", // RFC 2045 6.8
+		"qp":       "Subject: x\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\nun caf=C3=A9 tr=\r\nes bon\r\n",
 		"nested": "Subject: x\r\nContent-Type: multipart/mixed; boundary=o\r\n\r\n--o\r\nContent-Type: text/plain\r\n\r\nplain\r\n" +
 			"--o\r\nContent-Type: message/rfc822\r\n\r\nSubject: inner\r\nContent-Type: multipart/alternative; boundary=i\r\n\r\n" +
 			"--i\r\nContent-Type: text/plain\r\nContent-Transfer-Encoding: base64\r\n\r\nc2VjcmV0IHdvcmQ=\r\n--i--\r\n--o--\r\n",
@@ -124,6 +125,7 @@ func TestSearchTextDecodesTransferEncodings(t *testing.T) {
 		body, want  bool
 	}{
 		{"b64", "hello world", true, true},
+		{"b64 junk", "hello world", true, true}, // "!" and " " ignored, not the end of the part
 		{"b64", "HELLO", false, true},
 		{"qp", "café tres", true, true}, // "tr=\r\nes": a soft line break
 		{"nested", "secret word", true, true},

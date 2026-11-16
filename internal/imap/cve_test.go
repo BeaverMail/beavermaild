@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/BeaverMail/beavermaild/mimetree"
 )
 
 // within fails t when fn runs longer than limit: these classes turn a small message into minutes
@@ -47,9 +49,9 @@ func TestMultipartBoundaryIsNotAPrefix(t *testing.T) {
 	raw := []byte("Content-Type: multipart/mixed; boundary=b1\r\n\r\n" +
 		"--b1\r\nContent-Type: text/plain\r\n\r\none\r\n--b10\r\nnot a part\r\n" +
 		"--b1 \t\r\nContent-Type: text/html\r\n\r\ntwo\r\n--b1--\r\n")
-	parts := splitMultipart([]byte(strings.SplitN(string(raw), "\r\n\r\n", 2)[1]), "b1")
-	if len(parts) != 2 || !strings.Contains(string(parts[0]), "--b10") || !strings.Contains(string(parts[1]), "two") {
-		t.Fatalf("parts = %q", parts)
+	parts := mimetree.Parse(raw).Children
+	if len(parts) != 2 || !strings.Contains(string(parts[0].Body), "--b10") || !strings.Contains(string(parts[1].Body), "two") {
+		t.Fatalf("%d parts", len(parts))
 	}
 }
 
@@ -118,7 +120,7 @@ func nestedMessages(n int) []byte {
 
 // CVE-2020-12100 class (Dovecot): deeply nested MIME parts. Every level scanned its whole body
 // (and message/rfc822 copied it), so the cost grew with depth x size: 24000 levels in 1.8 MB took
-// 12.8 s per BODYSTRUCTURE. Past maxMIMEDepth a part is one opaque leaf, the same in BODYSTRUCTURE,
+// 12.8 s per BODYSTRUCTURE. Past mimetree.MaxDepth a part is one opaque leaf, the same in BODYSTRUCTURE,
 // BODY[section] and BINARY.
 func TestCVE_2020_12100_DeepMIMENesting(t *testing.T) {
 	for name, raw := range map[string][]byte{"multipart": nestedMultipart(24000), "message": nestedMessages(24000)} {
@@ -127,7 +129,7 @@ func TestCVE_2020_12100_DeepMIMENesting(t *testing.T) {
 			if !strings.Contains(bs, `"APPLICATION" "OCTET-STREAM"`) {
 				t.Fatalf("%s: no opaque leaf at the depth limit", name)
 			}
-			if depth := strings.Count(bs, "(("); depth > 2*maxMIMEDepth {
+			if depth := strings.Count(bs, "(("); depth > 2*mimetree.MaxDepth {
 				t.Fatalf("%s: structure %d levels deep", name, depth)
 			}
 			_ = base64NULParts(append(raw, 0))
@@ -136,10 +138,10 @@ func TestCVE_2020_12100_DeepMIMENesting(t *testing.T) {
 
 	// Sections agree with BODYSTRUCTURE: the part at the limit is a leaf holding the rest.
 	raw := nestedMultipart(150)
-	path := strings.TrimSuffix(strings.Repeat("1.", maxMIMEDepth), ".")
+	path := strings.TrimSuffix(strings.Repeat("1.", mimetree.MaxDepth), ".")
 	leaf := extractBodySection(raw, path, nil)
-	if !strings.HasPrefix(string(leaf), fmt.Sprintf("--b%06d\r\n", maxMIMEDepth)) {
-		t.Fatalf("BODY[%d x 1] = %.60q, want the opaque part's body", maxMIMEDepth, leaf)
+	if !strings.HasPrefix(string(leaf), fmt.Sprintf("--b%06d\r\n", mimetree.MaxDepth)) {
+		t.Fatalf("BODY[%d x 1] = %.60q, want the opaque part's body", mimetree.MaxDepth, leaf)
 	}
 	if deeper := extractBodySection(raw, path+".1", nil); len(deeper) != 0 {
 		t.Fatalf("section inside the opaque leaf returned %d bytes", len(deeper))
@@ -165,5 +167,43 @@ func TestPreAuthIdleTimeout(t *testing.T) {
 	}()
 	if line, err := s.readLine(); err != nil || line != "a NOOP" {
 		t.Fatalf("authenticated session got the pre-login timeout: %q %v", line, err)
+	}
+}
+
+// Dovecot CVE-2020-12100 (part count): 32 MiB of empty parts is 4.8 million of them, and one
+// BODYSTRUCTURE was 251 MB built from 22 GB of allocations in 5 s, on every FETCH of a message any
+// SMTP sender can deliver. The tree keeps mimetree.MaxParts parts; BODY[n] numbers the same parts.
+func TestManyMIMEParts(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("Content-Type: multipart/mixed; boundary=m\r\n\r\n")
+	for b.Len() < 32<<20 {
+		b.WriteString("--m\r\n\r\n")
+	}
+	b.WriteString("--m--\r\n")
+	raw := []byte(b.String())
+	within(t, 3*time.Second, func() {
+		bs := formatBodyStructure(raw)
+		if n := strings.Count(bs, `("TEXT"`); n != mimetree.MaxParts-1 || len(bs) > 1<<20 {
+			t.Fatalf("%d parts, %d bytes", n, len(bs))
+		}
+		last := fmt.Sprint(mimetree.MaxParts - 1)
+		if got := extractBodySection(raw, last, nil); !strings.HasSuffix(string(got), "--m--\r\n") {
+			t.Fatalf("BODY[%s] does not hold the rest: %d bytes", last, len(got))
+		}
+		if got := extractBodySection(raw, fmt.Sprint(mimetree.MaxParts), nil); len(got) != 0 {
+			t.Fatalf("a part past the limit returned %d bytes", len(got))
+		}
+	})
+}
+
+// RFC 2046 5.1.2: a multipart with no close delimiter keeps its last part; it was dropped, so the
+// client saw an empty structure where the sender wrote text.
+func TestUnterminatedMultipartShown(t *testing.T) {
+	raw := []byte("Content-Type: multipart/mixed; boundary=q\r\n\r\n--q\r\nContent-Type: text/plain\r\n\r\nvisible\r\n")
+	if bs := formatBodyStructure(raw); !strings.Contains(bs, `"7BIT" 9 1`) {
+		t.Fatalf("BODYSTRUCTURE %s", bs)
+	}
+	if got := extractBodySection(raw, "1", nil); string(got) != "visible\r\n" {
+		t.Fatalf("BODY[1] = %q", got)
 	}
 }
