@@ -294,11 +294,10 @@ func (t *txn) nextUID(accountID uint32, mbox *storage.Mailbox) (uint32, error) {
 }
 
 // nextModSeq allocates the next MODSEQ on mbox; the caller saves mbox.
+// The first one is 2: an untouched mailbox reports HIGHESTMODSEQ 1 (RFC 7162 7: mod-sequence-value
+// is at least 1), and its first change must look newer than that.
 func nextModSeq(mbox *storage.Mailbox) uint64 {
-	mbox.HighestModSeq++
-	if mbox.HighestModSeq == 0 {
-		mbox.HighestModSeq = 1
-	}
+	mbox.HighestModSeq = max(mbox.HighestModSeq, 1) + 1
 	return mbox.HighestModSeq
 }
 

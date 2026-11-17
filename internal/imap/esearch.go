@@ -107,7 +107,7 @@ func (s *session) esearchLine(tag string, byUID bool, seqs []uint32, o returnOpt
 				returned = returned[1:]
 			}
 		}
-		b.WriteString(" MODSEQ " + strconv.FormatUint(mail.HighestModSeq(s.messages, returned), 10))
+		b.WriteString(" MODSEQ " + strconv.FormatUint(reportedModSeq(mail.HighestModSeq(s.messages, returned)), 10))
 	}
 	return b.String()
 }

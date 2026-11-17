@@ -274,7 +274,12 @@ func TestIMAPStoreUnchangedSinceModified(t *testing.T) {
 	mod1, _, _ := strings.Cut(v, ")")
 	expectPrefix(t, read, "m4 OK")
 
+	// RFC 7162 3.1.3: the message that passed is answered with its MODSEQ even with .SILENT.
 	send(t, conn, `m5 STORE 1:2 (UNCHANGEDSINCE `+mod1+`) +FLAGS.SILENT (\Seen)`)
+	line, _ = read.ReadString('\n')
+	if !strings.HasPrefix(line, "* 1 FETCH (UID 1 MODSEQ (") {
+		t.Fatalf("store fetch %q", line)
+	}
 	line, _ = read.ReadString('\n')
 	if line != "m5 OK [MODIFIED 2] Conditional STORE failed\r\n" {
 		t.Fatalf("store %q", line)
@@ -285,6 +290,9 @@ func TestIMAPStoreUnchangedSinceModified(t *testing.T) {
 	if !strings.HasPrefix(line, "m6 OK [MODIFIED 1:2]") {
 		t.Fatalf("uid store %q", line)
 	}
+	// UNCHANGEDSINCE 0 always fails (Example 8).
+	send(t, conn, `m7 STORE 1 (UNCHANGEDSINCE 0) +FLAGS.SILENT ($MDNSent)`)
+	expectPrefix(t, read, "m7 OK [MODIFIED 1]")
 }
 
 // TestIMAPCondstoreEnablingCommand checks RFC 7162 3.1: no mod-sequences before a CONDSTORE

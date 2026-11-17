@@ -122,7 +122,7 @@ func (s *session) cmdAppend(ctx context.Context, tag, arg string) error {
 		// Bare CR as Exim treats it (mail.BareCR): never a line end inside a header field.
 		emailID, err := s.inbox.Append(ctx, s.principal.AccountID, mbox.ID, mail.BareCR(raw), specs[i].flags, specs[i].internalDate)
 		if err == nil && len(specs[i].keywords) > 0 {
-			if _, err = s.inbox.SetFlagsMany(ctx, s.principal.AccountID, []uint32{emailID}, 0, 0, specs[i].keywords, nil, 0); err != nil {
+			if _, err = s.inbox.SetFlagsMany(ctx, s.principal.AccountID, 0, []uint32{emailID}, 0, 0, specs[i].keywords, nil, mail.NoUnchangedSince); err != nil {
 				ids = append(ids, emailID) // stored: undone with the others below
 			}
 		}

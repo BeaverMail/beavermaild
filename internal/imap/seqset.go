@@ -2,7 +2,9 @@
 package imap
 
 import (
+	"cmp"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -132,10 +134,10 @@ func (ss seqSet) expandUID(msgs []messageRef) []int {
 		if lo > hi {
 			lo, hi = hi, lo
 		}
-		for i, m := range msgs {
-			if m.uid < lo || m.uid > hi {
-				continue
-			}
+		// msgs is sorted by UID: start at lo instead of scanning the mailbox once per range (a
+		// 64 KiB set of 10000 single UIDs on 100000 messages took 0.3 s per command).
+		start, _ := slices.BinarySearchFunc(msgs, lo, func(m messageRef, u uint32) int { return cmp.Compare(m.uid, u) })
+		for i := start; i < len(msgs) && msgs[i].uid <= hi; i++ {
 			if _, ok := seen[i]; ok {
 				continue
 			}

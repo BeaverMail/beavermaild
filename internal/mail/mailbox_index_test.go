@@ -91,7 +91,7 @@ func TestMailboxIndexMoveUpdatesMembership(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := inbox.MoveMessages(ctx, acc.ID, []uint32{id}, mail.TrashMailboxID); err != nil {
+	if _, err := inbox.MoveMessages(ctx, acc.ID, mail.InboxMailboxID, []uint32{id}, mail.TrashMailboxID); err != nil {
 		t.Fatal(err)
 	}
 	inboxMsgs, err := inbox.List(ctx, acc.ID, mail.InboxMailboxID)

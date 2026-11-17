@@ -163,13 +163,13 @@ func (s *session) serveCommands(ctx context.Context) error {
 				continue
 			}
 		}
-		s.syncCtx, s.syncPending = ctx, syncsBeforeReply(cmd)
 		s.lastCmd, s.lastTag = cmd, tag
 		if cmd == "UID" {
 			if sub, _, _ := strings.Cut(arg, " "); sub != "" {
 				s.lastCmd += " " + strings.ToUpper(sub)
 			}
 		}
+		s.syncCtx, s.syncPending = ctx, syncsBeforeReply(s.lastCmd)
 		// LOGIN, AUTHENTICATE and STARTTLS belong to the not-authenticated state (RFC 3501 6.2).
 		if s.principal.AccountID != 0 && (cmd == "LOGIN" || cmd == "AUTHENTICATE" || cmd == "STARTTLS") {
 			if err := s.tagged(tag, "BAD already authenticated"); err != nil {
@@ -671,7 +671,7 @@ func (s *session) openMailbox(ctx context.Context, tag, name string, examine boo
 		}
 	}
 	if s.condstore {
-		okLines = append(okLines, fmt.Sprintf("OK [HIGHESTMODSEQ %d] Highest", highestMod))
+		okLines = append(okLines, fmt.Sprintf("OK [HIGHESTMODSEQ %d] Highest", reportedModSeq(highestMod)))
 	}
 	okLines = append(okLines, "OK [PERMANENTFLAGS "+s.permanentFlags()+"] Limited", "OK [URLMECH INTERNAL] URLAUTH mechanisms")
 	for _, line := range okLines {
@@ -761,7 +761,7 @@ func (s *session) markSeenOnFetch(ctx context.Context, idx int, items fetchItems
 		!slices.ContainsFunc(items.bodySections, func(bs bodySectionFetch) bool { return bs.setsSeen }) {
 		return items, nil
 	}
-	_, meta, err := s.inbox.SetFlagsIfUnchanged(ctx, s.principal.AccountID, msg.StorageID(), mail.FlagSeen, 0, nil, nil, 0)
+	_, meta, err := s.inbox.SetFlagsIfUnchanged(ctx, s.principal.AccountID, s.mbox.ID, msg.StorageID(), mail.FlagSeen, 0, nil, nil, mail.NoUnchangedSince)
 	if errors.Is(err, storage.ErrNotFound) {
 		return items, nil // expunged by another session
 	}
@@ -796,7 +796,7 @@ func (s *session) cmdStore(ctx context.Context, tag, arg string, byUID bool) err
 		return s.tagged(tag, "BAD no such message")
 	}
 	indices := s.resolveIndices(setParsed, byUID)
-	var unchanged uint64
+	unchanged := mail.NoUnchangedSince
 	if hasUnchanged {
 		unchanged = unchangedSince
 		if err := s.enableCondstore(ctx); err != nil {
@@ -807,7 +807,7 @@ func (s *session) cmdStore(ctx context.Context, tag, arg string, byUID bool) err
 	for i, idx := range indices {
 		ids[i] = s.messages[idx].StorageID()
 	}
-	results, err := s.inbox.SetFlagsMany(ctx, s.principal.AccountID, ids, set, clear, kwAdd, kwRemove, unchanged)
+	results, err := s.inbox.SetFlagsMany(ctx, s.principal.AccountID, s.mbox.ID, ids, set, clear, kwAdd, kwRemove, unchanged)
 	if err != nil {
 		return err
 	}
@@ -828,7 +828,12 @@ func (s *session) cmdStore(ctx context.Context, tag, arg string, byUID bool) err
 			return err
 		}
 		meta = s.messages[idx].Meta
-		if !silent {
+		if silent && hasUnchanged {
+			// RFC 7162 3.1.3: a conditional STORE answers with MODSEQ even when .SILENT.
+			if err := s.untagged(fmt.Sprintf("%d FETCH (UID %d %s)", idx+1, msg.UID, formatModSeq(reportedModSeq(meta.ModSeq)))); err != nil {
+				return err
+			}
+		} else if !silent {
 			line := fmt.Sprintf("%d FETCH (FLAGS %s", idx+1, mail.FormatMessageFlags(meta))
 			if byUID || s.condstore { // RFC 7162 3.2.4: UID and MODSEQ once CONDSTORE is enabled
 				line = fmt.Sprintf("%d FETCH (UID %d FLAGS %s", idx+1, msg.UID, mail.FormatMessageFlags(meta))
@@ -914,7 +919,7 @@ func (s *session) searchModSeqSuffix(expr *mail.SearchExpr, seqs []uint32) strin
 	if len(seqs) == 0 || !expr.UsesModSeq() {
 		return ""
 	}
-	return fmt.Sprintf(" (MODSEQ %d)", mail.HighestModSeq(s.messages, seqs))
+	return fmt.Sprintf(" (MODSEQ %d)", reportedModSeq(mail.HighestModSeq(s.messages, seqs)))
 }
 
 func (s *session) cmdStatus(ctx context.Context, tag, arg string) error {
@@ -1082,7 +1087,7 @@ func (s *session) cmdMove(ctx context.Context, tag, arg string, byUID bool) erro
 	indices := s.resolveIndices(set, byUID)
 	ids := s.emailIDsFromIndices(indices)
 	srcUIDs := s.imapUIDsFromIndices(indices)
-	destUIDs, err := s.inbox.MoveMessages(ctx, s.principal.AccountID, ids, dest.ID)
+	destUIDs, err := s.inbox.MoveMessages(ctx, s.principal.AccountID, s.mbox.ID, ids, dest.ID)
 	if errors.Is(err, storage.ErrNotFound) {
 		// Expunged by another session: nothing was copied (RFC 2180 4.4.1).
 		return s.tagged(tag, "NO Some of the requested messages no longer exist")
@@ -1122,7 +1127,11 @@ func (s *session) cmdMove(ctx context.Context, tag, arg string, byUID bool) erro
 			return err
 		}
 	}
-	return s.tagged(tag, "OK MOVE completed")
+	code, err := s.highestModSeqCode(ctx, len(destUIDs) > 0)
+	if err != nil {
+		return err
+	}
+	return s.tagged(tag, "OK "+code+"MOVE completed")
 }
 
 // claimRecent takes for this session the messages of msgs still \Recent in storage. Only the
@@ -1494,10 +1503,13 @@ func (s *session) tagged(tag, resp string) error {
 
 // syncsBeforeReply reports whether cmd reports the selected mailbox's changes (EXISTS, EXPUNGE,
 // FLAGS) before its tagged reply. RFC 3501 7.4.1 forbids EXPUNGE during FETCH, STORE and SEARCH
-// (not their UID forms); SELECT/EXAMINE load a fresh view and IDLE pushes its own updates.
+// (not their UID forms); SELECT/EXAMINE load a fresh view and IDLE pushes its own updates. RFC 7162
+// 3.2.10.2 adds UID SEARCH with message numbers in its criteria: UID SEARCH, SORT and THREAD never
+// sync, rather than parse the criteria for numbers first.
 func syncsBeforeReply(cmd string) bool {
 	switch cmd {
-	case "FETCH", "STORE", "SEARCH", "SORT", "THREAD", "SELECT", "EXAMINE", "IDLE", "LOGOUT", "CLOSE", "UNSELECT":
+	case "FETCH", "STORE", "SEARCH", "SORT", "THREAD", "SELECT", "EXAMINE", "IDLE", "LOGOUT", "CLOSE", "UNSELECT",
+		"UID SEARCH", "UID SORT", "UID THREAD":
 		return false
 	}
 	return true
@@ -1820,7 +1832,7 @@ func formatStatus(name string, fields []string, st mail.MailboxStatus) string {
 		case "UIDVALIDITY":
 			parts = append(parts, fmt.Sprintf("UIDVALIDITY %d", st.UIDValidity))
 		case "HIGHESTMODSEQ":
-			parts = append(parts, fmt.Sprintf("HIGHESTMODSEQ %d", st.HighestModSeq))
+			parts = append(parts, fmt.Sprintf("HIGHESTMODSEQ %d", reportedModSeq(st.HighestModSeq))) // 0 would mean NOMODSEQ
 		}
 	}
 	return fmt.Sprintf("STATUS %s (%s)", formatListMailbox(name), strings.Join(parts, " "))

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -20,14 +21,17 @@ func (s *session) cmdEnable(ctx context.Context, tag, arg string) error {
 	if arg == "" {
 		return s.tagged(tag, "BAD ENABLE syntax")
 	}
+	// RFC 5161 3.1: unknown names are ignored; ENABLED lists only what this command enabled (3.1,
+	// SHOULD), possibly nothing (3.2).
 	var enabled []string
+	wasCondstore := s.condstore
 	for _, tok := range strings.Fields(strings.ToUpper(arg)) {
-		switch tok {
-		case "CONDSTORE":
-			enabled = append(enabled, "CONDSTORE")
-		case "QRESYNC":
+		switch {
+		case tok == "CONDSTORE" && !wasCondstore && !slices.Contains(enabled, tok):
+			enabled = append(enabled, tok)
+		case tok == "QRESYNC" && !s.qresync:
 			s.qresync = true // QRESYNC implies CONDSTORE (RFC 7162 3.2.3)
-			enabled = append(enabled, "QRESYNC")
+			enabled = append(enabled, tok)
 		}
 	}
 	if len(enabled) > 0 {
@@ -35,10 +39,7 @@ func (s *session) cmdEnable(ctx context.Context, tag, arg string) error {
 			return err
 		}
 	}
-	if len(enabled) == 0 {
-		return s.tagged(tag, "BAD ENABLE syntax")
-	}
-	if err := s.untagged("ENABLED " + strings.Join(enabled, " ")); err != nil {
+	if err := s.untagged(strings.TrimSpace("ENABLED " + strings.Join(enabled, " "))); err != nil {
 		return err
 	}
 	return s.tagged(tag, "OK ENABLE completed")
@@ -59,7 +60,29 @@ func (s *session) enableCondstore(ctx context.Context) error {
 		return err
 	}
 	_, _, highest = mail.MailboxSelectState(s.messages, highest)
-	return s.untagged(fmt.Sprintf("OK [HIGHESTMODSEQ %d] Highest", highest))
+	return s.untagged(fmt.Sprintf("OK [HIGHESTMODSEQ %d] Highest", reportedModSeq(highest)))
+}
+
+// reportedModSeq is a mod-sequence as sent to the client: at least 1 (RFC 7162 7, mod-sequence-value),
+// for an untouched mailbox (stored 0) or a message stored before mod-sequences.
+func reportedModSeq(v uint64) uint64 { return max(v, 1) }
+
+// highestModSeqCode is the "[HIGHESTMODSEQ n] " of the tagged OK after messages left the mailbox
+// (RFC 7162 3.2.7, 3.2.9, RFC 6851 4.4), once CONDSTORE is enabled; "" otherwise. It syncs first,
+// so the client has every change up to that value when it caches it (RFC 7162 3.2).
+func (s *session) highestModSeqCode(ctx context.Context, removed bool) (string, error) {
+	if !removed || !s.condstore {
+		return "", nil
+	}
+	if err := s.pushIdleMailboxChanges(ctx); err != nil {
+		return "", err
+	}
+	highest, err := s.inbox.HighestModSeq(ctx, s.principal.AccountID, s.mbox.ID)
+	if err != nil {
+		return "", err
+	}
+	_, _, highest = mail.MailboxSelectState(s.messages, highest)
+	return fmt.Sprintf("[HIGHESTMODSEQ %d] ", reportedModSeq(highest)), nil
 }
 
 // parseUnchangedSince extracts a leading (UNCHANGEDSINCE n) or UNCHANGEDSINCE n clause.

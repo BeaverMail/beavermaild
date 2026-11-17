@@ -19,8 +19,11 @@ var ErrSystemMailbox = errors.New("mail: system mailbox")
 // ErrMailboxNotEmpty is returned when DELETE targets a non-empty folder.
 var ErrMailboxNotEmpty = errors.New("mail: mailbox not empty")
 
-// MoveMessages updates MailboxID for each emailID into destMailboxID and assigns new IMAP UIDs.
-func (ib *Inbox) MoveMessages(ctx context.Context, accountID uint32, emailIDs []uint32, destMailboxID uint32) ([]uint32, error) {
+// MoveMessages moves each emailID from srcMailboxID into destMailboxID and assigns new IMAP UIDs. A
+// message no longer in srcMailboxID (expunged or moved by another session) fails the whole move
+// with storage.ErrNotFound (RFC 2180 4.4.1). Both mailboxes get a new mod-sequence: the source
+// lost messages (RFC 7162 3.2, RFC 6851 4.4), which is also what tells its other sessions to sync.
+func (ib *Inbox) MoveMessages(ctx context.Context, accountID, srcMailboxID uint32, emailIDs []uint32, destMailboxID uint32) ([]uint32, error) {
 	if len(emailIDs) == 0 {
 		return nil, nil
 	}
@@ -37,9 +40,14 @@ func (ib *Inbox) MoveMessages(ctx context.Context, accountID uint32, emailIDs []
 			if err != nil {
 				return err
 			}
-			if _, err := boxes.get(meta.MailboxID); err != nil {
+			if meta.MailboxID != srcMailboxID {
+				return storage.ErrNotFound
+			}
+			src, err := boxes.get(meta.MailboxID)
+			if err != nil {
 				return err
 			}
+			nextModSeq(src)
 			boxes.delta[meta.MailboxID]--
 			boxes.delta[destMailboxID]++
 			t.indexRemove(accountID, meta.MailboxID, id)
@@ -398,7 +406,7 @@ func (ib *Inbox) renameInbox(ctx context.Context, accountID uint32, newName stri
 	for i, m := range msgs {
 		ids[i] = m.StorageID()
 	}
-	if _, err := ib.MoveMessages(ctx, accountID, ids, dest.ID); err != nil {
+	if _, err := ib.MoveMessages(ctx, accountID, InboxMailboxID, ids, dest.ID); err != nil {
 		return Mailbox{}, err
 	}
 	return dest, nil

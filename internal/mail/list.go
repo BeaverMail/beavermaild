@@ -75,7 +75,7 @@ func (ib *Inbox) OpenRaw(ctx context.Context, meta storage.EmailMeta) (*os.File,
 
 // SetFlags updates persisted flag bits for one message (set OR clear) and bumps MODSEQ when flags change.
 func (ib *Inbox) SetFlags(ctx context.Context, accountID, emailID uint32, set, clear uint32) error {
-	_, _, err := ib.SetFlagsIfUnchanged(ctx, accountID, emailID, set, clear, nil, nil, 0)
+	_, _, err := ib.SetFlagsIfUnchanged(ctx, accountID, 0, emailID, set, clear, nil, nil, NoUnchangedSince)
 	return err
 }
 

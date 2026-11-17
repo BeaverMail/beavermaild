@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Fix (IMAP, RFC 7162 / RFC 6851): a MOVE did not raise the source mailbox's mod-sequence, and
+  sessions sync only when it changes, so another session with that mailbox open never got the
+  EXPUNGE of the moved messages and kept showing them. Such a stale view could also set flags on
+  a message now in another mailbox (STORE) or move it out of there (MOVE): a message no longer in
+  the selected mailbox is now treated as expunged. EXPUNGE, UID EXPUNGE and MOVE answer with
+  `[HIGHESTMODSEQ n]` once CONDSTORE is on; HIGHESTMODSEQ is never 0 (an empty mailbox reported 0,
+  which STATUS uses for "no mod-sequences"); `UNCHANGEDSINCE 0` always fails; a conditional
+  `STORE .SILENT` returns MODSEQ; UID SEARCH/SORT/THREAD no longer report expunges; ENABLE ignores
+  unknown names (RFC 5161) instead of answering BAD.
+- Security (IMAP): a long UID set (a 64 KiB command line) cost 0.3 s of CPU per command on a
+  mailbox of 100000 messages; resolving it is now linear.
+
 - Fix (SMTPUTF8, RFC 6531): a message received without SMTPUTF8 but with a raw UTF-8 header field
   (often an unencoded attachment name) bounced with 5.6.7 at every next hop that does not offer
   SMTPUTF8. The queue now keeps whether the sender asked for SMTPUTF8 in MAIL: only then, or with a

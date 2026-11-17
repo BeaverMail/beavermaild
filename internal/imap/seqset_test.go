@@ -2,7 +2,10 @@ package imap
 
 import (
 	"slices"
+	"strconv"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseSeqSetExpand(t *testing.T) {
@@ -74,4 +77,29 @@ func TestParseStatusArg(t *testing.T) {
 	if !ok || len(fields) != 4 {
 		t.Fatalf("recent fields %v ok=%v", fields, ok)
 	}
+}
+
+// A UID set as long as a command line allows (RFC 7162 4 makes long sets normal) must not cost
+// ranges x messages: 10000 single UIDs on 100000 messages took 0.3 s per UID command.
+func TestExpandUIDLongSetLinear(t *testing.T) {
+	msgs := make([]messageRef, 100000)
+	for i := range msgs {
+		msgs[i] = messageRef{uid: uint32(i + 1)}
+	}
+	var b strings.Builder
+	for uid := 1; b.Len() < maxLineBytes-100; uid += 10 {
+		if b.Len() > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(strconv.Itoa(uid))
+	}
+	set, err := parseSeqSet(b.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	within(t, 60*time.Millisecond, func() {
+		if got := set.expandUID(msgs); len(got) != 10000 || msgs[got[9999]].uid != 99991 {
+			t.Fatalf("%d indices", len(got))
+		}
+	})
 }

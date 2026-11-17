@@ -35,7 +35,7 @@ func TestSetFlagsBumpsModSeq(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if meta.ModSeq != 1 {
+	if meta.ModSeq != 2 { // 1 is what an untouched mailbox reports
 		t.Fatalf("deliver modseq %d", meta.ModSeq)
 	}
 
@@ -46,14 +46,14 @@ func TestSetFlagsBumpsModSeq(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if meta.ModSeq != 2 {
+	if meta.ModSeq != 3 {
 		t.Fatalf("store modseq %d", meta.ModSeq)
 	}
 	highest, err := inbox.HighestModSeq(ctx, acc.ID, mail.InboxMailboxID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if highest != 2 {
+	if highest != 3 {
 		t.Fatalf("highest %d", highest)
 	}
 }
@@ -84,13 +84,13 @@ func TestSetFlagsUnchangedSince(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	applied, _, err := inbox.SetFlagsIfUnchanged(ctx, acc.ID, id, mail.FlagSeen, 0, nil, nil, meta.ModSeq)
+	applied, _, err := inbox.SetFlagsIfUnchanged(ctx, acc.ID, mail.InboxMailboxID, id, mail.FlagSeen, 0, nil, nil, meta.ModSeq)
 	if err != nil || !applied {
 		t.Fatalf("apply %v err %v", applied, err)
 	}
 	meta, _ = inbox.GetMeta(ctx, acc.ID, id)
 
-	applied, _, err = inbox.SetFlagsIfUnchanged(ctx, acc.ID, id, mail.FlagFlagged, 0, nil, nil, meta.ModSeq-1)
+	applied, _, err = inbox.SetFlagsIfUnchanged(ctx, acc.ID, mail.InboxMailboxID, id, mail.FlagFlagged, 0, nil, nil, meta.ModSeq-1)
 	if err != nil || applied {
 		t.Fatalf("conflict apply %v err %v", applied, err)
 	}

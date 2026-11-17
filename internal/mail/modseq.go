@@ -18,10 +18,14 @@ func (ib *Inbox) HighestModSeq(ctx context.Context, accountID, mailboxID uint32)
 	return mbox.HighestModSeq, nil
 }
 
+// NoUnchangedSince is the unchangedSince of an unconditional update: mod-sequences stop at 2^63-1
+// (RFC 7162 3.1), so it never refuses one, while UNCHANGEDSINCE 0 refuses every message.
+const NoUnchangedSince = ^uint64(0)
+
 // SetFlagsIfUnchanged updates flags/keywords when UNCHANGEDSINCE allows it and bumps MODSEQ on
-// change. storage.ErrNotFound means the message is gone.
-func (ib *Inbox) SetFlagsIfUnchanged(ctx context.Context, accountID, emailID uint32, set, clear uint32, kwAdd, kwRemove []string, unchangedSince uint64) (applied bool, meta storage.EmailMeta, err error) {
-	res, err := ib.SetFlagsMany(ctx, accountID, []uint32{emailID}, set, clear, kwAdd, kwRemove, unchangedSince)
+// change. storage.ErrNotFound means the message is gone (or, with mailboxID, no longer there).
+func (ib *Inbox) SetFlagsIfUnchanged(ctx context.Context, accountID, mailboxID, emailID uint32, set, clear uint32, kwAdd, kwRemove []string, unchangedSince uint64) (applied bool, meta storage.EmailMeta, err error) {
+	res, err := ib.SetFlagsMany(ctx, accountID, mailboxID, []uint32{emailID}, set, clear, kwAdd, kwRemove, unchangedSince)
 	if err != nil {
 		return false, storage.EmailMeta{}, err
 	}
@@ -34,14 +38,16 @@ func (ib *Inbox) SetFlagsIfUnchanged(ctx context.Context, accountID, emailID uin
 // FlagResult is the outcome of a flag update for one message.
 type FlagResult struct {
 	Applied bool              // false: UNCHANGEDSINCE refused it, Meta is the unchanged metadata
-	Gone    bool              // expunged meanwhile
+	Gone    bool              // expunged meanwhile, or moved out of the expected mailbox
 	Meta    storage.EmailMeta // metadata after the update
 }
 
 // SetFlagsMany applies one flag/keyword update to emailIDs, one transaction per batch: under load
 // each transaction waits for the account write lock, so one per message made a STORE on a range
-// wait in line once per message. The results follow emailIDs.
-func (ib *Inbox) SetFlagsMany(ctx context.Context, accountID uint32, emailIDs []uint32, setBits, clearBits uint32, kwAdd, kwRemove []string, unchangedSince uint64) ([]FlagResult, error) {
+// wait in line once per message. The results follow emailIDs. A mailboxID other than 0 is where the
+// caller sees the messages: one moved elsewhere by another session is Gone, never changed in its
+// new mailbox (RFC 2180 4.2). unchangedSince is NoUnchangedSince for an unconditional update.
+func (ib *Inbox) SetFlagsMany(ctx context.Context, accountID, mailboxID uint32, emailIDs []uint32, setBits, clearBits uint32, kwAdd, kwRemove []string, unchangedSince uint64) ([]FlagResult, error) {
 	out := make([]FlagResult, len(emailIDs))
 	for start := 0; start < len(emailIDs); start += writeBatch {
 		end := min(start+writeBatch, len(emailIDs))
@@ -51,7 +57,7 @@ func (ib *Inbox) SetFlagsMany(ctx context.Context, accountID uint32, emailIDs []
 			boxes := map[uint32]*storage.Mailbox{}
 			for i, id := range chunk {
 				meta, err := t.meta(accountID, id)
-				if errors.Is(err, storage.ErrNotFound) {
+				if errors.Is(err, storage.ErrNotFound) || err == nil && mailboxID != 0 && meta.MailboxID != mailboxID {
 					res[i].Gone = true
 					continue
 				}
@@ -61,7 +67,8 @@ func (ib *Inbox) SetFlagsMany(ctx context.Context, accountID uint32, emailIDs []
 				before := meta
 				meta.Flags = (meta.Flags &^ clearBits) | setBits
 				ApplyKeywords(&meta, kwAdd, kwRemove)
-				if unchangedSince > 0 && before.ModSeq > unchangedSince {
+				// RFC 7162 3.1.3: every message has a mod-sequence (at least 1), so UNCHANGEDSINCE 0 fails.
+				if max(before.ModSeq, 1) > unchangedSince {
 					res[i].Meta = before
 					continue
 				}
