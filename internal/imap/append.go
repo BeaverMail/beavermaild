@@ -202,7 +202,8 @@ func (s *session) readCatenate(ctx context.Context, tag, rest string, total *int
 			}
 			data, err := s.catenateURL(ctx, raw)
 			if errors.Is(err, errBadURL) {
-				return nil, "", false, s.rejectCommand(tag, rest, "NO [BADURL "+raw+"] CATENATE URL refused")
+				// url-resp-text has no "]" (RFC 4469 5): it would end the response code early.
+				return nil, "", false, s.rejectCommand(tag, rest, "NO [BADURL "+strings.ReplaceAll(raw, "]", "")+"] CATENATE URL refused")
 			} else if err != nil {
 				return nil, "", false, err
 			}

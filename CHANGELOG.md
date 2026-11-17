@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Fix (IMAP URLAUTH, RFC 4467 / RFC 5524 / RFC 4469): a URL naming a part that does not exist
+  returned empty data (and `BODYPARTSTRUCTURE NIL`, invalid syntax) instead of NIL, and CATENATE
+  took it as an empty part instead of answering BADURL; `URLFETCH ("url")` returned no data; an
+  unknown URLFETCH parameter got BAD. A refused URL now costs the same HMAC as a valid one, so the
+  time of a NIL says less about which user or mailbox exists. Regression tests for the Cyrus
+  URLAUTH flaws CVE-2026-47085 and CVE-2026-47087 and the PARTIAL overflow class (CVE-2015-8077).
+
 - Fix (IMAP, RFC 7162 / RFC 6851): a MOVE did not raise the source mailbox's mod-sequence, and
   sessions sync only when it changes, so another session with that mailbox open never got the
   EXPUNGE of the moved messages and kept showing them. Such a stale view could also set flags on

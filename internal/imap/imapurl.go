@@ -140,6 +140,9 @@ func (s *session) resolveURL(ctx context.Context, accountID uint32, u imapURL) (
 	if err != nil {
 		return nil, err
 	}
+	if !urlSectionExists(raw, u.section) {
+		return nil, errBadURL // RFC 4469 4.1: invalid body part
+	}
 	data := raw
 	if u.section != "" {
 		section, fields, ok := parseHeaderFieldsSection(u.section)

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -18,6 +19,14 @@ import (
 
 	"github.com/BeaverMail/beavermaild/internal/storage"
 )
+
+// plausibleKey stands in for a mailbox key when the URL names no user, mailbox or key: the token is
+// computed anyway, so the time to answer NIL does not tell which (RFC 4467 6, 10).
+var plausibleKey = func() []byte {
+	k := make([]byte, 32)
+	_, _ = rand.Read(k)
+	return k
+}()
 
 // urlauthToken signs the URL rump (everything up to ";URLAUTH=access") with the mailbox key.
 func urlauthToken(key []byte, rump string) string {
@@ -176,8 +185,8 @@ func (s *session) urlFetchItem(ctx context.Context, b *bytes.Buffer, it urlFetch
 	defer release()
 	b.WriteString(" " + quoteIMAPString(it.url))
 	u, raw, err := s.urlauthMessage(ctx, it.url)
-	if errors.Is(err, errBadURL) {
-		b.WriteString(" NIL")
+	if errors.Is(err, errBadURL) || err == nil && !urlSectionExists(raw, u.section) {
+		b.WriteString(" NIL") // a part that does not exist makes the URL invalid (RFC 5524 4)
 		return nil
 	} else if err != nil {
 		return err
@@ -247,15 +256,20 @@ func (s *session) urlauthMessage(ctx context.Context, raw string) (imapURL, []by
 			return u, nil, errBadURL
 		}
 	}
+	rump := raw[:len(raw)-len(u.mech)-len(u.token)-2]
+	refuse := func() (imapURL, []byte, error) {
+		_ = urlauthToken(plausibleKey, rump)
+		return u, nil, errBadURL
+	}
 	acc, _, err := s.dir.ResolveEmail(ctx, u.owner())
 	if errors.Is(err, storage.ErrNotFound) || err == nil && !acc.Active {
-		return u, nil, errBadURL
+		return refuse()
 	} else if err != nil {
 		return u, nil, err
 	}
 	mbox, err := s.inbox.ResolveMailbox(ctx, acc.ID, u.mailbox)
 	if errors.Is(err, storage.ErrNotFound) {
-		return u, nil, errBadURL
+		return refuse()
 	} else if err != nil {
 		return u, nil, err
 	}
@@ -263,8 +277,10 @@ func (s *session) urlauthMessage(ctx context.Context, raw string) (imapURL, []by
 	if err != nil {
 		return u, nil, err
 	}
-	rump := raw[:len(raw)-len(u.mech)-len(u.token)-2]
-	if len(key) == 0 || !hmac.Equal([]byte(strings.ToLower(u.token)), []byte(urlauthToken(key, rump))) {
+	if len(key) == 0 {
+		return refuse()
+	}
+	if !hmac.Equal([]byte(strings.ToLower(u.token)), []byte(urlauthToken(key, rump))) {
 		return u, nil, errBadURL
 	}
 	msg, err := s.loadURLMessage(ctx, acc.ID, u)
@@ -347,7 +363,7 @@ func parseURLFetchArgs(arg string) ([]urlFetchItem, bool) {
 		if !found || !ok || len(args) == 0 {
 			return nil, false
 		}
-		it := urlFetchItem{url: args[0], ext: true}
+		it := urlFetchItem{url: args[0]}
 		for _, p := range args[1:] {
 			switch strings.ToUpper(p) {
 			case "BODY":
@@ -356,14 +372,39 @@ func parseURLFetchArgs(arg string) ([]urlFetchItem, bool) {
 				it.binary = true
 			case "BODYPARTSTRUCTURE":
 				it.bodypart = true
-			default:
-				return nil, false
 			}
+			// Any other atom is a parameter of a later extension (RFC 5524 5): ignored.
 		}
+		// Without a known parameter the URL is answered as unextended (RFC 5524 3.1, 5).
+		it.ext = it.body || it.binary || it.bodypart
 		if it.body && it.binary { // RFC 5524 3.1
 			return nil, false
 		}
 		items, rest = append(items, it), strings.TrimLeft(tail, " ")
 	}
 	return items, len(items) > 0
+}
+
+// urlSectionExists reports whether a URL's ;SECTION names a part of raw (no section: the message).
+// HEADER, TEXT and MIME always exist once their part does.
+func urlSectionExists(raw []byte, section string) bool {
+	pathStr := strings.ToUpper(strings.TrimSpace(section))
+	if i := strings.IndexByte(pathStr, ' '); i >= 0 { // HEADER.FIELDS (...)
+		pathStr = pathStr[:i]
+	}
+	for _, suf := range []string{"HEADER.FIELDS.NOT", "HEADER.FIELDS", "HEADER", "TEXT", "MIME"} {
+		if pathStr == suf || strings.HasSuffix(pathStr, "."+suf) {
+			pathStr = strings.TrimSuffix(strings.TrimSuffix(pathStr, suf), ".")
+			break
+		}
+	}
+	path, ok := parseSectionPath(pathStr)
+	if !ok {
+		return false
+	}
+	if len(path) == 0 {
+		return true
+	}
+	_, ok = findPart(mimetree.Parse(raw), path)
+	return ok
 }
