@@ -3,6 +3,7 @@ package mail_test
 import (
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -203,5 +204,107 @@ func TestThreadReferencesTree(t *testing.T) {
 		if got := run(tc.raws...); !slices.Equal(got, tc.want) {
 			t.Errorf("%s: got %v want %v", name, got, tc.want)
 		}
+	}
+}
+
+// subjectMsgs returns one message per subject, UIDs from 1, all with the same date.
+func subjectMsgs(subjects ...string) ([]mail.Message, mail.RawLoader) {
+	msgs := make([]mail.Message, len(subjects))
+	for i := range subjects {
+		msgs[i] = mail.Message{UID: uint32(i + 1)}
+	}
+	load := mail.BytesLoader(func(m mail.Message) ([]byte, error) {
+		return []byte("From: a@b\r\nSubject: " + subjects[m.UID-1] + "\r\nDate: Fri, 10 Jan 2025 12:00:00 +0000\r\n\r\n"), nil
+	})
+	return msgs, load
+}
+
+// RFC 5256 7 and RFC 5051: strings collate as i;unicode-casemap (titlecase, then decomposition).
+// Upper-casing alone put a precomposed "É" after "Z" and kept "Ⅳ" apart from "IV".
+func TestSortUnicodeCasemap(t *testing.T) {
+	t.Parallel()
+	all := mail.SearchExpr{Kind: mail.SearchExprCrit, Crit: mail.SearchCriteria{All: true}}
+	msgs, load := subjectMsgs("zeta", "Élan", "alpha", "éclair", "Ⅳ", "iv b")
+	got := mail.SortMessages(msgs, []mail.SortCriterion{{Key: mail.SortSubject}}, all, load)
+	if want := []uint32{3, 4, 2, 5, 6, 1}; !slices.Equal(got, want) {
+		t.Fatalf("SORT SUBJECT %v, want %v", got, want)
+	}
+	// Invalid UTF-8 is compared as octets, not dropped.
+	msgs, load = subjectMsgs("b", "\xff", "a")
+	if got := mail.SortMessages(msgs, []mail.SortCriterion{{Key: mail.SortSubject}}, all, load); !slices.Equal(got, []uint32{3, 1, 2}) {
+		t.Fatalf("invalid UTF-8: %v", got)
+	}
+}
+
+// RFC 5256 4 step 6: the subject table compares with the same collation.
+func TestThreadSubjectCasemap(t *testing.T) {
+	t.Parallel()
+	all := mail.SearchExpr{Kind: mail.SearchExprCrit, Crit: mail.SearchCriteria{All: true}}
+	msgs, load := subjectMsgs("Hello", "Re: HELLO", "été", "Re: ÉTÉ")
+	if got := mail.ThreadReferences(msgs, all, load); len(got) != 2 {
+		t.Fatalf("%d threads, want 2", len(got))
+	}
+}
+
+// A References field of 20000 ids (inside the 256 KiB header limit) built its chain in O(K^2):
+// about 0.25 s per message, for every THREAD of the folder.
+func TestThreadLongReferences(t *testing.T) {
+	t.Parallel()
+	msgs := make([]mail.Message, 10)
+	for i := range msgs {
+		msgs[i].UID = uint32(i + 1)
+	}
+	load := mail.BytesLoader(func(m mail.Message) ([]byte, error) {
+		var b strings.Builder
+		b.WriteString("References:")
+		for i := range 20000 {
+			b.WriteString(" <" + strconv.Itoa(int(m.UID)) + "." + strconv.Itoa(i) + "@x>")
+		}
+		b.WriteString("\r\n\r\n")
+		return []byte(b.String()), nil
+	})
+	all := mail.SearchExpr{Kind: mail.SearchExprCrit, Crit: mail.SearchCriteria{All: true}}
+	start := time.Now()
+	mail.ThreadReferences(msgs, all, load)
+	if d := time.Since(start); d > time.Second {
+		t.Fatalf("THREAD of 10 messages took %v", d)
+	}
+}
+
+// A chain far deeper than any real thread, built cheaply by a few large messages, then cited with
+// a root that has children by thousands of small ones: each link walked the whole chain, minutes
+// of CPU per THREAD at full scale. The walk is bounded per message.
+func TestThreadDeepChainWalk(t *testing.T) {
+	t.Parallel()
+	const chains, chainLen, pairs = 5, 20000, 3000
+	msgs := make([]mail.Message, chains+2*pairs)
+	for i := range msgs {
+		msgs[i].UID = uint32(i + 1)
+	}
+	bottom := "<c" + strconv.Itoa(chains*chainLen-1) + "@x>"
+	load := mail.BytesLoader(func(m mail.Message) ([]byte, error) {
+		var b strings.Builder
+		b.WriteString("Message-ID: <m" + strconv.Itoa(int(m.UID)) + "@x>\r\nReferences:")
+		switch i := int(m.UID) - 1; {
+		case i < chains: // each chain message starts at the end of the previous one
+			for j := max(0, i*chainLen-1); j < (i+1)*chainLen; j++ {
+				b.WriteString(" <c" + strconv.Itoa(j) + "@x>")
+			}
+		case (i-chains)%2 == 0: // <p_k> gets a child
+			b.WriteString(" <p" + strconv.Itoa((i-chains)/2) + "@x>")
+		default: // the bottom of the chain, then <p_k>
+			b.WriteString(" " + bottom + " <p" + strconv.Itoa((i-chains)/2) + "@x>")
+		}
+		b.WriteString("\r\n\r\n")
+		return []byte(b.String()), nil
+	})
+	all := mail.SearchExpr{Kind: mail.SearchExprCrit, Crit: mail.SearchCriteria{All: true}}
+	start := time.Now()
+	threads := mail.ThreadReferences(msgs, all, load)
+	if d := time.Since(start); d > time.Second {
+		t.Fatalf("THREAD of %d messages took %v", len(msgs), d)
+	}
+	if len(threads) == 0 {
+		t.Fatal("no threads")
 	}
 }

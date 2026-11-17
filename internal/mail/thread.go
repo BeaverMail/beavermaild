@@ -82,15 +82,16 @@ func ThreadReferencesContext(ctx context.Context, msgs []Message, expr SearchExp
 			}
 		}
 		var prev *threadContainer
+		walk := maxThreadWalk
 		for _, ref := range refs {
 			rc := byID(ref)
-			if prev != nil && rc.parent == nil && !isThreadAncestor(rc, prev) {
+			if prev != nil && rc.parent == nil && !isThreadAncestor(rc, prev, &walk) {
 				link(prev, rc)
 			}
 			prev = rc
 		}
 		// (1B) The last reference is the message's parent, replacing any earlier parent.
-		if prev != nil && prev != c && isThreadAncestor(c, prev) {
+		if prev != nil && prev != c && isThreadAncestor(c, prev, &walk) {
 			prev = nil
 		}
 		if c.parent != nil {
@@ -144,10 +145,25 @@ func unlink(c *threadContainer) {
 	c.parent = nil
 }
 
-// isThreadAncestor reports whether a is b or one of b's ancestors.
-func isThreadAncestor(a, b *threadContainer) bool {
+// maxThreadWalk bounds the ancestor steps one message's links may take. A chain of a million
+// references built by a few large messages, then cited by thousands of small ones, cost minutes of
+// CPU per THREAD (the class of Dovecot CVE-2026-40014). Real threads are far shallower.
+const maxThreadWalk = 1024
+
+// isThreadAncestor reports whether a is b or one of b's ancestors. A container with no children
+// is no one's ancestor: without that shortcut, linking a message's K new references walked the
+// chain once per reference, O(K^2) for a References field any sender writes. Once the message's
+// walk budget is spent it answers true, as for a loop: the link is not made, so the tree stays
+// loop-free and the message starts its own thread, which step 6 can regroup by subject.
+func isThreadAncestor(a, b *threadContainer, walk *int) bool {
+	if len(a.children) == 0 {
+		return a == b
+	}
 	for x := b; x != nil; x = x.parent {
 		if x == a {
+			return true
+		}
+		if *walk--; *walk < 0 {
 			return true
 		}
 	}
@@ -202,12 +218,14 @@ func sortThreadChildren(c *threadContainer) {
 	sortThreadSiblings(c.children)
 }
 
-// threadSubject is the subject a root groups by: its own, or its first child's for a dummy.
+// threadSubject is the subject a root groups by: its own, or its first child's for a dummy, as
+// an i;unicode-casemap key (RFC 5256 7).
 func (c *threadContainer) threadSubject() (string, bool) {
 	if c.seq == 0 && len(c.children) > 0 {
 		return c.children[0].threadSubject()
 	}
-	return BaseSubject(c.subject)
+	base, reply := BaseSubject(c.subject)
+	return unicodeCasemap(base), reply
 }
 
 // groupThreadsBySubject merges roots that share a base subject (RFC 5256 step 6).

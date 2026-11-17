@@ -8,8 +8,11 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/BeaverMail/beavermaild/internal/rfc5322"
+	"golang.org/x/text/unicode/norm"
 )
 
 // SortKey is one RFC 5256 sort criterion.
@@ -116,19 +119,28 @@ func loadSortFields(m Message, load RawLoader) sortFields {
 		return f
 	}
 	h := ParseMsgHeaders(raw)
-	// i;ascii-casemap compares upper-cased ASCII.
-	f.from = strings.ToUpper(firstAddrMailbox(h.From))
-	f.to = strings.ToUpper(firstAddrMailbox(h.To))
-	f.cc = strings.ToUpper(firstAddrMailbox(h.Cc))
-	f.displayFrom = strings.ToUpper(firstAddrDisplay(h.From))
-	f.displayTo = strings.ToUpper(firstAddrDisplay(h.To))
+	f.from = unicodeCasemap(firstAddrMailbox(h.From))
+	f.to = unicodeCasemap(firstAddrMailbox(h.To))
+	f.cc = unicodeCasemap(firstAddrMailbox(h.Cc))
+	f.displayFrom = unicodeCasemap(firstAddrDisplay(h.From))
+	f.displayTo = unicodeCasemap(firstAddrDisplay(h.To))
 	base, _ := BaseSubject(h.Subject)
-	f.subject = strings.ToUpper(base)
+	f.subject = unicodeCasemap(base)
 	// DATE is the sent date; without a valid Date header it is the internal date (RFC 5256).
 	if t, err := rfc5322.ParseDate(h.Date); err == nil {
 		f.date = t
 	}
 	return f
+}
+
+// unicodeCasemap is the i;unicode-casemap key of s (RFC 5051), the collation SORT and THREAD MUST
+// use (RFC 5256 7): each character titlecased, then decomposed (NFKD, which RFC 5051 allows), then
+// compared as octets. Invalid UTF-8 is compared as it is (i;octet).
+func unicodeCasemap(s string) string {
+	if !utf8.ValidString(s) {
+		return s
+	}
+	return norm.NFKD.String(strings.Map(unicode.ToTitle, s))
 }
 
 // firstAddrMailbox returns the local part (addr-mailbox) of the first address in a header value.

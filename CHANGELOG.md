@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Security (IMAP THREAD, RFC 5256): a message whose References field held 20000 ids cost about
+  0.25 s of CPU in every THREAD=REFERENCES of its folder (the chain was checked for loops once per
+  reference, quadratic); a folder of such messages, which anyone can send, made each THREAD take
+  minutes. The chain is now built in linear time, with the same result. Messages citing the bottom of
+  a chain a million deep, built by a few large messages, still cost minutes per THREAD: the loop
+  check of one message now walks at most 1024 ancestors, and past that the link is not made (the
+  message starts its own thread, regrouped by subject). SORT and THREAD compare
+  strings with i;unicode-casemap as RFC 5256 7 requires (titlecase, then decomposition): a
+  precomposed "É" no longer sorts after "Z", and THREAD groups "Hello" with "Re: HELLO".
+
 - Security (MIME, RFC 2045/2046): a message of 32 MiB made of empty MIME parts (4.8 million of them)
   cost 251 MB, 5 s and 22 GB of allocations on every IMAP FETCH BODYSTRUCTURE, and anyone could
   deliver it. One MIME parser, new public package `mimetree`, now serves IMAP (BODYSTRUCTURE,
