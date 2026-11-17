@@ -86,17 +86,20 @@ func TestRFC6531Client(t *testing.T) {
 	for _, tc := range []struct {
 		name, ehlo, from, to string
 		data                 []byte
+		requested            bool   // sender's MAIL had SMTPUTF8
 		wantMail, wantRcpt   string // "" = no MAIL sent (permanent 5.6.7)
 	}{
-		{"utf8 local part", utf8EHLO, "δοκιμή@example.org", "b@example.net", plain, "MAIL FROM:<δοκιμή@example.org> BODY=8BITMIME SMTPUTF8", "RCPT TO:<b@example.net>"},
-		{"utf8 header", utf8EHLO, "a@example.org", "b@example.net", utf8Hdr, "MAIL FROM:<a@example.org> BODY=8BITMIME SMTPUTF8", "RCPT TO:<b@example.net>"},
-		{"ascii only", utf8EHLO, "a@example.org", "b@example.net", plain, "MAIL FROM:<a@example.org> BODY=8BITMIME", "RCPT TO:<b@example.net>"},
-		{"u-label domain", asciiEHLO, "a@bücher.example", "b@münchen.example", plain, "MAIL FROM:<a@xn--bcher-kva.example> BODY=8BITMIME", "RCPT TO:<b@xn--mnchen-3ya.example>"},
-		{"utf8 local part, no SMTPUTF8", asciiEHLO, "a@example.org", "δοκιμή@example.net", plain, "", ""},
-		{"utf8 header, no SMTPUTF8", asciiEHLO, "a@example.org", "b@example.net", utf8Hdr, "", ""},
+		{"utf8 local part", utf8EHLO, "δοκιμή@example.org", "b@example.net", plain, true, "MAIL FROM:<δοκιμή@example.org> BODY=8BITMIME SMTPUTF8", "RCPT TO:<b@example.net>"},
+		{"utf8 header", utf8EHLO, "a@example.org", "b@example.net", utf8Hdr, false, "MAIL FROM:<a@example.org> BODY=8BITMIME SMTPUTF8", "RCPT TO:<b@example.net>"},
+		{"ascii only", utf8EHLO, "a@example.org", "b@example.net", plain, true, "MAIL FROM:<a@example.org> BODY=8BITMIME", "RCPT TO:<b@example.net>"},
+		{"u-label domain", asciiEHLO, "a@bücher.example", "b@münchen.example", plain, false, "MAIL FROM:<a@xn--bcher-kva.example> BODY=8BITMIME", "RCPT TO:<b@xn--mnchen-3ya.example>"},
+		{"utf8 local part, no SMTPUTF8", asciiEHLO, "a@example.org", "δοκιμή@example.net", plain, false, "", ""},
+		{"utf8 header, no SMTPUTF8", asciiEHLO, "a@example.org", "b@example.net", utf8Hdr, true, "", ""},
+		// Legacy raw 8-bit header received without SMTPUTF8: relayed as received, as Postfix does.
+		{"legacy utf8 header, no SMTPUTF8", asciiEHLO, "a@example.org", "b@example.net", utf8Hdr, false, "MAIL FROM:<a@example.org> BODY=8BITMIME", "RCPT TO:<b@example.net>"},
 	} {
 		addr, got := ehloMX(t, tc.ehlo)
-		err := smtp.Send(context.Background(), addr, tc.from, tc.to, tc.data, smtp.ClientOptions{})
+		err := smtp.Send(context.Background(), addr, tc.from, tc.to, tc.data, smtp.ClientOptions{DSN: &mail.RelayDSN{SMTPUTF8: tc.requested}})
 		cmds := <-got
 		if tc.wantMail == "" {
 			var de *smtp.DeliveryError
@@ -146,6 +149,11 @@ func TestRFC6531Server(t *testing.T) {
 	send(t, conn, "EHLO test")
 	readEHLO(t, read, "SMTPUTF8")
 	for _, st := range []struct{ send, want string }{
+		// RFC 5321 4.1.2, RFC 6531 3.3: no control character (C0, DEL, C1) in a mailbox.
+		{"MAIL FROM:<a\x01b@example.org>", "501"},
+		{"MAIL FROM:<a@exa\x7fmple.org>", "501"},
+		{"MAIL FROM:<a\x1b[2Jb@example.org> SMTPUTF8", "501"},
+		{"MAIL FROM:<a\u0085b@example.org> SMTPUTF8", "501"},
 		{"MAIL FROM:<δοκιμή@example.org>", "550 5.6.7"},
 		{"MAIL FROM:<x@example.org>", "250"},
 		{"RCPT TO:<alice@localhost> ORCPT=utf-8;alïce@localhost", "501"},
@@ -157,5 +165,39 @@ func TestRFC6531Server(t *testing.T) {
 	} {
 		send(t, conn, st.send)
 		expect(t, read, st.want)
+	}
+}
+
+// CVE-2026-90467 class: an envelope address with CR/LF or another control character never reaches
+// the MAIL or RCPT line, whatever the caller; the failure is permanent and nothing is sent.
+func TestClientRefusesControlInAddress(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ from, to string }{
+		{"a@example.org\r\nRCPT TO:<x@example.net>", "b@example.net"},
+		{"a@example.org", "b@example.net> NOTIFY=SUCCESS\r\nDATA"},
+		{"a@example.org", "b\x00@example.net"},
+	} {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		accepted := make(chan struct{}, 1)
+		go func() {
+			if c, err := ln.Accept(); err == nil {
+				accepted <- struct{}{}
+				c.Close()
+			}
+		}()
+		err = smtp.Send(context.Background(), ln.Addr().String(), tc.from, tc.to, []byte("Subject: s\r\n\r\nx\r\n"), smtp.ClientOptions{})
+		ln.Close()
+		var de *smtp.DeliveryError
+		if !errors.As(err, &de) || !de.Permanent || !strings.Contains(err.Error(), "control character") {
+			t.Errorf("%q -> %q: want a permanent failure, got %v", tc.from, tc.to, err)
+		}
+		select {
+		case <-accepted:
+			t.Errorf("%q -> %q: the client connected", tc.from, tc.to)
+		default:
+		}
 	}
 }

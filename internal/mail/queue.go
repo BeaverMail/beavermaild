@@ -97,6 +97,7 @@ func (q *Queue) EnqueueDSN(ctx context.Context, env EnvelopeDSN, raw []byte) (ui
 		Ret:        string(env.Ret),
 		Envid:      env.Envid,
 		Body:       env.Body,
+		SMTPUTF8:   env.SMTPUTF8,
 	}
 	wire, err := storage.MarshalPersist(nil, 1, msg)
 	if err != nil {

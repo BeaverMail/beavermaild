@@ -51,6 +51,9 @@ func TestTraceTokenSanitizes(t *testing.T) {
 		"a(b);c":                "abc",
 		"":                      "unknown",
 		"\x01\x02":              "unknown",
+		// RFC 6531 3.7.1, 3.7.3: ASCII only, a U-label as its A-label.
+		"bücher.example": "xn--bcher-kva.example",
+		"a\xffb":         "ab",
 	} {
 		if got := traceToken(in); got != want {
 			t.Fatalf("traceToken(%q) = %q want %q", in, got, want)

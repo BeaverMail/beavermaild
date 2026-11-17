@@ -78,6 +78,11 @@ func TestInitLayoutHostnameAndLoopbackDefaults(t *testing.T) {
 	if loaded.SMTPHostname() != "mail.example.com" {
 		t.Fatalf("smtp hostname %q", loaded.SMTPHostname())
 	}
+	// RFC 6531 3.7.1: greeting and EHLO names are ASCII.
+	loaded.SMTP.Hostname = "mail.bücher.example"
+	if h := loaded.SMTPHostname(); h != "mail.xn--bcher-kva.example" {
+		t.Fatalf("U-label hostname %q", h)
+	}
 	if hosts := loaded.ACMEHosts(); len(hosts) != 1 || hosts[0] != "mail.example.com" {
 		t.Fatalf("acme hosts %v", hosts)
 	}

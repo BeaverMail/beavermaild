@@ -226,7 +226,7 @@ func (w *Worker) deliverEntry(ctx context.Context, e QueueEntry) error {
 			continue
 		}
 		RecordAttempt(&msg, i, now)
-		dsn := &RelayDSN{Ret: RetMode(msg.Ret), Envid: msg.Envid, Notify: rcpt.Notify, Orcpt: rcpt.Orcpt}
+		dsn := &RelayDSN{Ret: RetMode(msg.Ret), Envid: msg.Envid, Notify: rcpt.Notify, Orcpt: rcpt.Orcpt, SMTPUTF8: msg.SMTPUTF8}
 		reply, local, err := w.deliverTo(ctx, msg.ReturnPath, rcpt.Address, raw, dsn)
 		if err != nil {
 			w.log.Warn("queue rcpt failed", "queue_id", e.ID, "rcpt", rcpt.Address, slog.Any("err", err))

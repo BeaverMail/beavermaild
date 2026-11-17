@@ -129,6 +129,7 @@ func mxOptionsForPolicy(base ClientOptions, policy *mtasts.Policy, level, domain
 		TLSInsecureSkipVerify: true,
 		HeloName:              base.HeloName,
 		RejectPrivate:         base.RejectPrivate,
+		DSN:                   base.DSN, // per-message envelope parameters (RFC 3461 5.2.1, RFC 6531 3.4)
 	}
 	if level != "" {
 		opts.RequireTLS = true

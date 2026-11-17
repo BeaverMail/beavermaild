@@ -3,6 +3,7 @@ package smtp
 
 import (
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -20,6 +21,11 @@ func addressNeedsUTF8(addr string) bool {
 // a Quoted-string (RFC 5321 4.1.2), the only form in which it may hold spaces.
 func validEnvelopeAddress(addr string) bool {
 	if !utf8.ValidString(addr) {
+		return false
+	}
+	// RFC 5321 4.1.2 has no control character in a mailbox, RFC 6531 3.3 adds none (C1 included):
+	// they would reach the Return-Path field, the queue and the admin UI.
+	if strings.IndexFunc(addr, unicode.IsControl) >= 0 {
 		return false
 	}
 	at := strings.LastIndex(addr, "@")

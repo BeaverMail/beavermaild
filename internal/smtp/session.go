@@ -1041,6 +1041,12 @@ func (s *session) notifyLocalSuccess(ctx context.Context, raw []byte) {
 	if s.mailFrom == "" {
 		return
 	}
+	// RFC 3461 8, RFC 6533 7: a forged return path turns a success DSN into mail, with the message's
+	// header fields, to a third party of the client's choice. Only an authenticated user or a sender
+	// whose SPF passes gets one (like Exim, which offers DSN to no host by default).
+	if s.principal.AccountID == 0 && s.authState.SPFMailFrom != "pass" {
+		return
+	}
 	for _, t := range s.rcpt {
 		if t.accountID == 0 || t.report != "" || !mail.NotifyWanted(t.notify, mail.DSNActionDelivered) {
 			continue
@@ -1122,6 +1128,7 @@ func (s *session) buildEnvelopeDSN(remotes []string) mail.EnvelopeDSN {
 		Ret:        s.mailRet,
 		Envid:      s.mailEnvid,
 		Body:       s.mailBody,
+		SMTPUTF8:   s.mailUTF8,
 	}
 	if s.principal.AccountID != 0 {
 		env.SignAs = s.principal.Email()

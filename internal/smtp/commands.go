@@ -31,11 +31,19 @@ func (s *session) cmdVrfy(ctx context.Context, arg string) error {
 		return s.writef("252 2.5.1 VRFY is disabled")
 	}
 	addr := strings.TrimSpace(arg)
+	// RFC 6531 3.7.4.2: an optional SMTPUTF8 parameter lets the reply carry a UTF-8 mailbox.
+	utf8OK := false
+	if a, ok := cutSuffixFold(addr, " SMTPUTF8"); ok {
+		addr, utf8OK = strings.TrimSpace(a), true
+	}
 	if len(addr) >= 2 && addr[0] == '<' && addr[len(addr)-1] == '>' {
 		addr = strings.TrimSpace(addr[1 : len(addr)-1])
 	}
 	if !validEnvelopeAddress(addr) {
 		return s.writef(replySyntaxVRFY)
+	}
+	if addressNeedsUTF8(addr) && !utf8OK {
+		return s.writef(replyVRFYNeedsUTF8)
 	}
 	acc, _, err := s.dir.ResolveEmail(ctx, addr)
 	if err != nil {
@@ -54,4 +62,12 @@ func (s *session) cmdVrfy(ctx context.Context, arg string) error {
 func (s *session) cmdExpn(arg string) error {
 	_ = arg
 	return s.writef("252 2.5.1 EXPN is disabled")
+}
+
+// cutSuffixFold is strings.CutSuffix ignoring ASCII case.
+func cutSuffixFold(s, suffix string) (string, bool) {
+	if len(s) >= len(suffix) && strings.EqualFold(s[len(s)-len(suffix):], suffix) {
+		return s[:len(s)-len(suffix)], true
+	}
+	return s, false
 }

@@ -8,7 +8,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"unicode"
+
+	"github.com/BeaverMail/beavermaild/internal/dnsname"
 )
 
 // maxReceivedHops is the Received-field count above which a message is treated as looping
@@ -58,18 +59,24 @@ func (s *session) receivedField(now time.Time) string {
 }
 
 // traceToken makes a client-chosen name (HELO argument, PTR) safe inside a header:
-// first word only, no control characters, "unknown" when empty.
+// first word only, printable ASCII only, "unknown" when empty. RFC 6531 3.7.1 lets the client send
+// only ASCII in EHLO and 3.7.3 wants RFC 5321 trace fields without SMTPUTF8: a U-label becomes its
+// A-label, any other non-ASCII byte is dropped.
 func traceToken(s string) string {
 	fields := strings.Fields(s)
 	if len(fields) == 0 {
 		return "unknown"
 	}
+	tok := fields[0]
+	if addressNeedsUTF8(tok) { // any non-ASCII byte
+		tok = dnsname.ToASCII(tok)
+	}
 	t := strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) || r == '(' || r == ')' || r == ';' {
+		if r <= ' ' || r >= 0x7f || r == '(' || r == ')' || r == ';' {
 			return -1
 		}
 		return r
-	}, fields[0])
+	}, tok)
 	if t == "" {
 		return "unknown"
 	}

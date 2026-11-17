@@ -46,6 +46,7 @@ type EnvelopeDSN struct {
 	Ret        RetMode
 	Envid      string
 	Body       string // 7BIT or 8BITMIME from MAIL FROM BODY=
+	SMTPUTF8   bool   // SMTPUTF8 in MAIL FROM, or a UTF-8 envelope address
 	Recipients []RcptDSN
 }
 
@@ -112,6 +113,8 @@ type RelayDSN struct {
 	Notify uint8
 	Orcpt  string
 	Passed bool
+	// SMTPUTF8 is not a DSN parameter: the sender's MAIL request, carried with the per-message envelope.
+	SMTPUTF8 bool
 }
 
 // NotifyKeyword is the NOTIFY value for a stored notify mask ("" when none was given).

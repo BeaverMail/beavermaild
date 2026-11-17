@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BeaverMail/beavermaild/internal/mail"
 	"github.com/BeaverMail/beavermaild/internal/mtasts"
 	"github.com/BeaverMail/beavermaild/internal/revocation"
 	"github.com/BeaverMail/beavermaild/internal/tlsload/tlstest"
@@ -489,5 +490,15 @@ func TestDeliverMXRevokedCertificate(t *testing.T) {
 	_, err = deliverMX(context.Background(), []string{mx.addr}, "a@b.c", "x@example.com", []byte("hi\r\n"), opts)
 	if !errors.Is(err, revocation.ErrRevoked) || deliveryPermanent(err) {
 		t.Fatalf("got %v; want a transient revoked-certificate failure", err)
+	}
+}
+
+// The per-message envelope (DSN parameters, SMTPUTF8 request) reaches MX hosts, not only the relay.
+func TestMXOptionsKeepDSN(t *testing.T) {
+	d := &mail.RelayDSN{Envid: "e1", SMTPUTF8: true}
+	for _, level := range []string{"", TLSVerify, TLSSecure} {
+		if got := mxOptionsForPolicy(ClientOptions{DSN: d}, nil, level, "example.com").DSN; got != d {
+			t.Errorf("level %q: DSN dropped", level)
+		}
 	}
 }

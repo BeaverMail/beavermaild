@@ -142,6 +142,9 @@ type QueueMessage struct {
 	// SignAs is the authenticated sender, the DKIM identity when ReturnPath is null (<>): signing by the
 	// header From instead would let a user get another tenant's domain signature.
 	SignAs string `msgpack:"sa,omitempty"`
+	// SMTPUTF8: the sender asked for it in MAIL (RFC 6531 3.4); only then a UTF-8 header bounces 5.6.7
+	// at a next hop without SMTPUTF8.
+	SMTPUTF8 bool `msgpack:"u8,omitempty"`
 }
 
 // HasBlob reports whether BlobHash points at filesystem blob storage.

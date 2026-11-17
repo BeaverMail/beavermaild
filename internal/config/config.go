@@ -537,15 +537,16 @@ func (c *Config) SMTPListen() string {
 
 // SMTPHostname returns the SMTP banner/EHLO name: smtp.hostname, else the first
 // ACME host, else the machine hostname. Receivers compare it with the IP's PTR record.
+// The name is in A-labels: the greeting, EHLO and trace fields carry only ASCII names (RFC 6531 3.7.1).
 func (c *Config) SMTPHostname() string {
 	if h := strings.TrimSpace(c.SMTP.Hostname); h != "" {
-		return h
+		return dnsname.ToASCII(h)
 	}
 	if hosts := c.ACMEHosts(); len(hosts) > 0 {
-		return hosts[0]
+		return dnsname.ToASCII(hosts[0])
 	}
 	if h, err := os.Hostname(); err == nil && h != "" {
-		return h
+		return dnsname.ToASCII(h)
 	}
 	return "localhost"
 }

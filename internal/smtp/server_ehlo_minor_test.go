@@ -169,6 +169,15 @@ func TestSMTPVRFYEnabled(t *testing.T) {
 	expect(t, read, "250 2.1.5")
 	send(t, conn, "VRFY nobody@localhost")
 	expect(t, read, "550 5.1.1")
+	// RFC 6531 3.7.4.2: the SMTPUTF8 parameter is accepted; a UTF-8 mailbox needs it (550 5.6.8).
+	for _, st := range []struct{ send, want string }{
+		{"VRFY <alice@localhost> SMTPUTF8", "250 2.1.5 <alice@localhost>"},
+		{"VRFY <δοκιμή@localhost>", "550 5.6.8"},
+		{"VRFY <δοκιμή@localhost> smtputf8", "550 5.1.1"},
+	} {
+		send(t, conn, st.send)
+		expect(t, read, st.want)
+	}
 }
 
 func TestSMTPRejectFutureReleaseHold(t *testing.T) {

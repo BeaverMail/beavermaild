@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- Fix (SMTPUTF8, RFC 6531): a message received without SMTPUTF8 but with a raw UTF-8 header field
+  (often an unencoded attachment name) bounced with 5.6.7 at every next hop that does not offer
+  SMTPUTF8. The queue now keeps whether the sender asked for SMTPUTF8 in MAIL: only then, or with a
+  UTF-8 envelope address, such a hop gets 5.6.7; legacy messages go on as received over 8BITMIME, as
+  Postfix and Exim do. DSN parameters (RFC 3461 5.2.1) now reach MX hosts too: they were passed to
+  the relay only; when a first MX offering DSN fails and the next one, without DSN, takes the message,
+  the "relayed" notice is still sent.
+
+- Security (DSN, RFC 3461 8 / RFC 6533 7): on port 25 anyone could ask NOTIFY=SUCCESS with a forged
+  return path and make the server mail a "delivered" notice, with the message's header fields, to a
+  third party. A success DSN now goes only to an authenticated user or to a sender whose SPF passes
+  (with mailauth off, port 25 gets none).
+
+- Fix (SMTPUTF8, RFC 6531): envelope addresses with control characters (an ESC sequence, C1
+  controls) are refused (501); the HELO name in Received is ASCII (U-label as A-label); VRFY takes
+  the SMTPUTF8 parameter and answers 550 5.6.8 for a UTF-8 mailbox without it; `smtp.hostname` in
+  U-labels is sent as A-labels in the greeting and EHLO.
+
+- Security (SMTP client): an envelope address with a control character fails for good before the
+  client connects, whatever its source: a CR/LF would inject SMTP commands (the class of
+  CVE-2026-90467 in aiosmtplib). Every source validates already; this covers future ones.
+
 - Security (IMAP THREAD, RFC 5256): a message whose References field held 20000 ids cost about
   0.25 s of CPU in every THREAD=REFERENCES of its folder (the chain was checked for loops once per
   reference, quadratic); a folder of such messages, which anyone can send, made each THREAD take

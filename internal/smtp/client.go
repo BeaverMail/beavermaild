@@ -12,6 +12,7 @@ import (
 	"net"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/BeaverMail/beavermaild/internal/dnsname"
 	"github.com/BeaverMail/beavermaild/internal/mail"
@@ -116,12 +117,27 @@ func SendReply(ctx context.Context, addr, mailFrom, rcptTo string, data []byte, 
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	// One RelayDSN serves every MX tried: Passed must say what the server that took the message did,
+	// not an earlier one that offered DSN and then failed (RFC 3461 5.2.2: "relayed" is then owed).
+	if opts.DSN != nil {
+		opts.DSN.Passed = false
+	}
 	// BDAT sends bytes verbatim and SIZE counts them: both need the CRLF wire form.
 	data = mail.CRLF(data)
+	// The addresses go verbatim into the MAIL and RCPT lines: a CR/LF or other control character
+	// would inject SMTP commands (CVE-2026-90467 in aiosmtplib). Callers validate today; this holds
+	// for any future source of addresses.
+	if strings.IndexFunc(mailFrom+rcptTo, unicode.IsControl) >= 0 {
+		return "", &DeliveryError{Err: errors.New("smtp client: control character in envelope address"), Permanent: true}
+	}
 	// RFC 6531 3.2: an A-label domain is not internationalized, so only a UTF-8 local part or UTF-8
 	// header fields need SMTPUTF8.
 	mailFrom, rcptTo = asciiDomain(mailFrom), asciiDomain(rcptTo)
-	needUTF8 := addressNeedsUTF8(mailFrom) || addressNeedsUTF8(rcptTo) || mail.Has8Bit(data) && mail.Has8BitHeaders(data)
+	headersUTF8 := mail.Has8Bit(data) && mail.Has8BitHeaders(data)
+	// A UTF-8 envelope can never go without SMTPUTF8; UTF-8 headers only when the sender asked for it.
+	// Raw 8-bit headers received without SMTPUTF8 are legacy mail (e.g. an unencoded attachment
+	// name): they go on as received over 8BITMIME, as Postfix and Exim do.
+	mustUTF8 := addressNeedsUTF8(mailFrom) || addressNeedsUTF8(rcptTo) || headersUTF8 && opts.DSN != nil && opts.DSN.SMTPUTF8
 
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -184,9 +200,10 @@ func SendReply(ctx context.Context, addr, mailFrom, rcptTo string, data []byte, 
 		return "", &DeliveryError{Err: fmt.Errorf("smtp client: message of %d octets over the server's SIZE %d", len(data), caps.SizeLimit), Permanent: true}
 	}
 	// RFC 6531 3.2: UTF-8 addresses and header fields never go to a server without SMTPUTF8 (5.6.7).
-	if needUTF8 && !caps.SMTPUTF8 {
+	if mustUTF8 && !caps.SMTPUTF8 {
 		return "", &DeliveryError{Err: mail.ErrNeedsSMTPUTF8, Permanent: true}
 	}
+	needUTF8 := mustUTF8 || headersUTF8 && caps.SMTPUTF8
 	// RFC 6152 3: 8-bit content never goes to a server without 8BITMIME; fail before MAIL (5.6.3).
 	if !caps.EightBitMIME && mail.Has8Bit(data) {
 		return "", &DeliveryError{Err: mail.ErrNeeds7Bit, Permanent: true}
