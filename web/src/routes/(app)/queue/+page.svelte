@@ -27,16 +27,15 @@ const openEntry = $derived(entries.find((e) => e.id === openId) ?? null)
 const isAdmin = $derived($me?.role === 'admin')
 const tab = $derived<Tab>(page.url.searchParams.get('tab') === 'completed' ? 'completed' : 'pending')
 
+// The date the table shows: Completed once done, else Created (seconds).
+const shownMS = (e: QueueEntry) => e.completed_ms || e.created * 1000
+
 async function load(view: Tab) {
   loading = true
   error = ''
   try {
-    if (view === 'pending') {
-      entries = await fetchQueue(false)
-    } else {
-      const all = await fetchQueue(true)
-      entries = all.filter((e) => e.pending === 0)
-    }
+    const list = view === 'pending' ? await fetchQueue(false) : (await fetchQueue(true)).filter((e) => e.pending === 0)
+    entries = list.sort((a, b) => shownMS(b) - shownMS(a) || b.id - a.id) // newest first
   } catch (e) {
     error = e instanceof ApiError ? e.message : 'failed to load queue'
   } finally {
