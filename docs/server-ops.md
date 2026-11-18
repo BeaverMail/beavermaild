@@ -50,6 +50,18 @@ whose record may ask for at most 10 DNS-querying terms (about 110 queries at wor
 SPF reads the name servers from `/etc/resolv.conf` once, at startup: restart after changing it. Null MX answers are cached for an hour;
 only well-formed sender domains are checked.
 
+## Connection and session limits (IMAP)
+
+| Limit | Default | Effect |
+|---|---|---|
+| connections not yet logged in, per IPv4 address or IPv6 /64 | 10 | more get `* BYE [UNAVAILABLE] Too many connections from your address` |
+| logged-in sessions of one account from one IPv4 address or IPv6 /64 | 10 (as Dovecot's `mail_max_userip_connections`) | the next login gets `NO [LIMIT] Too many sessions for this user from your address`; the slot frees when a session closes |
+
+Clients that drop connections without LOGOUT (iOS Mail is known for it) hold their slots until the
+idle timeout ends them. **Behind a remote TCP proxy or load balancer** every client has the proxy's
+address (no PROXY protocol support): the first limit then applies to everyone at once, the second
+becomes 10 sessions per account.
+
 ## Authentication-Results (RFC 8601)
 
 Inbound mail gets an `Authentication-Results: <smtp.hostname>; ...` field above our `Received`, with

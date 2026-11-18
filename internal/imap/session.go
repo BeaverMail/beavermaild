@@ -43,11 +43,14 @@ type session struct {
 	authGate  security.AuthGate
 	// releasePreAuth frees this connection's per-address pre-login slot (set by the server).
 	releasePreAuth func()
-	readTimeout    time.Duration
-	selected       bool
-	readOnly       bool
-	mbox           mail.Mailbox
-	messages       []mail.Message
+	// userSessions counts logged-in sessions per account and address; releaseUser frees this one's.
+	userSessions *security.IPLimiter
+	releaseUser  func()
+	readTimeout  time.Duration
+	selected     bool
+	readOnly     bool
+	mbox         mail.Mailbox
+	messages     []mail.Message
 	// recent holds the messages this session saw as \Recent when it selected the mailbox. SELECT
 	// clears the flag in storage so no other session sees it, but this session keeps reporting it.
 	recent   map[uint32]struct{} // EmailID set
@@ -477,6 +480,11 @@ func (s *session) finishAuth(ctx context.Context, tag, user, pass, resp string) 
 		return err
 	}
 	s.authGate.RecordAuthSuccess(ip, user)
+	release, ok := s.userSessions.AcquireFor(strconv.FormatUint(uint64(p.AccountID), 10), ip)
+	if !ok {
+		return s.tagged(tag, "NO [LIMIT] Too many sessions for this user from your address")
+	}
+	s.releaseUser = release
 	if s.releasePreAuth != nil {
 		s.releasePreAuth()
 	}

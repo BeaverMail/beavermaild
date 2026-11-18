@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Fix (IMAP NOTIFY, RFC 5465): MailboxName events now report the direct parent of a created or
+  deleted mailbox too (its `\HasChildren` changes), and a rename is one event for the renamed
+  mailbox instead of one more per child. A MessageNew fetch-att list outside SELECTED gets BAD.
+- Security (IMAP): at most 10 logged-in sessions per account from one address (IPv6: per /64), as
+  Dovecot's `mail_max_userip_connections`; the next login gets `NO [LIMIT]`. One user could
+  otherwise take every connection slot, each NOTIFY session also reading the mailbox list once
+  a second.
+
 - Fix (IMAP URLAUTH, RFC 4467 / RFC 5524 / RFC 4469): a URL naming a part that does not exist
   returned empty data (and `BODYPARTSTRUCTURE NIL`, invalid syntax) instead of NIL, and CATENATE
   took it as an empty part instead of answering BADURL; `URLFETCH ("url")` returned no data; an

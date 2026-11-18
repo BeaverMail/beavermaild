@@ -25,10 +25,16 @@ func NewIPLimiter(max int) *IPLimiter {
 // Acquire takes a slot for ip and returns its release, or false when ip's network is full.
 // The release is safe to call more than once.
 func (l *IPLimiter) Acquire(ip string) (release func(), ok bool) {
+	return l.AcquireFor("", ip)
+}
+
+// AcquireFor is Acquire with a separate count per owner within each network (e.g. one account
+// from one address).
+func (l *IPLimiter) AcquireFor(owner, ip string) (release func(), ok bool) {
 	if l == nil {
 		return func() {}, true
 	}
-	key := ipNetworkKey(ip)
+	key := owner + "|" + ipNetworkKey(ip)
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.n[key] >= l.max {

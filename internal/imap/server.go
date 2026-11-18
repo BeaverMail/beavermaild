@@ -45,12 +45,19 @@ type Server struct {
 	status         *servicestatus.Registry
 	sessions       connset.Set
 	preAuth        *security.IPLimiter
+	userSessions   *security.IPLimiter
 }
 
 // maxPreAuthPerIP caps the unauthenticated connections of one client network (IPv4 address or
 // IPv6 /64). Without it, 200 idle connections from one address filled the listener and locked
 // everybody out; a logged-in session no longer counts, so NAT-ed offices are not limited.
 const maxPreAuthPerIP = 10
+
+// maxSessionsPerUserIP caps the logged-in sessions of one account from one client network, as
+// Dovecot's mail_max_userip_connections (default 10): without it one user could take every slot of
+// MaxConnections, each NOTIFY session also reading the mailbox list once a second (RFC 5465 9).
+// Thunderbird opens up to 5 per account.
+const maxSessionsPerUserIP = 10
 
 // NewServer returns an IMAP server bound to plainAddr; tlsAddr enables implicit TLS on :993.
 func NewServer(log *slog.Logger, plainAddr string, dir *directory.Local, inbox *mail.Inbox, opts Options) *Server {
@@ -71,6 +78,7 @@ func NewServer(log *slog.Logger, plainAddr string, dir *directory.Local, inbox *
 		readTimeout:    opts.ReadTimeout,
 		status:         opts.Status,
 		preAuth:        security.NewIPLimiter(maxPreAuthPerIP),
+		userSessions:   security.NewIPLimiter(maxSessionsPerUserIP),
 	}
 }
 
@@ -176,6 +184,12 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn, secure bool, lim 
 	defer releasePreAuth()
 	sess := newSession(s.log, conn, s.dir, s.inbox, s.certs, secure, s.tlsRequired, s.authGate, s.readTimeout)
 	sess.releasePreAuth = releasePreAuth
+	sess.userSessions = s.userSessions
+	defer func() {
+		if sess.releaseUser != nil {
+			sess.releaseUser()
+		}
+	}()
 	sess.stopping = &s.sessions.Stopping
 	s.sessions.Add(sess, conn)
 	defer s.sessions.Remove(sess)

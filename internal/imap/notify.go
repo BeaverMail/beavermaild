@@ -219,6 +219,41 @@ func (s *session) notifyPoll(ctx context.Context, inIdle bool) error {
 		names[i] = mb.Name
 	}
 	parents := newParentSet(names)
+	byName := make(map[string]mail.Mailbox, len(mboxes))
+	renamed := map[string]string{} // old name -> new name, this poll
+	for _, mb := range mboxes {
+		byName[mail.MailboxKey(mb.Name)] = mb
+		if old, ok := st.mboxes[mb.ID]; ok && old.Name != mb.Name {
+			renamed[old.Name] = mb.Name
+		}
+	}
+	// RFC 5465 5.4: children renamed with their parent get no event of their own.
+	childOfRenamed := func(oldName, newName string) bool {
+		for o, n := range renamed {
+			if hasMailboxPrefix(oldName, o+"/") && hasMailboxPrefix(newName, n+"/") {
+				return true
+			}
+		}
+		return false
+	}
+	reported := map[string]bool{} // mailbox names a LIST went out for in this poll
+	// RFC 5465 5.4: a created or deleted mailbox's direct parent is affected too, whether it
+	// exists or not (its \HasChildren may change).
+	reportParent := func(name string) error {
+		i := strings.LastIndexByte(name, '/')
+		if i <= 0 {
+			return nil
+		}
+		key := mail.MailboxKey(name[:i])
+		if reported[key] {
+			return nil
+		}
+		reported[key] = true
+		if pm, ok := byName[key]; ok {
+			return s.untagged(fmt.Sprintf(`LIST (%s) "/" %s`, listMailboxAttrs(pm, parents, true), formatListMailbox(pm.Name)))
+		}
+		return s.untagged(fmt.Sprintf(`LIST (\NonExistent) "/" %s`, formatListMailbox(name[:i])))
+	}
 	for _, mb := range mboxes {
 		seen[mb.ID] = true
 		old, known := st.mboxes[mb.ID]
@@ -226,10 +261,17 @@ func (s *session) notifyPoll(ctx context.Context, inIdle bool) error {
 		oldEv := st.eventsFor(old, s.selectedID())
 		switch {
 		case !known && ev.mailboxName:
-			if err := s.untagged(fmt.Sprintf(`LIST (%s) "/" %s`, listMailboxAttrs(mb, parents, true), formatListMailbox(mb.Name))); err != nil {
+			if key := mail.MailboxKey(mb.Name); !reported[key] {
+				reported[key] = true
+				if err := s.untagged(fmt.Sprintf(`LIST (%s) "/" %s`, listMailboxAttrs(mb, parents, true), formatListMailbox(mb.Name))); err != nil {
+					return err
+				}
+			}
+			if err := reportParent(mb.Name); err != nil {
 				return err
 			}
-		case known && old.Name != mb.Name && (ev.mailboxName || oldEv.mailboxName):
+		case known && old.Name != mb.Name && (ev.mailboxName || oldEv.mailboxName) && !childOfRenamed(old.Name, mb.Name):
+			reported[mail.MailboxKey(mb.Name)] = true
 			if err := s.untagged(fmt.Sprintf(`LIST (%s) "/" %s ("OLDNAME" (%s))`, listMailboxAttrs(mb, parents, true), formatListMailbox(mb.Name), formatListMailbox(old.Name))); err != nil {
 				return err
 			}
@@ -252,7 +294,13 @@ func (s *session) notifyPoll(ctx context.Context, inIdle bool) error {
 		delete(st.mboxes, id)
 		delete(st.status, id)
 		if st.eventsFor(old, 0).mailboxName {
-			if err := s.untagged(fmt.Sprintf(`LIST (\NonExistent) "/" %s`, formatListMailbox(old.Name))); err != nil {
+			if key := mail.MailboxKey(old.Name); !reported[key] {
+				reported[key] = true
+				if err := s.untagged(fmt.Sprintf(`LIST (\NonExistent) "/" %s`, formatListMailbox(old.Name))); err != nil {
+					return err
+				}
+			}
+			if err := reportParent(old.Name); err != nil {
 				return err
 			}
 		}
@@ -380,6 +428,9 @@ func parseNotifySet(toks []string) (*notifyState, bool, error) {
 		// MessageNew and MessageExpunge go together; FlagChange needs both (RFC 5465 5).
 		if ev.messageNew != ev.messageExpunge || ev.flagChange && !ev.messageNew {
 			return nil, false, errors.New("imap: NOTIFY message events")
+		}
+		if ev.newFetch != nil && !strings.HasPrefix(filter, "SELECTED") {
+			return nil, false, errors.New("imap: NOTIFY fetch-att outside SELECTED") // RFC 5465 8
 		}
 		if strings.HasPrefix(filter, "SELECTED") {
 			// One selected filter, with message events only (RFC 5465 6.1).
