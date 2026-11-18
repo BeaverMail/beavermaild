@@ -70,16 +70,7 @@ func SortMessagesContext(ctx context.Context, msgs []Message, crits []SortCriter
 	// Rows start in sequence order and the sort is stable: exact ties keep mailbox order, even
 	// under REVERSE (RFC 5256 section 3).
 	sort.SliceStable(rows, func(i, j int) bool {
-		for _, c := range crits {
-			cmp := compareSortFields(rows[i].fields, rows[j].fields, c.Key)
-			if c.Reverse {
-				cmp = -cmp
-			}
-			if cmp != 0 {
-				return cmp < 0
-			}
-		}
-		return false
+		return compareSortCrits(rows[i].fields, rows[j].fields, crits) < 0
 	})
 	out := make([]uint32, len(rows))
 	for i, r := range rows {
@@ -103,6 +94,31 @@ func matchSortRows(ctx context.Context, msgs []Message, expr SearchExpr, load Ra
 		rows = append(rows, sortRow{seq: uint32(i + 1), fields: loadSortFields(m, load)})
 	}
 	return rows, nil
+}
+
+// SortFields holds one message's sort values. They never change for a stored message, so a
+// caller keeping a sorted result can load them once and insert new members with CompareSort.
+type SortFields struct{ f sortFields }
+
+// LoadSortFields reads m's sort values (its header, through load).
+func LoadSortFields(m Message, load RawLoader) SortFields { return SortFields{loadSortFields(m, load)} }
+
+// CompareSort orders a and b by crits as SORT does; exact ties (0) keep mailbox order.
+func CompareSort(a, b SortFields, crits []SortCriterion) int {
+	return compareSortCrits(a.f, b.f, crits)
+}
+
+func compareSortCrits(a, b sortFields, crits []SortCriterion) int {
+	for _, c := range crits {
+		r := compareSortFields(a, b, c.Key)
+		if c.Reverse {
+			r = -r
+		}
+		if r != 0 {
+			return r
+		}
+	}
+	return 0
 }
 
 func loadSortFields(m Message, load RawLoader) sortFields {

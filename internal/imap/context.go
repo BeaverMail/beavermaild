@@ -3,7 +3,9 @@
 package imap
 
 import (
+	"cmp"
 	"context"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -21,9 +23,10 @@ type searchContext struct {
 	sorted bool
 	crits  []mail.SortCriterion
 	expr   mail.SearchExpr
-	result []uint32                // member UIDs in result order
-	seen   map[uint32]contextEntry // every message evaluated, by UID
-	count  int                     // mailbox size at the last evaluation
+	result []uint32                   // member UIDs in result order
+	seen   map[uint32]contextEntry    // every message evaluated, by UID
+	fetch  *fetchItems                // UPDATE (fetch-att): sent for each new message joining (RFC 5465 7)
+	keys   map[uint32]mail.SortFields // SORT: each member's sort values, read once
 }
 
 type contextEntry struct {
@@ -42,12 +45,14 @@ func (s *session) hasSearchContext(tag string) bool {
 }
 
 // addSearchContext starts updating the result seqs of command tag (crits nil for SEARCH).
-func (s *session) addSearchContext(tag string, byUID bool, crits []mail.SortCriterion, expr mail.SearchExpr, seqs []uint32) error {
+func (s *session) addSearchContext(tag string, byUID bool, crits []mail.SortCriterion, expr mail.SearchExpr, seqs []uint32, fetch *fetchItems) error {
 	if len(s.contexts) >= maxSearchContexts {
 		return s.untagged("NO [NOUPDATE " + quoteIMAPString(tag) + "] too many updating contexts")
 	}
-	c := &searchContext{tag: tag, byUID: byUID, sorted: crits != nil, crits: crits, expr: expr,
-		seen: make(map[uint32]contextEntry, len(s.messages)), count: len(s.messages)}
+	// Message numbers mean the messages they named now: a later expunge or arrival renumbers the
+	// mailbox but changes no result (RFC 5267 4.3).
+	c := &searchContext{tag: tag, byUID: byUID, sorted: crits != nil, crits: crits, expr: *expr.FixPositions(s.messages),
+		seen: make(map[uint32]contextEntry, len(s.messages)), fetch: fetch}
 	for _, m := range s.messages {
 		c.seen[m.UID] = contextEntry{meta: m.Meta}
 	}
@@ -62,6 +67,9 @@ func (s *session) addSearchContext(tag string, byUID bool, crits []mail.SortCrit
 
 // cmdCancelUpdate ends the updating contexts named by the quoted tags in arg.
 func (s *session) cmdCancelUpdate(tag, arg string) error {
+	if !s.selected { // command-select (RFC 5267 5)
+		return s.tagged(tag, "NO not selected")
+	}
 	rest := strings.TrimSpace(arg)
 	if rest == "" {
 		return s.tagged(tag, "BAD CANCELUPDATE syntax")
@@ -88,6 +96,7 @@ func (s *session) contextsExpunge(seq int, uid uint32) error {
 	for _, c := range s.contexts {
 		e, ok := c.seen[uid]
 		delete(c.seen, uid)
+		delete(c.keys, uid)
 		if !ok || !e.in {
 			continue
 		}
@@ -128,39 +137,25 @@ func (s *session) refreshContexts(ctx context.Context) error {
 
 func (s *session) refreshContext(ctx context.Context, c *searchContext, load mail.RawLoader) error {
 	var dirty []int
+	arrived := map[uint32]bool{} // messages this context never saw: new, not flag changes
 	for i, m := range s.messages {
+		if _, ok := c.seen[m.UID]; !ok {
+			arrived[m.UID] = true
+		}
 		if e, ok := c.seen[m.UID]; !ok || !messageMetaEqual(e.meta, m.Meta) {
 			dirty = append(dirty, i)
 		}
 	}
-	// Sequence-set and UID criteria depend on the whole mailbox: evaluate it again when it changes.
-	if c.expr.UsesPosition() && (len(dirty) > 0 || c.count != len(s.messages)) {
-		dirty = dirty[:0]
-		for i := range s.messages {
-			dirty = append(dirty, i)
-		}
-		seqs, err := mail.MatchSearchExprContext(ctx, s.messages, c.expr, load)
+	// With positions fixed at creation, a message's match depends on that message alone: only
+	// new or changed ones are evaluated, never the whole mailbox again.
+	for _, i := range dirty {
+		m := s.messages[i]
+		seqs, err := mail.MatchSearchExprContext(ctx, s.messages[i:i+1], c.expr, load)
 		if err != nil {
 			return err
 		}
-		in := make(map[uint32]bool, len(seqs))
-		for _, seq := range seqs {
-			in[s.messages[seq-1].UID] = true
-		}
-		for _, m := range s.messages {
-			c.seen[m.UID] = contextEntry{meta: m.Meta, in: in[m.UID]}
-		}
-	} else {
-		for _, i := range dirty {
-			m := s.messages[i]
-			seqs, err := mail.MatchSearchExprContext(ctx, s.messages[i:i+1], c.expr, load)
-			if err != nil {
-				return err
-			}
-			c.seen[m.UID] = contextEntry{meta: m.Meta, in: len(seqs) > 0}
-		}
+		c.seen[m.UID] = contextEntry{meta: m.Meta, in: len(seqs) > 0}
 	}
-	c.count = len(s.messages)
 	if len(dirty) == 0 {
 		return nil
 	}
@@ -172,6 +167,7 @@ func (s *session) refreshContext(ctx context.Context, c *searchContext, load mai
 		for uid := range c.seen {
 			if !live[uid] {
 				delete(c.seen, uid)
+				delete(c.keys, uid)
 			}
 		}
 	}
@@ -208,18 +204,14 @@ func (s *session) refreshContext(ctx context.Context, c *searchContext, load mai
 	}
 	var adds [][2]uint32
 	if added {
-		next := make([]uint32, 0, len(members))
+		var next []uint32
 		if c.sorted {
-			// shortcut: re-sorts every member on each addition (header loads); keep sort keys per
-			// context if updating SORT contexts on large mailboxes get hot.
-			seqs, err := mail.SortMessagesContext(ctx, members, c.crits, mail.SearchExpr{Crit: mail.SearchCriteria{All: true}}, load)
-			if err != nil {
+			var err error
+			if next, err = c.insertSorted(ctx, members, inResult, load); err != nil {
 				return err
 			}
-			for _, seq := range seqs {
-				next = append(next, members[seq-1].UID)
-			}
 		} else {
+			next = make([]uint32, 0, len(members))
 			for _, m := range members {
 				next = append(next, m.UID)
 			}
@@ -236,10 +228,52 @@ func (s *session) refreshContext(ctx context.Context, c *searchContext, load mai
 			return err
 		}
 	}
-	if len(adds) > 0 {
-		return s.untagged(c.change("ADDTO", adds))
+	if len(adds) == 0 {
+		return nil
 	}
-	return nil
+	// RFC 5465 7: EXISTS, then the FETCH of each new message, then the ADDTO; none for a message
+	// that joins because its flags changed.
+	if c.fetch != nil {
+		for i, m := range s.messages {
+			if arrived[m.UID] && c.seen[m.UID].in && !inResult[m.UID] {
+				if err := s.writeFetch(ctx, i+1, m, *c.fetch, c.byUID); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return s.untagged(c.change("ADDTO", adds))
+}
+
+// insertSorted puts the members not yet in the SORT result at their place, by binary search on
+// sort values kept per member: each message's header is read once for the context's life, not
+// once per arrival (a sender could otherwise make every delivery re-read the whole result).
+func (c *searchContext) insertSorted(ctx context.Context, members []mail.Message, inResult map[uint32]bool, load mail.RawLoader) ([]uint32, error) {
+	if c.keys == nil {
+		c.keys = make(map[uint32]mail.SortFields, len(members))
+	}
+	for _, m := range members {
+		if _, ok := c.keys[m.UID]; !ok {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			c.keys[m.UID] = mail.LoadSortFields(m, load)
+		}
+	}
+	order := func(a, b uint32) int {
+		if r := mail.CompareSort(c.keys[a], c.keys[b], c.crits); r != 0 {
+			return r
+		}
+		return cmp.Compare(a, b) // exact ties keep mailbox order, as SORT does
+	}
+	next := c.result
+	for _, m := range members {
+		if !inResult[m.UID] {
+			i, _ := slices.BinarySearchFunc(next, m.UID, order)
+			next = slices.Insert(next, i, m.UID)
+		}
+	}
+	return next, nil
 }
 
 // position is the context position RFC 5267 4.3.3 sends: the result index for SORT, 0 for

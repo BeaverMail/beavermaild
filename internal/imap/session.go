@@ -902,7 +902,7 @@ func (s *session) cmdSearch(ctx context.Context, tag, arg string, byUID bool) er
 		return err
 	}
 	if ret.update {
-		if err := s.addSearchContext(tag, byUID, nil, expr, seqs); err != nil {
+		if err := s.addSearchContext(tag, byUID, nil, expr, seqs, ret.updateFetch); err != nil {
 			return err
 		}
 	}

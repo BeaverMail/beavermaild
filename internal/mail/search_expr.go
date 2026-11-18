@@ -56,10 +56,54 @@ func (e *SearchExpr) UsesModSeq() bool {
 	return e.anyCrit(func(c *SearchCriteria) bool { return c.ModSeq != nil })
 }
 
-// UsesPosition reports whether expr has a sequence-set or UID criterion, whose matches depend on
-// the other messages of the mailbox (their count, the highest UID for "*").
-func (e *SearchExpr) UsesPosition() bool {
-	return e.anyCrit(func(c *SearchCriteria) bool { return c.Seqs != nil || c.UIDs != nil })
+// FixPositions returns a copy of e with its message numbers resolved against msgs, the mailbox
+// when the command was received (RFC 5267 4.3, from the RFC 3501 errata): a sequence set becomes the
+// UIDs it named then. In a UID set, "n:*" stays open upward (new messages still match) and any
+// other "*" becomes the largest UID then. Each message's match then depends on that message alone.
+func (e *SearchExpr) FixPositions(msgs []Message) *SearchExpr {
+	if e == nil {
+		return nil
+	}
+	out := *e
+	switch e.Kind {
+	case SearchExprCrit:
+		var largest uint32
+		if len(msgs) > 0 {
+			largest = msgs[len(msgs)-1].UID
+		}
+		if e.Crit.Seqs != nil {
+			uids := []SeqRange{} // non-nil: a set that named nothing still matches nothing
+			for i, m := range msgs {
+				if seqRangesContain(e.Crit.Seqs, uint32(i+1), uint32(len(msgs))) {
+					uids = append(uids, SeqRange{m.UID, m.UID})
+				}
+			}
+			out.Crit.Seqs, out.Crit.UIDs = nil, uids
+		} else if e.Crit.UIDs != nil {
+			out.Crit.UIDs = make([]SeqRange, len(e.Crit.UIDs))
+			for i, r := range e.Crit.UIDs {
+				switch {
+				case r.Lo == 0 && r.Hi == 0:
+					r = SeqRange{largest, largest}
+				case r.Hi == 0 && r.Lo <= largest, r.Lo == 0 && r.Hi <= largest:
+					r = SeqRange{max(r.Lo, r.Hi), ^uint32(0)}
+				case r.Hi == 0, r.Lo == 0:
+					r = SeqRange{largest, max(r.Lo, r.Hi)}
+				}
+				out.Crit.UIDs[i] = r
+			}
+		}
+	case SearchExprAnd:
+		out.And = make([]*SearchExpr, len(e.And))
+		for i, child := range e.And {
+			out.And[i] = child.FixPositions(msgs)
+		}
+	case SearchExprOr:
+		out.Or = [2]*SearchExpr{e.Or[0].FixPositions(msgs), e.Or[1].FixPositions(msgs)}
+	case SearchExprNot:
+		out.Not = e.Not.FixPositions(msgs)
+	}
+	return &out
 }
 
 // anyCrit reports whether some criterion node of expr satisfies pred.

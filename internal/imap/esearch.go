@@ -12,7 +12,8 @@ import (
 // from RFC 5267 CONTEXT.
 type returnOpts struct {
 	min, max, all, count, update bool
-	partialLo, partialHi         int // PARTIAL lo:hi (lo <= hi), 0 when absent
+	partialLo, partialHi         int         // PARTIAL lo:hi (lo <= hi), 0 when absent
+	updateFetch                  *fetchItems // UPDATE (fetch-att ...): FETCH for new members (RFC 5465 7)
 }
 
 // cutReturnOpts parses a leading "RETURN (opts)". present is false when arg has none; ok is
@@ -22,11 +23,33 @@ func cutReturnOpts(arg string) (o returnOpts, rest string, present, ok bool) {
 	if len(arg) < 7 || !strings.EqualFold(arg[:6], "RETURN") || (arg[6] != ' ' && arg[6] != '(') {
 		return o, arg, false, true
 	}
-	inner, rest, found := strings.Cut(strings.TrimLeft(arg[6:], " "), ")")
-	if !found || !strings.HasPrefix(inner, "(") {
+	body := strings.TrimLeft(arg[6:], " ")
+	end := closingParen(body) // the list may nest: UPDATE (BODY[HEADER.FIELDS (FROM)])
+	if end < 0 {
 		return o, "", true, false
 	}
-	fields := strings.Fields(strings.ToUpper(inner[1:]))
+	rest = body[end+1:]
+	var fields []string
+	for in := strings.TrimLeft(body[1:end], " "); in != ""; in = strings.TrimLeft(in, " ") {
+		if in[0] == '(' {
+			// RFC 5465 7: a fetch-att list, only right after UPDATE.
+			listEnd := closingParen(in)
+			if listEnd < 0 || len(fields) == 0 || fields[len(fields)-1] != "UPDATE" || o.updateFetch != nil {
+				return o, "", true, false
+			}
+			items, ok := parseFetchItems(in[1:listEnd])
+			if !ok {
+				return o, "", true, false
+			}
+			o.updateFetch, in = &items, in[listEnd+1:]
+			continue
+		}
+		i := strings.IndexAny(in, " (")
+		if i < 0 {
+			i = len(in)
+		}
+		fields, in = append(fields, strings.ToUpper(in[:i])), in[i:]
+	}
 	if len(fields) == 0 {
 		o.all = true
 	}

@@ -51,7 +51,7 @@ func (s *session) cmdSort(ctx context.Context, tag, arg string, byUID bool) erro
 		return err
 	}
 	if ret.update {
-		if err := s.addSearchContext(tag, byUID, crits, expr, seqs); err != nil {
+		if err := s.addSearchContext(tag, byUID, crits, expr, seqs, ret.updateFetch); err != nil {
 			return err
 		}
 	}

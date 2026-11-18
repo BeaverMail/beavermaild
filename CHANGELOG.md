@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Fix (IMAP CONTEXT, RFC 5267 / RFC 5465 7): message numbers in an updating SEARCH or SORT now mean
+  the messages they named when the command arrived: an expunge no longer made the context add the
+  message that moved into the range, and a context no longer searches the whole mailbox again on
+  every change (`UID n:*` still takes new messages). `RETURN (UPDATE (fetch-att ...))` is accepted
+  and sends the new message's FETCH before its ADDTO; CANCELUPDATE needs a selected mailbox.
+- Security (IMAP CONTEXT=SORT): an updating SORT keeps each member's sort values and inserts new
+  messages by binary search, instead of re-reading every member's header on each delivery.
+
 - Fix (IMAP NOTIFY, RFC 5465): MailboxName events now report the direct parent of a created or
   deleted mailbox too (its `\HasChildren` changes), and a rename is one event for the renamed
   mailbox instead of one more per child. A MessageNew fetch-att list outside SELECTED gets BAD.
