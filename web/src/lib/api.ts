@@ -56,6 +56,9 @@ export type PatchDomainInput = Omit<CreateDomainInput, 'name' | 'tenant_id'>
 export type Tenant = {
   id: number
   name: string
+  /** Storage cap shared by all the tenant's mailboxes; 0 = unlimited. */
+  storage_limit: number
+  storage_used: number
 }
 
 export type ListedAccount = {
@@ -70,6 +73,9 @@ export type ListedAccount = {
   storage_limit: number
   messages_used: number
   messages_limit: number
+  /** The limit is set on the account; false means it follows the domain, then the server default. */
+  storage_limit_set: boolean
+  messages_limit_set: boolean
 }
 
 export class ApiError extends Error {
@@ -177,12 +183,25 @@ export async function fetchTenants(): Promise<Tenant[]> {
   return out.tenants ?? []
 }
 
+/** Server-wide quota and send rate, used where a domain or mailbox sets nothing (0 = unlimited). */
+export type ServerDefaults = {
+  storage_bytes: number
+  messages: number
+  send_max_messages: number
+  send_window?: string
+}
+
+export async function fetchDefaults(): Promise<ServerDefaults> {
+  return api<ServerDefaults>('/defaults')
+}
+
 export async function createTenant(name: string): Promise<Tenant> {
   return api<Tenant>('/tenants', { body: { name } })
 }
 
-export async function patchTenant(id: number, name: string): Promise<Tenant> {
-  return api<Tenant>(`/tenants/${id}`, { method: 'PATCH', body: { name } })
+/** Rename a tenant and/or set its storage cap (admin only; 0 = unlimited). */
+export async function patchTenant(id: number, patch: { name?: string; storage_limit?: number }): Promise<Tenant> {
+  return api<Tenant>(`/tenants/${id}`, { method: 'PATCH', body: patch })
 }
 
 export async function deleteTenant(id: number, confirmName: string): Promise<void> {
@@ -257,7 +276,16 @@ export async function deleteAccount(email: string): Promise<void> {
 
 export async function patchAccount(
   email: string,
-  patch: { role?: string; password?: string; active?: boolean }
+  patch: {
+    role?: string
+    password?: string
+    active?: boolean
+    /** Limits set on the account (0 = unlimited); the *_default flags drop them. */
+    storage_limit?: number
+    messages_limit?: number
+    storage_limit_default?: boolean
+    messages_limit_default?: boolean
+  }
 ): Promise<ListedAccount> {
   return api<ListedAccount>(`/accounts/${encodeURIComponent(email)}`, {
     method: 'PATCH',

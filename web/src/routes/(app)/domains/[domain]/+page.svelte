@@ -1,6 +1,9 @@
 <script lang="ts">
-    import { AtSign, KeyRound, MoreHorizontal, Pencil, Plus, Trash2, Users, X } from "@lucide/svelte";
+    import { AtSign, Gauge, KeyRound, Pencil, Plus, Trash2, Users, X } from "@lucide/svelte";
     import ConfirmDialog from "$lib/ConfirmDialog.svelte";
+    import RowMenu from "$lib/RowMenu.svelte";
+    import { globalPlaceholder, messagesDefault, sendDefault, storageDefault } from "$lib/defaults";
+    import { bytesToStorage, formatBytes, storageToBytes } from "$lib/bytes";
     import { displayDomain, displayEmail } from "$lib/idn";
     import { page } from "$app/state";
     import {
@@ -21,10 +24,18 @@
         patchAccount,
         patchAlias,
         patchDomain,
+        fetchDefaults,
+        type ServerDefaults,
     } from "$lib/api";
     import { me } from "$lib/session";
 
     let accounts = $state<ListedAccount[]>([]);
+
+    // Server-wide defaults, shown where a field is left empty; the page works without them.
+    let serverDefaults = $state<ServerDefaults | null>(null);
+    fetchDefaults()
+        .then((d) => (serverDefaults = d))
+        .catch(() => {});
     let domainInfo = $state<Domain | null>(null);
     let error = $state("");
     let loading = $state(true);
@@ -38,7 +49,6 @@
     let formError = $state("");
 
     // Row actions menu, delete confirmation and password reset dialogs.
-    let menuFor = $state<number | null>(null);
     let deleteTarget = $state<ListedAccount | null>(null);
     let deleteBusy = $state(false);
     let deleteError = $state("");
@@ -47,6 +57,17 @@
     let showPassword = $state(false);
     let resetBusy = $state(false);
     let resetError = $state("");
+
+    // Per-account quota: each limit follows the domain default, is unlimited, or is a custom value.
+    type QuotaMode = "default" | "unlimited" | "custom";
+    let quotaTarget = $state<ListedAccount | null>(null);
+    let quotaStorageMode = $state<QuotaMode>("default");
+    let quotaStorageAmount = $state("");
+    let quotaStorageUnit = $state<"MB" | "GB">("MB");
+    let quotaMessagesMode = $state<QuotaMode>("default");
+    let quotaMessages = $state("");
+    let quotaBusy = $state(false);
+    let quotaError = $state("");
 
     // Aliases: list, add form, inline target edit, delete confirmation.
     let aliases = $state<Alias[]>([]);
@@ -87,21 +108,7 @@
         $me?.role === "admin" ? ["user", "tenant_admin", "admin"] : ["user", "tenant_admin"],
     );
 
-    function storageToBytes(amount: string, unit: "MB" | "GB"): number | undefined {
-        const n = Number(amount);
-        if (!amount || !Number.isFinite(n) || n <= 0) return undefined;
-        const mul = unit === "GB" ? 1024 * 1024 * 1024 : 1024 * 1024;
-        return Math.round(n * mul);
-    }
 
-    function bytesToStorage(bytes: number | undefined): { amount: string; unit: "MB" | "GB" } {
-        if (!bytes) return { amount: "", unit: "MB" };
-        const gb = 1024 * 1024 * 1024;
-        const mb = 1024 * 1024;
-        if (bytes >= gb && bytes % gb === 0) return { amount: String(bytes / gb), unit: "GB" };
-        if (bytes >= mb && bytes % mb === 0) return { amount: String(bytes / mb), unit: "MB" };
-        return { amount: String(Math.round((bytes / mb) * 100) / 100), unit: "MB" };
-    }
 
     async function reload(name: string) {
         loading = true;
@@ -245,7 +252,6 @@
     }
 
     function onDelete(a: ListedAccount) {
-        menuFor = null;
         if (a.email === $me?.email) {
             formError = "cannot delete own account";
             return;
@@ -270,12 +276,6 @@
         }
     }
 
-    function formatBytes(n: number): string {
-        if (n < 1024) return `${n} B`;
-        if (n < 1024 ** 2) return `${(n / 1024).toFixed(1)} KB`;
-        if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)} MB`;
-        return `${(n / 1024 ** 3).toFixed(2)} GB`;
-    }
 
     // Fill ratio of the tighter limit (storage or messages), null when unlimited.
     function usageRatio(a: ListedAccount): number | null {
@@ -316,7 +316,6 @@
     }
 
     function onResetPassword(a: ListedAccount) {
-        menuFor = null;
         if (a.email === $me?.email) {
             formError = "cannot reset own password here";
             return;
@@ -326,6 +325,73 @@
         newPassword = "";
         showPassword = false;
         resetTarget = a;
+    }
+
+    function quotaMode(set: boolean, limit: number): QuotaMode {
+        if (!set) return "default";
+        return limit > 0 ? "custom" : "unlimited";
+    }
+
+    function onEditQuota(a: ListedAccount) {
+        quotaError = "";
+        quotaStorageMode = quotaMode(a.storage_limit_set, a.storage_limit);
+        const st = bytesToStorage(a.storage_limit_set ? a.storage_limit : 0);
+        quotaStorageAmount = st.amount;
+        quotaStorageUnit = st.unit;
+        quotaMessagesMode = quotaMode(a.messages_limit_set, a.messages_limit);
+        quotaMessages = a.messages_limit_set && a.messages_limit > 0 ? String(a.messages_limit) : "";
+        quotaTarget = a;
+    }
+
+    // What "Default" means for this mailbox: the domain's value, else the server's.
+    function defaultLabel(domainValue: string | null, globalValue: string | null): string {
+        if (domainValue) return `domain, ${domainValue}`;
+        return globalValue ? `global, ${globalValue}` : "global setting";
+    }
+    function defaultStorageLabel(): string {
+        const own = domainInfo?.storage_bytes ? formatBytes(domainInfo.storage_bytes) : null;
+        return defaultLabel(own, storageDefault(serverDefaults));
+    }
+    function defaultMessagesLabel(): string {
+        const own = domainInfo?.messages_quota ? `${domainInfo.messages_quota.toLocaleString()} messages` : null;
+        return defaultLabel(own, messagesDefault(serverDefaults));
+    }
+
+    async function submitQuota(ev: SubmitEvent) {
+        ev.preventDefault();
+        if (!quotaTarget) return;
+        const patch: Parameters<typeof patchAccount>[1] = {};
+        if (quotaStorageMode === "default") patch.storage_limit_default = true;
+        else if (quotaStorageMode === "unlimited") patch.storage_limit = 0;
+        else {
+            const bytes = storageToBytes(quotaStorageAmount, quotaStorageUnit);
+            if (bytes === undefined) {
+                quotaError = "Enter a storage limit above 0, or choose Unlimited.";
+                return;
+            }
+            patch.storage_limit = bytes;
+        }
+        if (quotaMessagesMode === "default") patch.messages_limit_default = true;
+        else if (quotaMessagesMode === "unlimited") patch.messages_limit = 0;
+        else {
+            const n = Number(quotaMessages);
+            if (!Number.isInteger(n) || n <= 0) {
+                quotaError = "Enter a whole number of messages above 0, or choose Unlimited.";
+                return;
+            }
+            patch.messages_limit = n;
+        }
+        quotaBusy = true;
+        quotaError = "";
+        try {
+            await patchAccount(quotaTarget.email, patch);
+            quotaTarget = null;
+            await reload(domain);
+        } catch (err) {
+            quotaError = err instanceof ApiError ? err.message : "quota update failed";
+        } finally {
+            quotaBusy = false;
+        }
     }
 
     async function submitReset(ev: SubmitEvent) {
@@ -575,6 +641,9 @@
                                 <span class="text-gray-500">
                                     / {a.storage_limit > 0 ? formatBytes(a.storage_limit) : "unlimited"}
                                 </span>
+                                {#if a.storage_limit_set || a.messages_limit_set}
+                                    <span class="ml-1 text-[11px] text-gray-500" title="Limit set on this mailbox, not the domain default">custom</span>
+                                {/if}
                             </div>
                             {#if ratio !== null}
                                 <div
@@ -611,40 +680,15 @@
                             {/if}
                         </td>
                         {#if canWrite}
-                            <td class="relative px-4 py-3 text-right">
-                                <button
-                                    type="button"
-                                    class="rounded-lg p-1.5 text-gray-500 hover:bg-gray-100"
-                                    aria-label="Actions for {a.email}"
-                                    aria-haspopup="menu"
-                                    aria-expanded={menuFor === a.id}
-                                    onclick={() => (menuFor = menuFor === a.id ? null : a.id)}
-                                >
-                                    <MoreHorizontal class="size-4" />
-                                </button>
-                                {#if menuFor === a.id}
-                                    <div
-                                        role="menu"
-                                        class="absolute right-4 z-30 mt-1 w-44 overflow-hidden rounded-lg border border-gray-200 bg-white py-1 text-left shadow-lg"
-                                    >
-                                        <button
-                                            type="button"
-                                            role="menuitem"
-                                            class="flex w-full items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
-                                            onclick={() => onResetPassword(a)}
-                                        >
-                                            <KeyRound class="size-4" /> Reset password
-                                        </button>
-                                        <button
-                                            type="button"
-                                            role="menuitem"
-                                            class="flex w-full items-center gap-2 px-3 py-2 text-sm text-red-700 hover:bg-red-50"
-                                            onclick={() => onDelete(a)}
-                                        >
-                                            <Trash2 class="size-4" /> Delete
-                                        </button>
-                                    </div>
-                                {/if}
+                            <td class="px-4 py-3 text-right">
+                                <RowMenu
+                                    label="Actions for {a.email}"
+                                    items={[
+                                        { label: "Reset password", icon: KeyRound, onselect: () => onResetPassword(a) },
+                                        { label: "Mailbox quota", icon: Gauge, onselect: () => onEditQuota(a) },
+                                        { label: "Delete", icon: Trash2, danger: true, onselect: () => onDelete(a) },
+                                    ]}
+                                />
                             </td>
                         {/if}
                     </tr>
@@ -962,7 +1006,7 @@
                             type="number"
                             min="0"
                             bind:value={sendMax}
-                            placeholder="global default"
+                            placeholder={globalPlaceholder(sendDefault(serverDefaults))}
                             class="block w-full rounded-lg border-gray-200 px-3 py-2 text-sm"
                         />
                     </div>
@@ -991,13 +1035,13 @@
                                 min="0"
                                 step="any"
                                 bind:value={storageAmount}
-                                placeholder="global default"
+                                placeholder={globalPlaceholder(storageDefault(serverDefaults))}
                                 class="block min-w-0 flex-1 rounded-lg border-gray-200 px-3 py-2 text-sm"
                             />
                             <select
                                 aria-label="Storage unit"
                                 bind:value={storageUnit}
-                                class="appearance-none rounded-lg border-gray-200 px-3 py-2 text-sm"
+                                class="appearance-none rounded-lg border-gray-200 py-2 pl-3 pr-9 text-sm"
                             >
                                 <option value="MB">MB</option>
                                 <option value="GB">GB</option>
@@ -1015,7 +1059,7 @@
                             type="number"
                             min="0"
                             bind:value={messagesQuota}
-                            placeholder="global default"
+                            placeholder={globalPlaceholder(messagesDefault(serverDefaults))}
                             class="block w-full rounded-lg border-gray-200 px-3 py-2 text-sm"
                         />
                     </div>
@@ -1105,15 +1149,129 @@
     </div>
 {/if}
 
+{#if quotaTarget}
+    <div class="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4 sm:p-8">
+        <button
+            type="button"
+            class="fixed inset-0 cursor-default bg-black/40"
+            aria-label="Cancel"
+            tabindex="-1"
+            onclick={() => {
+                if (!quotaBusy) quotaTarget = null;
+            }}
+        ></button>
+        <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="quota-title"
+            class="relative my-4 w-full max-w-md rounded-xl border border-gray-200 bg-white shadow-lg"
+        >
+            <div class="flex items-center justify-between border-b border-gray-100 px-5 py-4">
+                <h2 id="quota-title" class="text-lg font-semibold text-gray-900">Mailbox quota</h2>
+                <button
+                    type="button"
+                    class="rounded-lg p-1 text-gray-500 hover:bg-gray-100"
+                    onclick={() => (quotaTarget = null)}
+                    aria-label="Close"
+                >
+                    <X class="size-5" />
+                </button>
+            </div>
+            <form class="space-y-5 px-5 py-4" onsubmit={submitQuota}>
+                <p class="text-sm text-gray-700">
+                    Limits for <span class="font-medium">{quotaTarget.email}</span>. "Default" follows the domain's
+                    setting, or the global one, also when it changes later.
+                </p>
+                <fieldset class="space-y-2">
+                    <legend class="mb-1 text-sm font-medium text-gray-900">Storage</legend>
+                    <label class="flex items-center gap-2 text-sm text-gray-700">
+                        <input type="radio" name="quota-storage" value="default" bind:group={quotaStorageMode} />
+                        Default ({defaultStorageLabel()})
+                    </label>
+                    <label class="flex items-center gap-2 text-sm text-gray-700">
+                        <input type="radio" name="quota-storage" value="unlimited" bind:group={quotaStorageMode} />
+                        Unlimited
+                    </label>
+                    <label class="flex items-center gap-2 text-sm text-gray-700">
+                        <input type="radio" name="quota-storage" value="custom" bind:group={quotaStorageMode} />
+                        Custom
+                    </label>
+                    {#if quotaStorageMode === "custom"}
+                        <div class="ml-6 flex gap-2">
+                            <input
+                                type="number"
+                                min="0"
+                                step="any"
+                                aria-label="Storage limit"
+                                required
+                                bind:value={quotaStorageAmount}
+                                class="block min-w-0 flex-1 rounded-lg border-gray-200 px-3 py-2 text-sm"
+                            />
+                            <select
+                                aria-label="Storage unit"
+                                bind:value={quotaStorageUnit}
+                                class="appearance-none rounded-lg border-gray-200 py-2 pl-3 pr-9 text-sm"
+                            >
+                                <option value="MB">MB</option>
+                                <option value="GB">GB</option>
+                            </select>
+                        </div>
+                    {/if}
+                </fieldset>
+                <fieldset class="space-y-2">
+                    <legend class="mb-1 text-sm font-medium text-gray-900">Messages</legend>
+                    <label class="flex items-center gap-2 text-sm text-gray-700">
+                        <input type="radio" name="quota-messages" value="default" bind:group={quotaMessagesMode} />
+                        Default ({defaultMessagesLabel()})
+                    </label>
+                    <label class="flex items-center gap-2 text-sm text-gray-700">
+                        <input type="radio" name="quota-messages" value="unlimited" bind:group={quotaMessagesMode} />
+                        Unlimited
+                    </label>
+                    <label class="flex items-center gap-2 text-sm text-gray-700">
+                        <input type="radio" name="quota-messages" value="custom" bind:group={quotaMessagesMode} />
+                        Custom
+                    </label>
+                    {#if quotaMessagesMode === "custom"}
+                        <input
+                            type="number"
+                            min="1"
+                            step="1"
+                            aria-label="Message limit"
+                            required
+                            bind:value={quotaMessages}
+                            class="ml-6 block w-40 rounded-lg border-gray-200 px-3 py-2 text-sm"
+                        />
+                    {/if}
+                </fieldset>
+                {#if quotaError}
+                    <p class="text-sm text-red-600" role="alert">{quotaError}</p>
+                {/if}
+                <div class="flex justify-end gap-2 border-t border-gray-100 pt-4">
+                    <button
+                        type="button"
+                        class="rounded-lg px-3 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                        disabled={quotaBusy}
+                        onclick={() => (quotaTarget = null)}
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        type="submit"
+                        disabled={quotaBusy}
+                        class="rounded-lg bg-brand-700 px-3 py-2 text-sm font-medium text-white hover:bg-brand-800 disabled:opacity-50"
+                    >
+                        {quotaBusy ? "Saving…" : "Save quota"}
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+{/if}
+
 <svelte:window
     onkeydown={(ev) => {
-        if (ev.key === "Escape") menuFor = null;
-    }}
-    onclick={(ev) => {
-        // Close the row menu on any click outside its toggle and items.
-        if (menuFor !== null && !(ev.target as Element).closest('[role="menu"], [aria-haspopup="menu"]')) {
-            menuFor = null;
-        }
+        if (ev.key === "Escape" && quotaTarget && !quotaBusy) quotaTarget = null;
     }}
 />
 

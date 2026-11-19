@@ -10,10 +10,20 @@
         fetchDomains,
         fetchTenants,
         type Tenant,
+        fetchDefaults,
+        type ServerDefaults,
     } from "$lib/api";
     import { me } from "$lib/session";
     import ConfirmDialog from "$lib/ConfirmDialog.svelte";
+    import { globalPlaceholder, messagesDefault, sendDefault, storageDefault } from "$lib/defaults";
+    import { storageToBytes } from "$lib/bytes";
     import { displayDomain } from "$lib/idn";
+
+    // Server-wide defaults, shown where a field is left empty; the page works without them.
+    let serverDefaults = $state<ServerDefaults | null>(null);
+    fetchDefaults()
+        .then((d) => (serverDefaults = d))
+        .catch(() => {});
 
     let domains = $state<Domain[]>([]);
     let tenants = $state<Tenant[]>([]);
@@ -114,12 +124,6 @@
         return `${v < 10 && i > 0 ? v.toFixed(1) : Math.round(v)} ${units[i]}`;
     }
 
-    function storageToBytes(amount: string, unit: "MB" | "GB"): number | undefined {
-        const n = Number(amount);
-        if (!amount || !Number.isFinite(n) || n <= 0) return undefined;
-        const mul = unit === "GB" ? 1024 * 1024 * 1024 : 1024 * 1024;
-        return Math.round(n * mul);
-    }
 
     async function onCreate(e: Event) {
         e.preventDefault();
@@ -446,7 +450,7 @@
                             type="number"
                             min="0"
                             bind:value={sendMax}
-                            placeholder="global default"
+                            placeholder={globalPlaceholder(sendDefault(serverDefaults))}
                             class="block w-full rounded-lg border-gray-200 px-3 py-2 text-sm"
                         />
                     </div>
@@ -475,13 +479,13 @@
                                 min="0"
                                 step="any"
                                 bind:value={storageAmount}
-                                placeholder="global default"
+                                placeholder={globalPlaceholder(storageDefault(serverDefaults))}
                                 class="block min-w-0 flex-1 rounded-lg border-gray-200 px-3 py-2 text-sm"
                             />
                             <select
                                 aria-label="Storage unit"
                                 bind:value={storageUnit}
-                                class="appearance-none rounded-lg border-gray-200 px-3 py-2 text-sm"
+                                class="appearance-none rounded-lg border-gray-200 py-2 pl-3 pr-9 text-sm"
                             >
                                 <option value="MB">MB</option>
                                 <option value="GB">GB</option>
@@ -499,7 +503,7 @@
                             type="number"
                             min="0"
                             bind:value={messagesQuota}
-                            placeholder="global default"
+                            placeholder={globalPlaceholder(messagesDefault(serverDefaults))}
                             class="block w-full rounded-lg border-gray-200 px-3 py-2 text-sm"
                         />
                     </div>

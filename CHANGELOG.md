@@ -13,6 +13,12 @@
   now ignored and existing mailboxes follow the defaults. `PATCH /accounts/{email}` takes `storage_limit_default` / `messages_limit_default`
   to go back to the defaults, and accounts report `storage_limit_set` / `messages_limit_set`. Plugin
   CLI commands now apply domain quotas too.
+- Panel: per-mailbox quota (default, unlimited or custom, for storage and messages) from the
+  account row, and the tenant storage quota (admin only) on the Tenants page, which also shows each
+  tenant's usage. Account and tenant actions share one row menu that the scrolling table no longer
+  clips (it opens over the page, upwards when there is no room below, and works by keyboard).
+  Fields left to the server default show its value ("global: 2.00 GB"), read from the new
+  `GET /defaults`; the storage unit selector no longer draws its arrow over the unit.
 - Fix (IMAP UIDPLUS / MOVE, RFC 4315 / RFC 6851): COPYUID now pairs each source UID with its copy
   when the set is not in ascending order (`COPY 3,1` reported the pairs swapped); UID EXPUNGE also
   removes \Deleted messages this session had not seen yet, and without a UID set it is BAD instead
