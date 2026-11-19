@@ -39,6 +39,7 @@ func OpenMailStack(ctx context.Context, configPath string) (*Stack, error) {
 		StorageBytes: cfg.Quota.DefaultStorageBytes,
 		Messages:     cfg.Quota.DefaultMessages,
 	})
+	inbox.SetAccountQuotaDefaultsFunc(dir.DomainQuotaForAccount)
 	return &Stack{
 		Cfg:   cfg,
 		Store: store,

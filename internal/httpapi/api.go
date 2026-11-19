@@ -63,6 +63,9 @@ type Options struct {
 	// MailServices are the client-facing listeners advertised as SRV records (RFC 6186) in the
 	// recommended DNS records.
 	MailServices []MailService
+	// SendLimit is the server-wide submission rate shown as the default under domain overrides
+	// (zero MaxMessages = no limit).
+	SendLimit security.SendLimitConfig
 }
 
 // MailService is one RFC 6186 service: SRV owner prefix (e.g. "_submissions._tcp"), priority and port.
@@ -93,6 +96,7 @@ type Server struct {
 	logFile     string
 	logFileKeep int
 	ui          fs.FS
+	sendLimit   security.SendLimitConfig
 	mux         *http.ServeMux
 }
 
@@ -137,6 +141,7 @@ func New(opts Options) (*Server, error) {
 		blobs:       opts.Blobs,
 		queue:       opts.Queue,
 		inbox:       opts.Inbox,
+		sendLimit:   opts.SendLimit,
 		dkim:        opts.DKIM,
 		domainTLS:   opts.DomainTLS,
 		remote:      opts.Remote,

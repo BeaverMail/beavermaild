@@ -356,9 +356,12 @@ func (t *txn) addQuota(accountID uint32, bytes int64, messages int32) error {
 	}
 	// The limit is checked here, against the usage read in this transaction: checkQuota before it
 	// is only an early refusal, and two concurrent stores could both pass it.
-	if (messages > 0 && rec.MessageLimit > 0 && int64(rec.MessagesUsed)+int64(messages) > int64(rec.MessageLimit)) ||
-		(bytes > 0 && rec.StorageLimit > 0 && rec.StorageUsed+uint64(bytes) > rec.StorageLimit) {
-		return ErrOverQuota
+	if bytes > 0 || messages > 0 { // only a store can pass a limit; expunges skip the lookups
+		storageLimit, messageLimit := t.ib.quotaLimits(t.ctx, accountID, rec)
+		if (messages > 0 && messageLimit > 0 && int64(rec.MessagesUsed)+int64(messages) > int64(messageLimit)) ||
+			(bytes > 0 && storageLimit > 0 && rec.StorageUsed+uint64(bytes) > storageLimit) {
+			return ErrOverQuota
+		}
 	}
 	rec.StorageUsed = uint64(max(int64(rec.StorageUsed)+bytes, 0))
 	rec.MessagesUsed = uint32(max(int64(rec.MessagesUsed)+int64(messages), 0))

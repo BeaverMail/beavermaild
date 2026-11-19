@@ -861,12 +861,12 @@ func (c *Config) NewAuthGate() security.AuthGate {
 	return security.NewRateLimitGate(cfg)
 }
 
-// NewSendGate builds the process-wide submission message rate limit gate from config.
-func (c *Config) NewSendGate() security.SendGate {
+// SendLimit is the process-wide submission rate limit; ok is false when it is disabled.
+func (c *Config) SendLimit() (cfg security.SendLimitConfig, ok bool) {
 	if c.SMTP.SubmissionRateLimit.Disable {
-		return security.NopSendGate{}
+		return security.SendLimitConfig{}, false
 	}
-	cfg := security.DefaultSendLimitConfig()
+	cfg = security.DefaultSendLimitConfig()
 	if n := c.SMTP.SubmissionRateLimit.MaxMessages; n > 0 {
 		cfg.MaxMessages = n
 	}
@@ -875,6 +875,15 @@ func (c *Config) NewSendGate() security.SendGate {
 		if err == nil && d > 0 {
 			cfg.Window = d
 		}
+	}
+	return cfg, true
+}
+
+// NewSendGate builds the process-wide submission message rate limit gate from config.
+func (c *Config) NewSendGate() security.SendGate {
+	cfg, ok := c.SendLimit()
+	if !ok {
+		return security.NopSendGate{}
 	}
 	return security.NewSendLimitGate(cfg)
 }

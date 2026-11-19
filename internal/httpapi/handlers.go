@@ -4,10 +4,13 @@ package httpapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/BeaverMail/beavermaild/internal/directory"
+	"github.com/BeaverMail/beavermaild/internal/mail"
 	"github.com/BeaverMail/beavermaild/internal/storage"
 )
 
@@ -19,6 +22,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST "+apiPrefix+"/auth/login", s.handleLogin)
 	s.mux.HandleFunc("POST "+apiPrefix+"/auth/logout", s.handleLogout)
 	s.mux.HandleFunc("GET "+apiPrefix+"/me", s.requireAuth(s.handleMe))
+	s.mux.HandleFunc("GET "+apiPrefix+"/defaults", s.requireAuth(s.handleDefaults))
 	s.mux.HandleFunc("GET "+apiPrefix+"/tenants", s.requireAuth(s.handleListTenants))
 	s.mux.HandleFunc("POST "+apiPrefix+"/tenants", s.requireAuth(s.requireSameOrigin(s.handleCreateTenant)))
 	s.mux.HandleFunc("PATCH "+apiPrefix+"/tenants/{id}", s.requireAuth(s.requireSameOrigin(s.handlePatchTenant)))
@@ -112,6 +116,49 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleLogout(w http.ResponseWriter, _ *http.Request) {
 	s.clearSessionCookie(w)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// defaultsDTO is what a domain or mailbox gets when it sets nothing itself (0 = unlimited).
+type defaultsDTO struct {
+	StorageBytes    uint64 `json:"storage_bytes"`
+	Messages        uint32 `json:"messages"`
+	SendMaxMessages int    `json:"send_max_messages"`
+	SendWindow      string `json:"send_window,omitempty"`
+}
+
+// handleDefaults returns the server-wide quota and send rate, for those who set domain overrides.
+func (s *Server) handleDefaults(w http.ResponseWriter, r *http.Request) {
+	p, ok := principal(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	switch p.Role {
+	case directory.RoleAdmin, directory.RoleProvisioner, directory.RoleTenantAdmin:
+	default:
+		writeError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+	var dto defaultsDTO
+	if s.inbox != nil {
+		d := s.inbox.QuotaDefaults()
+		dto.StorageBytes, dto.Messages = d.StorageBytes, d.Messages
+	}
+	if s.sendLimit.MaxMessages > 0 {
+		dto.SendMaxMessages, dto.SendWindow = s.sendLimit.MaxMessages, compactDuration(s.sendLimit.Window)
+	}
+	writeJSON(w, http.StatusOK, dto)
+}
+
+// compactDuration writes 1h for 1h0m0s, as domain send windows are typed.
+func compactDuration(d time.Duration) string {
+	switch {
+	case d >= time.Hour && d%time.Hour == 0:
+		return fmt.Sprintf("%dh", d/time.Hour)
+	case d >= time.Minute && d%time.Minute == 0:
+		return fmt.Sprintf("%dm", d/time.Minute)
+	}
+	return d.String()
 }
 
 // handleMe returns the authenticated principal.
@@ -292,6 +339,14 @@ type accountListDTO struct {
 	StorageLimit  uint64 `json:"storage_limit"`
 	MessagesUsed  uint32 `json:"messages_used"`
 	MessagesLimit uint32 `json:"messages_limit"`
+	// The limit is set on the account; false means it follows the domain, then the server default.
+	StorageLimitSet  bool `json:"storage_limit_set"`
+	MessagesLimitSet bool `json:"messages_limit_set"`
+}
+
+func (dto *accountListDTO) setQuota(st mail.QuotaStatus) {
+	dto.StorageUsed, dto.StorageLimit, dto.StorageLimitSet = st.StorageUsed, st.StorageLimit, st.StorageLimitSet
+	dto.MessagesUsed, dto.MessagesLimit, dto.MessagesLimitSet = st.MessagesUsed, st.MessagesLimit, st.MessagesLimitSet
 }
 
 // handleListAccounts lists accounts on a domain when the caller is in scope.
@@ -333,8 +388,7 @@ func (s *Server) handleListAccounts(w http.ResponseWriter, r *http.Request) {
 		}
 		if s.inbox != nil {
 			if st, err := s.inbox.QuotaStatus(r.Context(), a.ID); err == nil {
-				dto.StorageUsed, dto.StorageLimit = st.StorageUsed, st.StorageLimit
-				dto.MessagesUsed, dto.MessagesLimit = st.MessagesUsed, st.MessagesLimit
+				dto.setQuota(st)
 			}
 		}
 		out = append(out, dto)

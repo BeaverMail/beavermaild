@@ -87,13 +87,7 @@ func TestQuotaUsesDomainDefaults(t *testing.T) {
 
 	inbox := mail.NewInbox(store, blob.NewFS(t.TempDir()+"/blobs"))
 	inbox.SetQuotaDefaults(mail.QuotaDefaults{StorageBytes: 10_000, Messages: 100})
-	inbox.SetAccountQuotaDefaultsFunc(func(ctx context.Context, accountID uint32) (mail.QuotaDefaults, bool) {
-		sb, msgs, ok := dir.DomainQuotaForAccount(ctx, accountID)
-		if !ok {
-			return mail.QuotaDefaults{}, false
-		}
-		return mail.QuotaDefaults{StorageBytes: sb, Messages: msgs}, true
-	})
+	inbox.SetAccountQuotaDefaultsFunc(dir.DomainQuotaForAccount)
 
 	if _, err := inbox.Deliver(ctx, acc.ID, []byte("From: a@b\r\n\r\nok\r\n")); err != nil {
 		t.Fatal(err)
@@ -105,8 +99,30 @@ func TestQuotaUsesDomainDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.MessagesLimit != 1 || st.StorageLimit != 50 {
+	if st.MessagesLimit != 1 || st.StorageLimit != 50 || st.MessagesLimitSet || st.StorageLimitSet {
 		t.Fatalf("status %+v", st)
+	}
+
+	// A later change to the domain applies to the existing account too.
+	if _, err := dir.UpdateDomainWithOpts(ctx, "quota.test", directory.DomainCreateOpts{StorageBytes: 5000, Messages: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := inbox.Deliver(ctx, acc.ID, []byte("From: a@b\r\n\r\ntwo\r\n")); err != nil {
+		t.Fatalf("domain raised to 2 messages: %v", err)
+	}
+	// A limit set on the account wins over the domain; reset, the account follows the domain again.
+	three := uint32(3)
+	if err := inbox.SetQuotaLimits(ctx, acc.ID, nil, &three); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := inbox.QuotaStatus(ctx, acc.ID); st.MessagesLimit != 3 || !st.MessagesLimitSet || st.StorageLimit != 5000 || st.StorageLimitSet {
+		t.Fatalf("override: %+v", st)
+	}
+	if err := inbox.ResetQuotaLimits(ctx, acc.ID, false, true); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := inbox.QuotaStatus(ctx, acc.ID); st.MessagesLimit != 2 || st.MessagesLimitSet {
+		t.Fatalf("reset: %+v", st)
 	}
 }
 

@@ -1,4 +1,4 @@
-// Account storage quotas (RFC 2087) with usage counters in SubspaceLookup.
+// Account storage quotas (RFC 9208) with usage counters in SubspaceLookup.
 package mail
 
 import (
@@ -12,7 +12,7 @@ import (
 // ErrOverQuota is returned when a message would exceed account storage limits.
 var ErrOverQuota = errors.New("mail: over quota")
 
-// QuotaDefaults applies to new accounts when no per-account limits are stored.
+// QuotaDefaults applies to every account without a limit of its own.
 type QuotaDefaults struct {
 	StorageBytes uint64
 	Messages     uint32
@@ -25,6 +25,10 @@ type QuotaStatus struct {
 	StorageLimit  uint64 // 0 = unlimited
 	MessagesUsed  uint32
 	MessagesLimit uint32 // 0 = unlimited
+	// StorageLimitSet and MessagesLimitSet report a limit set on the account itself; otherwise the
+	// limit is the domain's, or the server default.
+	StorageLimitSet  bool
+	MessagesLimitSet bool
 }
 
 // QuotaRoot is the IMAP quotaroot for personal mailboxes on this server.
@@ -36,18 +40,25 @@ type quotaRecord struct {
 	MessageLimit uint32 `msgpack:"ml,omitempty"`
 	StorageUsed  uint64 `msgpack:"su,omitempty"`
 	MessagesUsed uint32 `msgpack:"mu,omitempty"`
+	// StorageSet and MessageSet mark a limit set on the account; an unset one follows the domain,
+	// then the server default, as they are at the time of each check.
+	StorageSet bool `msgpack:"ss,omitempty"`
+	MessageSet bool `msgpack:"ms,omitempty"`
 }
+
+// QuotaDefaults returns the server-wide limits set with SetQuotaDefaults (0 = unlimited).
+func (ib *Inbox) QuotaDefaults() QuotaDefaults { return ib.quotaDefault }
 
 // SetQuotaDefaults configures default limits for accounts without stored limits.
 func (ib *Inbox) SetQuotaDefaults(d QuotaDefaults) {
 	ib.quotaDefault = d
 }
 
-// AccountQuotaDefaultsFunc returns per-account defaults (e.g. from domain hosting settings).
-// ok=false keeps the process-wide SetQuotaDefaults values.
-type AccountQuotaDefaultsFunc func(ctx context.Context, accountID uint32) (QuotaDefaults, bool)
+// AccountQuotaDefaultsFunc returns the defaults of the account's domain; a zero value or ok=false
+// keeps the server-wide SetQuotaDefaults value.
+type AccountQuotaDefaultsFunc func(ctx context.Context, accountID uint32) (storageBytes uint64, messages uint32, ok bool)
 
-// SetAccountQuotaDefaultsFunc overrides global defaults when first materializing a quota record.
+// SetAccountQuotaDefaultsFunc sets where domain defaults come from; they are read at every check.
 func (ib *Inbox) SetAccountQuotaDefaultsFunc(fn AccountQuotaDefaultsFunc) {
 	ib.accountQuotaFn = fn
 }
@@ -80,17 +91,43 @@ func (ib *Inbox) QuotaStatus(ctx context.Context, accountID uint32) (QuotaStatus
 	if err != nil {
 		return QuotaStatus{}, err
 	}
+	storageLimit, messageLimit := ib.quotaLimits(ctx, accountID, rec)
 	return QuotaStatus{
-		Root:          QuotaRoot,
-		StorageUsed:   rec.StorageUsed,
-		StorageLimit:  rec.StorageLimit,
-		MessagesUsed:  rec.MessagesUsed,
-		MessagesLimit: rec.MessageLimit,
+		Root:             QuotaRoot,
+		StorageUsed:      rec.StorageUsed,
+		StorageLimit:     storageLimit,
+		MessagesUsed:     rec.MessagesUsed,
+		MessagesLimit:    messageLimit,
+		StorageLimitSet:  rec.StorageSet,
+		MessagesLimitSet: rec.MessageSet,
 	}, nil
 }
 
-// SetQuotaLimits overrides the stored limits for accountID (0 = unlimited); nil keeps the current value.
+// SetQuotaLimits sets limits on accountID itself (0 = unlimited); nil keeps the current value.
 func (ib *Inbox) SetQuotaLimits(ctx context.Context, accountID uint32, storageBytes *uint64, messages *uint32) error {
+	return ib.editQuotaRecord(ctx, accountID, func(rec *quotaRecord) {
+		if storageBytes != nil {
+			rec.StorageLimit, rec.StorageSet = *storageBytes, true
+		}
+		if messages != nil {
+			rec.MessageLimit, rec.MessageSet = *messages, true
+		}
+	})
+}
+
+// ResetQuotaLimits drops the limits set on accountID, so it follows the domain and server defaults.
+func (ib *Inbox) ResetQuotaLimits(ctx context.Context, accountID uint32, storageLimit, messageLimit bool) error {
+	return ib.editQuotaRecord(ctx, accountID, func(rec *quotaRecord) {
+		if storageLimit {
+			rec.StorageLimit, rec.StorageSet = 0, false
+		}
+		if messageLimit {
+			rec.MessageLimit, rec.MessageSet = 0, false
+		}
+	})
+}
+
+func (ib *Inbox) editQuotaRecord(ctx context.Context, accountID uint32, edit func(*quotaRecord)) error {
 	return ib.update(ctx, accountID, func(t *txn) error {
 		key := ib.quotaLookupKey(accountID)
 		var rec quotaRecord
@@ -101,14 +138,37 @@ func (ib *Inbox) SetQuotaLimits(ctx context.Context, accountID uint32, storageBy
 		if err != nil {
 			return err
 		}
-		if storageBytes != nil {
-			rec.StorageLimit = *storageBytes
-		}
-		if messages != nil {
-			rec.MessageLimit = *messages
-		}
+		edit(&rec)
 		return t.setPersist(key, rec)
 	})
+}
+
+// quotaDefaults is the limit an account without its own gets: the domain's, else the server's.
+func (ib *Inbox) quotaDefaults(ctx context.Context, accountID uint32) QuotaDefaults {
+	d := ib.quotaDefault
+	if ib.accountQuotaFn != nil {
+		if sb, msgs, ok := ib.accountQuotaFn(ctx, accountID); ok {
+			if sb > 0 {
+				d.StorageBytes = sb
+			}
+			if msgs > 0 {
+				d.Messages = msgs
+			}
+		}
+	}
+	return d
+}
+
+// quotaLimits returns the limits in force for accountID (0 = unlimited).
+func (ib *Inbox) quotaLimits(ctx context.Context, accountID uint32, rec quotaRecord) (storageBytes uint64, messages uint32) {
+	d := ib.quotaDefaults(ctx, accountID)
+	if rec.StorageSet {
+		d.StorageBytes = rec.StorageLimit
+	}
+	if rec.MessageSet {
+		d.Messages = rec.MessageLimit
+	}
+	return d.StorageBytes, d.Messages
 }
 
 func (ib *Inbox) checkQuota(ctx context.Context, accountID uint32, addBytes uint64, addMessages uint32) error {
@@ -116,10 +176,11 @@ func (ib *Inbox) checkQuota(ctx context.Context, accountID uint32, addBytes uint
 	if err != nil {
 		return err
 	}
-	if rec.MessageLimit > 0 && uint64(rec.MessagesUsed)+uint64(addMessages) > uint64(rec.MessageLimit) {
+	storageLimit, messageLimit := ib.quotaLimits(ctx, accountID, rec)
+	if messageLimit > 0 && uint64(rec.MessagesUsed)+uint64(addMessages) > uint64(messageLimit) {
 		return ErrOverQuota
 	}
-	if rec.StorageLimit > 0 && rec.StorageUsed+addBytes > rec.StorageLimit {
+	if storageLimit > 0 && rec.StorageUsed+addBytes > storageLimit {
 		return ErrOverQuota
 	}
 	// shortcut: the tenant cap spans accounts, so it is checked here only, outside the store
@@ -175,29 +236,13 @@ func (ib *Inbox) loadQuotaRecord(ctx context.Context, accountID uint32) (quotaRe
 	return rec, err
 }
 
-// newQuotaRecord builds the initial record: default limits and usage recomputed from stored messages.
+// newQuotaRecord builds the initial record: no limits of its own, usage recomputed from stored messages.
 func (ib *Inbox) newQuotaRecord(ctx context.Context, accountID uint32) (quotaRecord, error) {
 	usedStorage, usedMessages, err := ib.recomputeQuotaUsage(ctx, accountID)
 	if err != nil {
 		return quotaRecord{}, err
 	}
-	defaults := ib.quotaDefault
-	if ib.accountQuotaFn != nil {
-		if d, ok := ib.accountQuotaFn(ctx, accountID); ok {
-			if d.StorageBytes > 0 {
-				defaults.StorageBytes = d.StorageBytes
-			}
-			if d.Messages > 0 {
-				defaults.Messages = d.Messages
-			}
-		}
-	}
-	return quotaRecord{
-		StorageLimit: defaults.StorageBytes,
-		MessageLimit: defaults.Messages,
-		StorageUsed:  usedStorage,
-		MessagesUsed: usedMessages,
-	}, nil
+	return quotaRecord{StorageUsed: usedStorage, MessagesUsed: usedMessages}, nil
 }
 
 func (ib *Inbox) recomputeQuotaUsage(ctx context.Context, accountID uint32) (storageUsed uint64, messagesUsed uint32, err error) {

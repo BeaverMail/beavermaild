@@ -77,13 +77,7 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 		StorageBytes: cfg.Quota.DefaultStorageBytes,
 		Messages:     cfg.Quota.DefaultMessages,
 	})
-	inbox.SetAccountQuotaDefaultsFunc(func(ctx context.Context, accountID uint32) (mail.QuotaDefaults, bool) {
-		sb, msgs, ok := dir.DomainQuotaForAccount(ctx, accountID)
-		if !ok {
-			return mail.QuotaDefaults{}, false
-		}
-		return mail.QuotaDefaults{StorageBytes: sb, Messages: msgs}, true
-	})
+	inbox.SetAccountQuotaDefaultsFunc(dir.DomainQuotaForAccount)
 	inbox.SetTenantStorageCapFunc(dir.TenantStorageCap)
 	queue := mail.NewQueue(store, blobs)
 
@@ -218,6 +212,7 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 		if assets, ok := webui.Assets(); ok {
 			uiFS = assets
 		}
+		sendLimit, _ := cfg.SendLimit() // disabled: zero value, shown as no limit
 		httpSrv, err = httpapi.New(httpapi.Options{
 			Listen:       cfg.HTTPListen(),
 			PlainListen:  cfg.HTTPPlainListen(),
@@ -237,6 +232,7 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 			LogFile:      logPath,
 			LogFileKeep:  cfg.LogFileKeep(),
 			UI:           uiFS,
+			SendLimit:    sendLimit,
 		})
 		if err != nil {
 			if logFile != nil {

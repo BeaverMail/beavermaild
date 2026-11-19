@@ -100,6 +100,7 @@ Paths are relative to `/api/v1`. "Who" is the minimum role.
 | POST | `/auth/login` | public | `{email, password}` | `{token, account:{email, role, tenant_id}}` |
 | POST | `/auth/logout` | public | | `{"status":"ok"}` |
 | GET | `/me` | any | | `{email, role, tenant_id}` (API key: `apikey-<id>@api-key.invalid`, `tenant_id` 0) |
+| GET | `/defaults` | tenant_admin / provisioner / admin | | `{storage_bytes, messages, send_max_messages, send_window?}`: the server-wide mailbox quota and submission rate that apply when a domain or mailbox sets none (`0` = unlimited) |
 
 ### Tenants
 
@@ -177,11 +178,13 @@ that kind parsed.
 |--------|------|-----|------|----------|
 | GET | `/domains/{domain}/accounts` | any (user: only itself) | | `{"accounts":[Account]}` |
 | POST | `/domains/{domain}/accounts` | tenant_admin / provisioner / admin | `{local_part, password, role?}` | `201` Account |
-| PATCH | `/accounts/{email}` | tenant_admin / provisioner / admin (`login_disabled`: provisioner / admin) | any of `{role, password, active, login_disabled, storage_limit, messages_limit}` | Account |
+| PATCH | `/accounts/{email}` | tenant_admin / provisioner / admin (`login_disabled`: provisioner / admin) | any of `{role, password, active, login_disabled, storage_limit, messages_limit, storage_limit_default, messages_limit_default}` | Account |
 | DELETE | `/accounts/{email}` | tenant_admin / provisioner / admin | | `{email, messages_removed, blobs_removed}` |
 
 **Account**: `id`, `local_part`, `email`, `role`, `tenant_id`, `active`, `login_disabled`, `storage_used`, `storage_limit`,
-`messages_used`, `messages_limit` (limit `0` = unlimited; usage is filled on list and PATCH, not on create).
+`messages_used`, `messages_limit` (limit `0` = unlimited; the limit in force, from the account, its domain or the server
+default), `storage_limit_set`, `messages_limit_set` (`true` when the limit is set on the account itself). Usage and
+limits are filled on list and PATCH, not on create.
 
 - `role` defaults to `user`. A tenant_admin or provisioner can assign only `user` or `tenant_admin`.
 - `dmarc-reports` and `tls-reports` are reserved on every domain (they receive DMARC/TLS reports, see
@@ -206,11 +209,13 @@ existing hash is not supported. Empty passwords are rejected; bcrypt rejects pas
 | Cap the total size of a tenant | `storage_limit` on the tenant (POST or PATCH); admin and provisioner only |
 | Set a default mailbox quota for a domain | `storage_bytes` / `messages_quota` on the domain (POST or full PATCH) |
 | Set the quota of one mailbox | `PATCH /accounts/{email}` with `storage_limit` (bytes) and/or `messages_limit`; `0` = unlimited, an omitted field keeps its value |
+| Put one mailbox back on the defaults | `PATCH /accounts/{email}` with `{"storage_limit_default": true}` and/or `{"messages_limit_default": true}` (not together with the same limit) |
 | Cap the total size of a domain | **not available**: cap the tenant or each mailbox |
 
-The domain default is copied into a mailbox's quota record the first time that mailbox is used (delivery, IMAP,
-usage read). Changing the domain default later does **not** update mailboxes that already have a record: set each
-mailbox explicitly with PATCH. A new limit below current usage blocks further delivery but deletes nothing. Usage is
+Each limit of a mailbox is the one set on the mailbox if any, else the domain default, else the server default
+(`quota.default_storage_bytes`, `quota.default_messages` in the config, readable with `GET /defaults`). They are read at every check, so changing a
+domain or server default applies at once to every mailbox without a limit of its own. A new limit below current usage
+blocks further delivery but deletes nothing. Usage is
 in bytes and counts stored messages only.
 
 Who can set mailbox limits: `admin`, `provisioner`, and `tenant_admin` for accounts in its own tenant (same rule as the
@@ -408,7 +413,8 @@ PATCH /api/v1/accounts/alice@example.org
 ```json
 200 OK
 {"id":7,"local_part":"alice","email":"alice@example.org","role":"user","tenant_id":1,"active":true,
- "storage_used":52428800,"storage_limit":1073741824,"messages_used":1200,"messages_limit":0}
+ "storage_used":52428800,"storage_limit":1073741824,"messages_used":1200,"messages_limit":0,
+ "storage_limit_set":true,"messages_limit_set":true}
 ```
 
 **Change password, then disable**

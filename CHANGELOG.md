@@ -7,6 +7,12 @@
   resources); GETQUOTAROOT also sends the QUOTA response and answers for a mailbox not created
   yet; GETQUOTA on an unknown root is NO. The server advertises QUOTA=RES-STORAGE and
   QUOTA=RES-MESSAGE and STATUS supports DELETED and DELETED-STORAGE.
+- Fix (quota defaults): a mailbox without limits of its own now follows its domain's quota, then the
+  server default, at every check. The defaults were copied into the mailbox the first time it was
+  used, so changing a domain's quota later had no effect on its existing mailboxes; those copies are
+  now ignored and existing mailboxes follow the defaults. `PATCH /accounts/{email}` takes `storage_limit_default` / `messages_limit_default`
+  to go back to the defaults, and accounts report `storage_limit_set` / `messages_limit_set`. Plugin
+  CLI commands now apply domain quotas too.
 - Fix (IMAP UIDPLUS / MOVE, RFC 4315 / RFC 6851): COPYUID now pairs each source UID with its copy
   when the set is not in ascending order (`COPY 3,1` reported the pairs swapped); UID EXPUNGE also
   removes \Deleted messages this session had not seen yet, and without a UID set it is BAD instead

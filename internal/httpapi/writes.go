@@ -471,10 +471,13 @@ type patchAccountRequest struct {
 	Role     *string `json:"role"`
 	Password *string `json:"password"`
 	Active   *bool   `json:"active"`
-	// Mailbox quota overrides (0 = unlimited).
-	StorageLimit  *uint64 `json:"storage_limit"`
-	MessagesLimit *uint32 `json:"messages_limit"`
-	LoginDisabled *bool   `json:"login_disabled"` // admin/provisioner only
+	// Mailbox limits set on the account (0 = unlimited). The *_default flags drop them instead, so
+	// the account follows its domain and the server default.
+	StorageLimit         *uint64 `json:"storage_limit"`
+	MessagesLimit        *uint32 `json:"messages_limit"`
+	StorageLimitDefault  bool    `json:"storage_limit_default"`
+	MessagesLimitDefault bool    `json:"messages_limit_default"`
+	LoginDisabled        *bool   `json:"login_disabled"` // admin/provisioner only
 }
 
 // handlePatchAccount updates role, password, active flag, and/or mailbox quota limits.
@@ -503,7 +506,12 @@ func (s *Server) handlePatchAccount(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	setQuota := req.StorageLimit != nil || req.MessagesLimit != nil
+	resetQuota := req.StorageLimitDefault || req.MessagesLimitDefault
+	if (req.StorageLimitDefault && req.StorageLimit != nil) || (req.MessagesLimitDefault && req.MessagesLimit != nil) {
+		writeError(w, http.StatusBadRequest, "a limit and its _default flag together")
+		return
+	}
+	setQuota := req.StorageLimit != nil || req.MessagesLimit != nil || resetQuota
 	if req.Role == nil && req.Password == nil && req.Active == nil && req.LoginDisabled == nil && !setQuota {
 		writeError(w, http.StatusBadRequest, "no fields to update")
 		return
@@ -558,7 +566,11 @@ func (s *Server) handlePatchAccount(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if setQuota {
-		if err := s.inbox.SetQuotaLimits(r.Context(), acc.ID, req.StorageLimit, req.MessagesLimit); err != nil {
+		err := s.inbox.SetQuotaLimits(r.Context(), acc.ID, req.StorageLimit, req.MessagesLimit)
+		if err == nil && resetQuota {
+			err = s.inbox.ResetQuotaLimits(r.Context(), acc.ID, req.StorageLimitDefault, req.MessagesLimitDefault)
+		}
+		if err != nil {
 			s.log.Error("http set quota", "err", err)
 			writeError(w, http.StatusInternalServerError, "set quota failed")
 			return
@@ -580,8 +592,7 @@ func (s *Server) handlePatchAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.inbox != nil {
 		if st, err := s.inbox.QuotaStatus(r.Context(), acc.ID); err == nil {
-			dto.StorageUsed, dto.StorageLimit = st.StorageUsed, st.StorageLimit
-			dto.MessagesUsed, dto.MessagesLimit = st.MessagesUsed, st.MessagesLimit
+			dto.setQuota(st)
 		}
 	}
 	writeJSON(w, http.StatusOK, dto)
