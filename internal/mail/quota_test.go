@@ -2,6 +2,9 @@ package mail_test
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/BeaverMail/beavermaild/internal/directory"
@@ -164,5 +167,43 @@ func TestTenantStorageCap(t *testing.T) {
 	}
 	if _, err := inbox.Deliver(ctx, b, msg); err != nil {
 		t.Fatalf("cap removed: %v", err)
+	}
+}
+
+// Concurrent deliveries all pass the early check while the account is under its limit; the limit
+// is enforced again inside each store transaction, so the account never ends past it.
+func TestQuotaConcurrentDeliveries(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, "file:"+t.TempDir()+"/store.sqlite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	acc, err := directory.SeedDev(ctx, directory.NewLocal(store))
+	if err != nil {
+		t.Fatal(err)
+	}
+	inbox := mail.NewInbox(store, blob.NewFS(t.TempDir()+"/blobs"))
+	inbox.SetQuotaDefaults(mail.QuotaDefaults{Messages: 3})
+
+	var wg sync.WaitGroup
+	for i := range 30 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := inbox.Deliver(ctx, acc.ID, fmt.Appendf(nil, "From: a@example.org\r\n\r\n%d\r\n", i))
+			if err != nil && !errors.Is(err, mail.ErrOverQuota) {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	st, err := inbox.QuotaStatus(ctx, acc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.MessagesUsed != 3 {
+		t.Fatalf("messages used %d, limit 3", st.MessagesUsed)
 	}
 }

@@ -122,6 +122,9 @@ func (ib *Inbox) checkQuota(ctx context.Context, accountID uint32, addBytes uint
 	if rec.StorageLimit > 0 && rec.StorageUsed+addBytes > rec.StorageLimit {
 		return ErrOverQuota
 	}
+	// shortcut: the tenant cap spans accounts, so it is checked here only, outside the store
+	// transaction; concurrent stores in one tenant all pass it (each account's own limit still
+	// holds). Move it into a tenant-wide transaction if tenants run close to their cap.
 	if ib.tenantCapFn == nil || addBytes == 0 {
 		return nil
 	}

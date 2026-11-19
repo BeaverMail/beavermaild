@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Security (quota): an account's storage and message limits are now checked inside the store
+  transaction; concurrent deliveries, APPENDs or COPYs all passed the earlier check and could take
+  an account far past its limit (30 messages on a limit of 3 in the test).
+
 - Fix (IMAP CONTEXT, RFC 5267 / RFC 5465 7): message numbers in an updating SEARCH or SORT now mean
   the messages they named when the command arrived: an expunge no longer made the context add the
   message that moved into the range, and a context no longer searches the whole mailbox again on

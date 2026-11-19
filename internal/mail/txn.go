@@ -342,7 +342,8 @@ func (t *txn) bumpCount(accountID uint32, mbox *storage.Mailbox, delta int32) er
 	return nil
 }
 
-// addQuota adjusts the usage counters of accountID by the given deltas.
+// addQuota adjusts the usage counters of accountID by the given deltas; an increase past a limit
+// fails the transaction with ErrOverQuota.
 func (t *txn) addQuota(accountID uint32, bytes int64, messages int32) error {
 	key := t.ib.quotaLookupKey(accountID)
 	var rec quotaRecord
@@ -352,6 +353,12 @@ func (t *txn) addQuota(accountID uint32, bytes int64, messages int32) error {
 	}
 	if err != nil {
 		return err
+	}
+	// The limit is checked here, against the usage read in this transaction: checkQuota before it
+	// is only an early refusal, and two concurrent stores could both pass it.
+	if (messages > 0 && rec.MessageLimit > 0 && int64(rec.MessagesUsed)+int64(messages) > int64(rec.MessageLimit)) ||
+		(bytes > 0 && rec.StorageLimit > 0 && rec.StorageUsed+uint64(bytes) > rec.StorageLimit) {
+		return ErrOverQuota
 	}
 	rec.StorageUsed = uint64(max(int64(rec.StorageUsed)+bytes, 0))
 	rec.MessagesUsed = uint32(max(int64(rec.MessagesUsed)+int64(messages), 0))
