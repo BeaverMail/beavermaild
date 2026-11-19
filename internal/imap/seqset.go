@@ -112,10 +112,11 @@ func (ss seqSet) expandSeq(count uint32) []uint32 {
 			out = append(out, n)
 		}
 	}
+	slices.Sort(out) // "3,1" is 1 then 3: COPYUID pairs both sets in mailbox order (RFC 4315 3)
 	return out
 }
 
-// expandUID maps UID sequence sets to message indices (0-based) in msgs.
+// expandUID maps UID sequence sets to message indices (0-based) in msgs, ascending, without duplicates.
 func (ss seqSet) expandUID(msgs []messageRef) []int {
 	if len(msgs) == 0 {
 		return nil
@@ -145,6 +146,7 @@ func (ss seqSet) expandUID(msgs []messageRef) []int {
 			out = append(out, i)
 		}
 	}
+	slices.Sort(out)
 	return out
 }
 

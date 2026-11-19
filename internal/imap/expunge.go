@@ -17,7 +17,7 @@ func (s *session) cmdExpunge(ctx context.Context, tag string) error {
 	if s.readOnly {
 		return s.tagged(tag, "NO mailbox is read-only")
 	}
-	removed, err := s.expungeMarkedDeleted(ctx, nil, true)
+	removed, err := s.expungeMarkedDeleted(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -28,7 +28,7 @@ func (s *session) cmdExpunge(ctx context.Context, tag string) error {
 	return s.tagged(tag, "OK "+code+"EXPUNGE completed")
 }
 
-// cmdUIDExpunge removes \Deleted messages whose UID is in the optional UID set.
+// cmdUIDExpunge removes \Deleted messages whose UID is in the UID set.
 func (s *session) cmdUIDExpunge(ctx context.Context, tag, arg string) error {
 	if !s.selected {
 		return s.tagged(tag, "NO not selected")
@@ -36,22 +36,13 @@ func (s *session) cmdUIDExpunge(ctx context.Context, tag, arg string) error {
 	if s.readOnly {
 		return s.tagged(tag, "NO mailbox is read-only")
 	}
-	arg = strings.TrimSpace(arg)
-	allUIDs := arg == ""
-	uidFilter := make(map[uint32]struct{})
-	if !allUIDs {
-		set, err := parseSeqSet(arg)
-		if err != nil {
-			return s.tagged(tag, "BAD UID EXPUNGE syntax")
-		}
-		for _, idx := range s.resolveIndices(set, true) {
-			if idx < 0 || idx >= len(s.messages) {
-				continue
-			}
-			uidFilter[s.messages[idx].UID] = struct{}{}
-		}
+	// The set is required (RFC 4315 4): without it the command would expunge every \Deleted
+	// message, which is what UID EXPUNGE exists to avoid.
+	set, err := parseSeqSet(strings.TrimSpace(arg))
+	if err != nil {
+		return s.tagged(tag, "BAD UID EXPUNGE syntax")
 	}
-	removed, err := s.expungeMarkedDeleted(ctx, uidFilter, allUIDs)
+	removed, err := s.expungeMarkedDeleted(ctx, &set)
 	if err != nil {
 		return err
 	}
@@ -62,16 +53,23 @@ func (s *session) cmdUIDExpunge(ctx context.Context, tag, arg string) error {
 	return s.tagged(tag, "OK "+code+"UID EXPUNGE completed")
 }
 
-// expungeMarkedDeleted deletes matching \Deleted messages, emits untagged EXPUNGE lines and returns
-// how many it removed. It syncs first, so flags set and expunges done by other sessions count.
-func (s *session) expungeMarkedDeleted(ctx context.Context, uidFilter map[uint32]struct{}, allUIDs bool) (int, error) {
+// expungeMarkedDeleted deletes the \Deleted messages (only those whose UID is in uids, when not
+// nil), emits untagged EXPUNGE lines and returns how many it removed. It syncs first, so flags set,
+// messages added and expunges done by other sessions count; uids is read after that sync (RFC 4315
+// 2.1: every \Deleted message with its UID in the set, also one this session had not seen yet).
+func (s *session) expungeMarkedDeleted(ctx context.Context, uids *seqSet) (int, error) {
 	if err := s.pushIdleMailboxChanges(ctx); err != nil {
 		return 0, err
 	}
+	picked := make([]bool, len(s.messages))
+	if uids != nil {
+		for _, idx := range s.resolveIndices(*uids, true) {
+			picked[idx] = true
+		}
+	}
 	var ids []uint32
-	for _, m := range s.messages {
-		_, picked := uidFilter[m.UID]
-		if m.Meta.Flags&mail.FlagDeleted != 0 && (allUIDs || picked) {
+	for i, m := range s.messages {
+		if m.Meta.Flags&mail.FlagDeleted != 0 && (uids == nil || picked[i]) {
 			ids = append(ids, m.StorageID())
 		}
 	}

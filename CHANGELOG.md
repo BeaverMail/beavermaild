@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Fix (IMAP UIDPLUS / MOVE, RFC 4315 / RFC 6851): COPYUID now pairs each source UID with its copy
+  when the set is not in ascending order (`COPY 3,1` reported the pairs swapped); UID EXPUNGE also
+  removes \Deleted messages this session had not seen yet, and without a UID set it is BAD instead
+  of expunging every \Deleted message; COPY over quota gets `NO [OVERQUOTA]` instead of a dropped
+  connection. COPY works from a mailbox opened with EXAMINE (only MOVE and expunges need write
+  access). FETCH, COPY and MOVE of a message another session expunged answer
+  `NO [EXPUNGEISSUED]` (RFC 5530), so clients resync instead of reporting a failure.
 - Security (quota): an account's storage and message limits are now checked inside the store
   transaction; concurrent deliveries, APPENDs or COPYs all passed the earlier check and could take
   an account far past its limit (30 messages on a limit of 3 in the test).

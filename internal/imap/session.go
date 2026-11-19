@@ -756,7 +756,7 @@ func (s *session) cmdFetch(ctx context.Context, tag, arg string, byUID bool) err
 		}
 	}
 	if gone {
-		return s.tagged(tag, "NO Some of the requested messages no longer exist") // RFC 2180 4.1.2
+		return s.tagged(tag, noExpungeIssued) // RFC 2180 4.1.2
 	}
 	return s.tagged(tag, "OK FETCH completed")
 }
@@ -1020,13 +1020,16 @@ func (s *session) cmdDelete(ctx context.Context, tag, arg string) error {
 	return s.tagged(tag, "OK DELETE completed")
 }
 
+// noExpungeIssued answers a FETCH, COPY or MOVE naming messages another session expunged (RFC 2180 4,
+// RFC 5530 3): the code tells the client to NOOP rather than treat it as a failure.
+const noExpungeIssued = "NO [EXPUNGEISSUED] Some of the requested messages no longer exist"
+
 func (s *session) cmdCopy(ctx context.Context, tag, arg string, byUID bool) error {
 	if !s.selected {
 		return s.tagged(tag, "NO not selected")
 	}
-	if s.readOnly {
-		return s.tagged(tag, "NO mailbox is read-only")
-	}
+	// No read-only check: COPY writes only the destination, EXAMINE protects the selected
+	// mailbox (RFC 3501 6.3.2).
 	setStr, destName, ok := parseSeqSetAndMailbox(arg)
 	if !ok {
 		return s.tagged(tag, "BAD COPY syntax")
@@ -1051,9 +1054,12 @@ func (s *session) cmdCopy(ctx context.Context, tag, arg string, byUID bool) erro
 	ids := s.emailIDsFromIndices(s.resolveIndices(set, byUID))
 	srcUIDs := s.imapUIDsFromIndices(s.resolveIndices(set, byUID))
 	_, destUIDs, err := s.inbox.CopyMessages(ctx, s.principal.AccountID, ids, dest.ID)
+	if errors.Is(err, mail.ErrOverQuota) {
+		return s.tagged(tag, "NO [OVERQUOTA] COPY failed")
+	}
 	if errors.Is(err, storage.ErrNotFound) {
 		// Expunged by another session: nothing was copied (RFC 2180 4.4.1).
-		return s.tagged(tag, "NO Some of the requested messages no longer exist")
+		return s.tagged(tag, noExpungeIssued)
 	}
 	if err != nil {
 		return err
@@ -1098,7 +1104,7 @@ func (s *session) cmdMove(ctx context.Context, tag, arg string, byUID bool) erro
 	destUIDs, err := s.inbox.MoveMessages(ctx, s.principal.AccountID, s.mbox.ID, ids, dest.ID)
 	if errors.Is(err, storage.ErrNotFound) {
 		// Expunged by another session: nothing was copied (RFC 2180 4.4.1).
-		return s.tagged(tag, "NO Some of the requested messages no longer exist")
+		return s.tagged(tag, noExpungeIssued)
 	}
 	if err != nil {
 		return err

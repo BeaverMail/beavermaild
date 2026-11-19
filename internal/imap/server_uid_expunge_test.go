@@ -78,8 +78,9 @@ func TestIMAPUIDExpunge(t *testing.T) {
 	expectPrefix(t, read, "u7 OK")
 }
 
-// TestIMAPUIDExpungeAll removes every deleted message when the UID set is omitted.
-func TestIMAPUIDExpungeAll(t *testing.T) {
+// TestIMAPUIDExpungeNeedsSet: the UID set is required (RFC 4315 4); without it nothing is
+// expunged, the command is BAD.
+func TestIMAPUIDExpungeNeedsSet(t *testing.T) {
 	t.Parallel()
 
 	ctx, accID, inbox, ln, cleanup := startIMAPTestServer(t)
@@ -113,16 +114,9 @@ func TestIMAPUIDExpungeAll(t *testing.T) {
 	expectPrefix(t, read, "a3 OK")
 
 	send(t, conn, "a4 UID EXPUNGE")
-	expectPrefix(t, read, "* 1 EXPUNGE")
-	expectPrefix(t, read, "a4 OK")
+	expectPrefix(t, read, "a4 BAD")
 
-	send(t, conn, "a5 UID FETCH 1:* (UID)")
-	line, err := read.ReadString('\n')
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(line, "UID 1") {
-		t.Fatalf("deleted uid still present %q", line)
-	}
+	send(t, conn, "a5 UID FETCH 1 (UID)")
+	expectPrefix(t, read, "* 1 FETCH (UID 1)")
 	expectPrefix(t, read, "a5 OK")
 }
