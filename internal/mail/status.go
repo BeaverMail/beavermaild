@@ -17,6 +17,10 @@ type MailboxStatus struct {
 	UIDValidity uint32
 	// HighestModSeq is the mailbox HIGHESTMODSEQ (RFC 7162), as reported on SELECT.
 	HighestModSeq uint64
+	// Deleted and DeletedStorage count the \Deleted messages and the octets their expunge would
+	// free from the quota (RFC 9208 4.1.4).
+	Deleted        uint32
+	DeletedStorage uint64
 }
 
 // Status returns requested STATUS fields for mailboxID.
@@ -48,7 +52,7 @@ func statusWants(fields []string, item string) bool {
 func statusNeedFlagCounts(fields []string) bool {
 	for _, f := range fields {
 		switch strings.ToUpper(strings.TrimSpace(f)) {
-		case "UNSEEN", "RECENT":
+		case "UNSEEN", "RECENT", "DELETED", "DELETED-STORAGE":
 			return true
 		}
 	}
@@ -83,7 +87,8 @@ func (ib *Inbox) statusFromMessages(ctx context.Context, accountID, mailboxID ui
 	if err != nil {
 		return MailboxStatus{}, err
 	}
-	var unseen, recent uint32
+	var unseen, recent, deleted uint32
+	var deletedStorage uint64
 	_, _, highestMod := MailboxSelectState(msgs, mbox.HighestModSeq)
 	for _, m := range msgs {
 		if m.Meta.Flags&FlagRecent != 0 {
@@ -92,17 +97,23 @@ func (ib *Inbox) statusFromMessages(ctx context.Context, accountID, mailboxID ui
 		if m.Meta.Flags&FlagSeen == 0 {
 			unseen++
 		}
+		if m.Meta.Flags&FlagDeleted != 0 {
+			deleted++
+			deletedStorage += uint64(m.Meta.Size) // what addQuota takes back on expunge
+		}
 	}
 	uidNext := mbox.UIDNext
 	if uidNext == 0 {
 		uidNext = 1
 	}
 	return MailboxStatus{
-		Messages:      uint32(len(msgs)),
-		Recent:        recent,
-		Unseen:        unseen,
-		UIDNext:       uidNext,
-		UIDValidity:   mbox.UIDValidity,
-		HighestModSeq: highestMod,
+		Messages:       uint32(len(msgs)),
+		Recent:         recent,
+		Unseen:         unseen,
+		UIDNext:        uidNext,
+		UIDValidity:    mbox.UIDValidity,
+		HighestModSeq:  highestMod,
+		Deleted:        deleted,
+		DeletedStorage: deletedStorage,
 	}, nil
 }

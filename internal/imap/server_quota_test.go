@@ -45,6 +45,7 @@ func TestIMAPQuotaGet(t *testing.T) {
 	if !strings.Contains(line, "QUOTAROOT INBOX") || !strings.Contains(line, `""`) {
 		t.Fatalf("quotaroot %q", line)
 	}
+	expectPrefix(t, read, `* QUOTA "" (STORAGE 1 4 MESSAGE 1 100)`)
 	expectPrefix(t, read, "q3 OK")
 
 	send(t, conn, `q4 GETQUOTA ""`)

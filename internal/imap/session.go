@@ -456,7 +456,7 @@ func (s *session) capabilityLine() string {
 		caps = append(caps, "LOGINDISABLED")
 	}
 	if s.principal.AccountID != 0 {
-		caps = append(caps, "ENABLE", "IDLE", "NAMESPACE", "UIDPLUS", "UNSELECT", "SPECIAL-USE", "LIST-EXTENDED", "CONDSTORE", "SORT", "SORT=DISPLAY", "THREAD=REFERENCES", "THREAD=ORDEREDSUBJECT", "ESEARCH", "ESORT", "BINARY", "MULTIAPPEND", "NOTIFY", "UIDBATCHES", "CATENATE", "CONTEXT=SEARCH", "CONTEXT=SORT", "URLAUTH", "URLAUTH=BINARY", "QUOTA")
+		caps = append(caps, "ENABLE", "IDLE", "NAMESPACE", "UIDPLUS", "UNSELECT", "SPECIAL-USE", "LIST-EXTENDED", "CONDSTORE", "SORT", "SORT=DISPLAY", "THREAD=REFERENCES", "THREAD=ORDEREDSUBJECT", "ESEARCH", "ESORT", "BINARY", "MULTIAPPEND", "NOTIFY", "UIDBATCHES", "CATENATE", "CONTEXT=SEARCH", "CONTEXT=SORT", "URLAUTH", "URLAUTH=BINARY", "QUOTA", "QUOTA=RES-STORAGE", "QUOTA=RES-MESSAGE")
 	}
 	return "CAPABILITY " + strings.Join(caps, " ")
 }
@@ -1819,7 +1819,7 @@ func parseStatusArg(arg string) (name string, fields []string, ok bool) {
 	}
 	for _, f := range strings.Fields(strings.ToUpper(inner)) {
 		switch f {
-		case "MESSAGES", "RECENT", "UNSEEN", "UIDNEXT", "UIDVALIDITY", "HIGHESTMODSEQ":
+		case "MESSAGES", "RECENT", "UNSEEN", "UIDNEXT", "UIDVALIDITY", "HIGHESTMODSEQ", "DELETED", "DELETED-STORAGE":
 			fields = append(fields, f)
 		default:
 			return "", nil, false
@@ -1847,6 +1847,10 @@ func formatStatus(name string, fields []string, st mail.MailboxStatus) string {
 			parts = append(parts, fmt.Sprintf("UIDVALIDITY %d", st.UIDValidity))
 		case "HIGHESTMODSEQ":
 			parts = append(parts, fmt.Sprintf("HIGHESTMODSEQ %d", reportedModSeq(st.HighestModSeq))) // 0 would mean NOMODSEQ
+		case "DELETED":
+			parts = append(parts, fmt.Sprintf("DELETED %d", st.Deleted))
+		case "DELETED-STORAGE":
+			parts = append(parts, fmt.Sprintf("DELETED-STORAGE %d", st.DeletedStorage))
 		}
 	}
 	return fmt.Sprintf("STATUS %s (%s)", formatListMailbox(name), strings.Join(parts, " "))

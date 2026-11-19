@@ -1,15 +1,12 @@
-// IMAP QUOTA extension (RFC 2087): GETQUOTA and GETQUOTAROOT.
+// IMAP QUOTA extension (RFC 9208): GETQUOTA and GETQUOTAROOT, resources STORAGE and MESSAGE.
 package imap
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/BeaverMail/beavermaild/internal/mail"
-	"github.com/BeaverMail/beavermaild/internal/storage"
 )
 
 // cmdGetQuotaRoot returns the quotaroot for a mailbox name.
@@ -24,14 +21,16 @@ func (s *session) cmdGetQuotaRoot(ctx context.Context, tag, arg string) error {
 	if err := mail.ValidateMailboxName(name); err != nil {
 		return s.tagged(tag, "BAD mailbox name syntax")
 	}
-	if _, err := s.inbox.ResolveMailbox(ctx, s.principal.AccountID, name); err != nil {
-		if errors.Is(err, storage.ErrNotFound) {
-			return s.tagged(tag, "NO mailbox does not exist")
-		}
+	// The mailbox need not exist: the reply names the root it would get (RFC 9208 4.1.2).
+	st, err := s.inbox.QuotaStatus(ctx, s.principal.AccountID)
+	if err != nil {
 		return err
 	}
 	line := fmt.Sprintf(`QUOTAROOT %s %s`, formatListMailbox(name), formatQuotaRoot(mail.QuotaRoot))
 	if err := s.untagged(line); err != nil {
+		return err
+	}
+	if err := s.untagged(formatQuota(st)); err != nil {
 		return err
 	}
 	return s.tagged(tag, "OK GETQUOTAROOT completed")
@@ -43,8 +42,11 @@ func (s *session) cmdGetQuota(ctx context.Context, tag, arg string) error {
 		return s.tagged(tag, "NO LOGIN required")
 	}
 	root, ok := parseQuotaRootArg(arg)
-	if !ok || root != mail.QuotaRoot {
+	if !ok {
 		return s.tagged(tag, "BAD GETQUOTA syntax")
+	}
+	if root != mail.QuotaRoot {
+		return s.tagged(tag, "NO no such quota root")
 	}
 	st, err := s.inbox.QuotaStatus(ctx, s.principal.AccountID)
 	if err != nil {
@@ -79,19 +81,18 @@ func formatQuotaRoot(root string) string {
 	return `"` + strings.ReplaceAll(root, `"`, `\"`) + `"`
 }
 
+// formatQuota writes one list of "resource usage limit" triplets, only for limited resources (RFC
+// 9208 4.2.1: an unlisted resource is unlimited, a limit of 0 forbids any use). STORAGE is in KiB
+// (5.1), rounded up so a small message does not read as 0 and a sub-KiB limit not as "forbidden".
 func formatQuota(st mail.QuotaStatus) string {
-	var parts []string
-	parts = append(parts, formatQuotaRoot(st.Root))
-	parts = append(parts, formatQuotaResource("STORAGE", st.StorageUsed, st.StorageLimit))
-	if st.MessagesLimit > 0 || st.MessagesUsed > 0 {
-		parts = append(parts, formatQuotaResource("MESSAGE", uint64(st.MessagesUsed), uint64(st.MessagesLimit)))
+	var res []string
+	if st.StorageLimit > 0 {
+		res = append(res, fmt.Sprintf("STORAGE %d %d", kib(st.StorageUsed), kib(st.StorageLimit)))
 	}
-	return "QUOTA " + strings.Join(parts, " ")
+	if st.MessagesLimit > 0 {
+		res = append(res, fmt.Sprintf("MESSAGE %d %d", st.MessagesUsed, st.MessagesLimit))
+	}
+	return fmt.Sprintf("QUOTA %s (%s)", formatQuotaRoot(st.Root), strings.Join(res, " "))
 }
 
-func formatQuotaResource(name string, used, limit uint64) string {
-	if limit == 0 {
-		return fmt.Sprintf("(%s %s)", name, strconv.FormatUint(used, 10))
-	}
-	return fmt.Sprintf("(%s %s %s)", name, strconv.FormatUint(used, 10), strconv.FormatUint(limit, 10))
-}
+func kib(bytes uint64) uint64 { return bytes/1024 + min(bytes%1024, 1) }

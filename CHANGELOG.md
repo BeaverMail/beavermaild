@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Fix (IMAP QUOTA, RFC 9208): QUOTA replies are one list of triplets with only the limited
+  resources and STORAGE in KiB (they were bytes, in separate lists, with pairs for unlimited
+  resources); GETQUOTAROOT also sends the QUOTA response and answers for a mailbox not created
+  yet; GETQUOTA on an unknown root is NO. The server advertises QUOTA=RES-STORAGE and
+  QUOTA=RES-MESSAGE and STATUS supports DELETED and DELETED-STORAGE.
 - Fix (IMAP UIDPLUS / MOVE, RFC 4315 / RFC 6851): COPYUID now pairs each source UID with its copy
   when the set is not in ascending order (`COPY 3,1` reported the pairs swapped); UID EXPUNGE also
   removes \Deleted messages this session had not seen yet, and without a UID set it is BAD instead
