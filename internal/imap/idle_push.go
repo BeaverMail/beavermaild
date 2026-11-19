@@ -3,6 +3,7 @@ package imap
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 
@@ -14,6 +15,11 @@ import (
 // calls it on each change, and every other command before its tagged reply (see tagged).
 func (s *session) pushIdleMailboxChanges(ctx context.Context) error {
 	highest, err := s.inbox.HighestModSeq(ctx, s.principal.AccountID, s.mbox.ID)
+	if errors.Is(err, storage.ErrNotFound) {
+		// Another session deleted the selected mailbox (RFC 2180 3.3).
+		_ = s.untagged("BYE Selected mailbox was deleted, have to disconnect")
+		return errByeSent
+	}
 	if err != nil {
 		return err
 	}

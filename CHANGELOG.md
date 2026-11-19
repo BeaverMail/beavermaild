@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Fix (IMAP IDLE, RFC 2177 / RFC 2180): IDLE works without a selected mailbox (it answered NO,
+  which also broke NOTIFY clients idling in the authenticated state); a DONE that arrives in two
+  pieces no longer gets BAD; a session whose selected mailbox another session deletes gets
+  `* BYE` instead of a dropped connection; STORE naming only messages expunged by another session
+  answers `NO [EXPUNGEISSUED]` (it was OK, as if the flags had changed); the inactivity logout
+  sends `* BYE` first. A warning is logged when `imap.read_timeout` is under the 30 minutes
+  RFC 3501 requires.
 - Fix (IMAP QUOTA, RFC 9208): QUOTA replies are one list of triplets with only the limited
   resources and STORAGE in KiB (they were bytes, in separate lists, with pairs for unlimited
   resources); GETQUOTAROOT also sends the QUOTA response and answers for a mailbox not created

@@ -97,6 +97,9 @@ func Open(ctx context.Context, log *slog.Logger, cfg *config.Config) (*App, erro
 	if !cfg.TLSRequired() {
 		log.Warn("tls.required is false: IMAP accepts LOGIN and AUTHENTICATE in clear (RFC 8314 4: deprecate cleartext access)")
 	}
+	if _, rt, err := cfg.IMAPListenerLimits(); err == nil && rt > 0 && rt < 30*time.Minute {
+		log.Warn("imap.read_timeout is under 30 minutes: idle IMAP clients are logged out sooner than RFC 3501 5.4 allows", "read_timeout", rt)
+	}
 	if domainTLS.OnlySelfSigned(ctx) {
 		log.Warn("tls: only the self-signed certificate is available; mail clients (IMAP, submission) will reject it. Set tls.cert_file, tls.acme_hosts or a domain certificate (RFC 8314 4.4)")
 	}

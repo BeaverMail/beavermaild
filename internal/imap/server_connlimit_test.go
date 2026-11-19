@@ -107,9 +107,12 @@ func TestIMAPReadTimeout(t *testing.T) {
 		t.Fatalf("greeting: %q err=%v", line, err)
 	}
 	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	_, err = read.ReadString('\n')
-	if err == nil {
-		t.Fatal("expected connection close after idle read timeout")
+	// RFC 3501 7.1.5: the autologout is announced with BYE, then the connection closes.
+	if line, err := read.ReadString('\n'); err != nil || !strings.HasPrefix(line, "* BYE") {
+		t.Fatalf("after idle read timeout: %q err=%v", line, err)
+	}
+	if _, err := read.ReadString('\n'); err == nil {
+		t.Fatal("expected connection close after BYE")
 	}
 }
 

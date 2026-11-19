@@ -81,7 +81,8 @@ func TestIMAPSyncAcrossSessions(t *testing.T) {
 	send(t, b, "b3 EXPUNGE")
 	until(rb, "b3")
 	send(t, a, `a3 STORE 1 +FLAGS (\Flagged)`)
-	if lines, tagged := until(ra, "a3"); len(lines) != 0 || !strings.HasPrefix(tagged, "a3 OK") {
+	// RFC 2180 4.2.2: STORE naming only expunged messages is NO, with nothing to report.
+	if lines, tagged := until(ra, "a3"); len(lines) != 0 || !strings.HasPrefix(tagged, "a3 NO [EXPUNGEISSUED]") {
 		t.Fatalf("store on expunged message: %q %q", lines, tagged)
 	}
 	send(t, a, "a4 FETCH 1 BODY.PEEK[]")

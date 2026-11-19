@@ -206,7 +206,7 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn, secure bool, lim 
 	err := sess.run(context.WithoutCancel(ctx))
 	switch {
 	case err == nil || ctx.Err() != nil:
-	case clientGone(err):
+	case clientGone(err), errors.Is(err, errByeSent):
 		s.log.Debug("imap session closed", slog.Any("err", err))
 	default:
 		// A server-side failure (storage, contention...) that dropped the connection.

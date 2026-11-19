@@ -1,4 +1,4 @@
-// IMAP IDLE command (RFC 2177 subset).
+// IMAP IDLE command (RFC 2177).
 package imap
 
 import (
@@ -12,13 +12,11 @@ import (
 
 const idlePollInterval = 500 * time.Millisecond
 
-// cmdIdle waits for DONE while polling the selected mailbox for new messages.
+// cmdIdle waits for DONE while polling the selected mailbox, if any, for changes. IDLE is valid in
+// the authenticated state too (RFC 2177 4), where only NOTIFY has events to send.
 func (s *session) cmdIdle(ctx context.Context, tag string) error {
 	if s.principal.AccountID == 0 {
 		return s.tagged(tag, "NO LOGIN required")
-	}
-	if !s.selected {
-		return s.tagged(tag, "NO not selected")
 	}
 	if _, err := fmt.Fprintf(s.conn, "+ idling\r\n"); err != nil {
 		return err
@@ -31,7 +29,8 @@ func (s *session) cmdIdle(ctx context.Context, tag string) error {
 	started := time.Now()
 	for {
 		if s.readTimeout > 0 && time.Since(started) > s.readTimeout {
-			return fmt.Errorf("imap: idle exceeded %s without DONE", s.readTimeout) // RFC 2177 allows closing after 30m
+			_ = s.untagged("BYE Autologout; idle for too long") // RFC 2177 3 allows it, RFC 3501 5.4: not under 30 min
+			return errByeSent
 		}
 		if s.isStopping() {
 			_ = s.untagged("BYE [UNAVAILABLE] Server shutting down")
@@ -56,8 +55,10 @@ func (s *session) cmdIdle(ctx context.Context, tag string) error {
 			if err := s.notifyPoll(ctx, true); err != nil {
 				return err
 			}
-		} else if err := s.pushIdleMailboxChanges(ctx); err != nil {
-			return err
+		} else if s.selected {
+			if err := s.pushIdleMailboxChanges(ctx); err != nil {
+				return err
+			}
 		}
 	}
 }

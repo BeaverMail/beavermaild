@@ -11,3 +11,7 @@ const drainTimeout = 5 * time.Second
 
 // errShuttingDown ends a session after it has sent BYE.
 var errShuttingDown = errors.New("imap: server shutting down")
+
+// errByeSent ends a session the server closed on purpose after BYE (autologout, selected mailbox
+// deleted): not a failure to log.
+var errByeSent = errors.New("imap: session closed after BYE")

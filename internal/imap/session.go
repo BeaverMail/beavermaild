@@ -67,6 +67,7 @@ type session struct {
 	lastCmd         string // command being run, for logs; never its arguments (LOGIN carries a password)
 	lastTag         string
 	idleWatchModSeq uint64       // mailbox HighestModSeq at last IDLE sync
+	partial         []byte       // start of a line whose read hit a deadline (IDLE poll)
 	stopping        *atomic.Bool // server shutdown flag (nil when not served by a Server)
 }
 
@@ -134,7 +135,7 @@ func (s *session) serveCommands(ctx context.Context) error {
 				_ = s.untagged("BYE [UNAVAILABLE] Server shutting down")
 				return nil
 			}
-			return err
+			return s.autologout(err)
 		}
 		if line == "" {
 			continue
@@ -820,9 +821,11 @@ func (s *session) cmdStore(ctx context.Context, tag, arg string, byUID bool) err
 		return err
 	}
 	var failed []uint32
+	gone := 0
 	for i, idx := range indices {
 		msg, res := s.messages[idx], results[i]
 		if res.Gone {
+			gone++
 			continue // expunged by another session: its EXPUNGE comes with the next sync (RFC 2180 4.2)
 		}
 		if !res.Applied {
@@ -861,6 +864,10 @@ func (s *session) cmdStore(ctx context.Context, tag, arg string, byUID bool) err
 	}
 	if len(failed) > 0 {
 		return s.tagged(tag, "OK [MODIFIED "+formatUIDSet(failed)+"] Conditional STORE failed")
+	}
+	if !silent && gone > 0 && gone == len(indices) {
+		// RFC 2180 4.2.2: every message named was expunged elsewhere; a mixture stays OK (4.2.3).
+		return s.tagged(tag, "NO [EXPUNGEISSUED] The messages have been deleted by another session")
 	}
 	return s.tagged(tag, "OK STORE completed")
 }
@@ -1556,6 +1563,16 @@ func (s *session) readLine() (string, error) {
 	return s.readLineNoDeadline()
 }
 
+// autologout says BYE before a read timeout closes the session (RFC 3501 7.1.5); other read errors
+// pass through.
+func (s *session) autologout(err error) error {
+	if ne := net.Error(nil); errors.As(err, &ne) && ne.Timeout() {
+		_ = s.untagged("BYE Autologout; idle for too long")
+		return errByeSent
+	}
+	return err
+}
+
 // maxLineBytes bounds one command line. RFC 7162 4 asks for at least 8192; ID (RFC 2971) alone
 // can send 30 pairs of up to 1024 octets.
 const maxLineBytes = 64 << 10
@@ -1566,7 +1583,8 @@ var errLineTooLong = errors.New("imap: line too long")
 // readLineNoDeadline reads one line under whatever read deadline the caller set. It stops at
 // maxLineBytes instead of buffering whatever a client sends before its newline.
 func (s *session) readLineNoDeadline() (string, error) {
-	var buf []byte
+	buf := s.partial
+	s.partial = nil
 	for {
 		chunk, err := s.r.ReadSlice('\n')
 		if len(buf)+len(chunk) > maxLineBytes+2 { // +2: the CRLF
@@ -1576,9 +1594,14 @@ func (s *session) readLineNoDeadline() (string, error) {
 		if err == nil {
 			return strings.TrimRight(string(buf), "\r\n"), nil
 		}
-		if !errors.Is(err, bufio.ErrBufferFull) {
-			return "", err
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
 		}
+		// A deadline that expires mid-line (IDLE's poll) keeps what arrived: "DO" now, "NE" later.
+		if ne := net.Error(nil); errors.As(err, &ne) && ne.Timeout() {
+			s.partial = buf
+		}
+		return "", err
 	}
 }
 
