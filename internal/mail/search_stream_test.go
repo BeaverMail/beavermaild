@@ -8,24 +8,24 @@ import (
 	"testing"
 )
 
-// readerContains must answer exactly what rawContains answers on the whole message, whatever the
-// chunk size: matches across a cut, multi-byte runes split by a cut, case folding that changes the
-// byte length (Kelvin sign, dotted I) and invalid UTF-8.
-func TestReaderContainsMatchesRawContains(t *testing.T) {
+// readerContains must answer exactly what textContains answers on the whole message, whatever the
+// chunk size: matches across a cut, multi-byte runes split by a cut, mappings that change the byte
+// length (Kelvin sign, dotted I, ligatures, decomposed accents) and invalid UTF-8.
+func TestReaderContainsMatchesTextContains(t *testing.T) {
 	defer func(n int) { searchChunk = n }(searchChunk)
 	texts := []string{
 		"", "hello world", "HELLO\r\nWORLD", "Straße und STRASSE", "Kelvin KELVIN", "İstanbul ISTANBUL",
-		"caf\xc3\xa9 CAF\xc3\x89", "bad \xff\xfe bytes \xe2\x82 cut", strings.Repeat("ab", 300) + "needle" + strings.Repeat("é", 200),
+		"caf\xc3\xa9 CAF\xc3\x89", "bad \xff\xfe bytes \xe2\x82 cut", "\uFB01le cafe\u0301 \uFF26oo", "cut rune \xe2\x82", strings.Repeat("ab", 300) + "needle" + strings.Repeat("é", 200),
 	}
 	needles := []string{"world", "o\r\nw", "straße", "kelvin", "Kelvin", "istanbul", "i̇stanbul", "café", "\xff\xfe",
-		"\xe2\x82", "\xbd", "needle", "éé", "aba", "zzz"}
+		"\xe2\x82", "\xbd", "needle", "éé", "aba", "zzz", "FILE", "café", "foo", "e", ""}
 	for _, size := range []int{1, 2, 3, 5, 7, 64, 64 << 10} {
 		searchChunk = size
 		for _, text := range texts {
 			for _, n := range needles {
-				want := rawContains([]byte(text), n)
-				if got := readerContains(strings.NewReader(text), n); got != want {
-					t.Errorf("chunk %d: readerContains(%q, %q) = %v, rawContains = %v", size, text, n, got, want)
+				want := textContains(text, n)
+				if got, _ := readerContains(strings.NewReader(text), n, true); got != want {
+					t.Errorf("chunk %d: readerContains(%q, %q) = %v, textContains = %v", size, text, n, got, want)
 				}
 			}
 		}
@@ -36,7 +36,7 @@ func TestReaderContainsMatchesRawContains(t *testing.T) {
 // message ever existing as one slice.
 func TestSearchTextStreamsLargeMessage(t *testing.T) {
 	body := io.MultiReader(strings.NewReader("Subject: x\r\n\r\n"), io.LimitReader(zeros{}, 32<<20), strings.NewReader("Needle\r\n"))
-	if !readerContains(body, "needle") {
+	if found, _ := readerContains(body, "needle", true); !found {
 		t.Fatal("needle at the end of a large message not found")
 	}
 }
@@ -132,7 +132,7 @@ func TestSearchTextDecodesTransferEncodings(t *testing.T) {
 		{"nested", "secret word", false, true},
 		{"hdr", "été", false, true},     // TEXT covers the decoded header
 		{"hdr", "été", true, false},     // BODY does not
-		{"b64", "aGVsbG8g", true, true}, // the raw bytes still match too
+		{"b64", "aGVsbG8g", true, false}, // RFC 5255 4.6 a: the decoded text, not the base64
 		{"qp", "absent", false, false},
 	}
 	for _, tc := range cases {

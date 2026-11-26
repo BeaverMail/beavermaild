@@ -300,7 +300,7 @@ func headerContains(haystack, needle string) bool {
 	if decoded, err := headerDecoder.DecodeHeader(haystack); err == nil {
 		haystack = decoded
 	}
-	return rawContains([]byte(haystack), needle)
+	return textContains(haystack, needle)
 }
 
 // addressContains matches an address criterion against the field as written and without RFC 5322
@@ -342,11 +342,6 @@ func stripAddressComments(s string) string {
 		}
 	}
 	return out
-}
-
-// rawContains is case-insensitive substring search on RFC822 bytes or header text.
-func rawContains(raw []byte, needle string) bool {
-	return bytes.Contains(bytes.ToLower(raw), bytes.ToLower([]byte(needle)))
 }
 
 // MatchSearchUID returns UIDs matching criteria (for UID SEARCH responses).

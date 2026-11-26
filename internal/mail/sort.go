@@ -7,11 +7,8 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/BeaverMail/beavermaild/internal/rfc5322"
-	"golang.org/x/text/unicode/norm"
 )
 
 // SortKey is one RFC 5256 sort criterion.
@@ -146,16 +143,6 @@ func loadSortFields(m Message, load RawLoader) sortFields {
 		f.date = t
 	}
 	return f
-}
-
-// unicodeCasemap is the i;unicode-casemap key of s (RFC 5051), the collation SORT and THREAD MUST
-// use (RFC 5256 7): each character titlecased, then decomposed (NFKD, which RFC 5051 allows), then
-// compared as octets. Invalid UTF-8 is compared as it is (i;octet).
-func unicodeCasemap(s string) string {
-	if !utf8.ValidString(s) {
-		return s
-	}
-	return norm.NFKD.String(strings.Map(unicode.ToTitle, s))
 }
 
 func compareSortFields(a, b sortFields, key SortKey) int {

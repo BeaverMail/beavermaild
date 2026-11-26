@@ -34,7 +34,8 @@ func TestIMAPSortAndThread(t *testing.T) {
 	expectPrefix(t, read, "s1 OK")
 	send(t, conn, "s2 CAPABILITY")
 	line, _ := read.ReadString('\n')
-	if !strings.Contains(line, "SORT") || !strings.Contains(line, "THREAD=REFERENCES") {
+	// RFC 5256 7 / RFC 5255 4.3: SORT collates per I18NLEVEL=1, which is advertised once authenticated.
+	if !strings.Contains(line, "SORT") || !strings.Contains(line, "THREAD=REFERENCES") || !strings.Contains(line, " I18NLEVEL=1") {
 		t.Fatalf("caps %q", line)
 	}
 	expectPrefix(t, read, "s2 OK")

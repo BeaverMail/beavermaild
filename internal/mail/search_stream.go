@@ -10,7 +10,9 @@ import (
 	"mime/quotedprintable"
 	"net/textproto"
 	"strings"
-	"unicode/utf8"
+
+	"golang.org/x/text/encoding"
+	"golang.org/x/text/encoding/htmlindex"
 )
 
 // RawLoader opens the RFC 5322 bytes of a message for SEARCH, SORT and THREAD; the caller closes
@@ -32,9 +34,6 @@ func BytesLoader(load func(Message) ([]byte, error)) RawLoader {
 // maxSearchHeader caps the header block read for header criteria, SORT and THREAD: fields past
 // it are not seen, so a message with a huge header cannot be pulled into memory.
 const maxSearchHeader = 256 << 10
-
-// searchChunk is how much of a message TEXT and BODY lowercase and scan at a time.
-var searchChunk = 64 << 10
 
 // loadHeader returns m's header block, ending with its empty line, capped at maxSearchHeader.
 func loadHeader(load RawLoader, m Message) ([]byte, bool) {
@@ -68,52 +67,49 @@ func readHeader(br *bufio.Reader, limit int) []byte {
 }
 
 // openContains reports whether m contains needle (only its body when body is set), reading it
-// chunk by chunk. RFC 3501 6.4.4 compares decoded text: the raw bytes are scanned first, then,
-// if they did not match, the text of base64 and quoted-printable parts and, for TEXT, the RFC 2047
-// words of the header.
+// once, as a stream. Text is compared as RFC 5255 4.6 says: transfer encodings and RFC 2047 words
+// removed, charsets converted to UTF-8, then i;unicode-casemap (i;octet where that fails). TEXT
+// also covers the header fields of the message and of its parts.
 func openContains(load RawLoader, m Message, needle string, body bool) bool {
 	r, err := load(m)
 	if err != nil {
 		return false
 	}
-	br := bufio.NewReader(r)
-	if body {
-		readHeader(br, 0)
-	}
-	found := readerContains(br, needle)
-	r.Close()
-	if found {
-		return true
-	}
-	if r, err = load(m); err != nil {
-		return false
-	}
 	defer r.Close()
-	tp := textproto.NewReader(bufio.NewReader(r))
-	hdr, err := tp.ReadMIMEHeader()
-	if err != nil && len(hdr) == 0 {
-		return false
-	}
-	if !body {
-		for _, values := range hdr {
-			for _, v := range values {
-				if strings.Contains(v, "=?") && headerContains(v, needle) {
-					return true
-				}
+	br := bufio.NewReader(r)
+	hdr := parseHeaderBlock(readHeader(br, maxSearchHeader))
+	return entityContains(hdr, br, needle, !body, 0)
+}
+
+// parseHeaderBlock parses a header block read by readHeader.
+func parseHeaderBlock(raw []byte) textproto.MIMEHeader {
+	hdr, _ := textproto.NewReader(bufio.NewReader(bytes.NewReader(raw))).ReadMIMEHeader()
+	return hdr
+}
+
+// fieldsContain reports whether a header field, as "Name: value" with encoded words decoded,
+// holds needle.
+func fieldsContain(hdr textproto.MIMEHeader, needle string) bool {
+	for name, values := range hdr {
+		for _, v := range values {
+			if headerContains(name+": "+v, needle) {
+				return true
 			}
 		}
 	}
-	return decodedPartsContain(hdr, tp.R, needle, 0)
+	return false
 }
 
-// maxSearchMIMEDepth bounds the MIME levels the decoded pass enters, like the IMAP walks.
+// maxSearchMIMEDepth bounds the MIME levels the walk enters, like the IMAP walks.
 const maxSearchMIMEDepth = 100
 
-// decodedPartsContain walks the entity with header hdr and body r as a stream and reports whether
-// the decoded text of a base64 or quoted-printable leaf holds needle. Other leaves were covered by
-// the raw pass. shortcut: decoded bytes are matched as they are, without charset conversion, so a
-// UTF-8 needle finds UTF-8 and US-ASCII parts only; convert when a charset library is allowed.
-func decodedPartsContain(hdr textproto.MIMEHeader, r io.Reader, needle string, depth int) bool {
+// entityContains walks the entity with header hdr and body r as a stream and reports whether the
+// decoded text of a leaf holds needle; with headers set, its header fields and those of every
+// part and attached message count too.
+func entityContains(hdr textproto.MIMEHeader, r io.Reader, needle string, headers bool, depth int) bool {
+	if headers && fieldsContain(hdr, needle) {
+		return true
+	}
 	if depth >= maxSearchMIMEDepth {
 		return false
 	}
@@ -126,25 +122,40 @@ func decodedPartsContain(hdr textproto.MIMEHeader, r io.Reader, needle string, d
 			if err != nil {
 				return false
 			}
-			if decodedPartsContain(p.Header, p, needle, depth+1) {
+			if entityContains(p.Header, p, needle, headers, depth+1) {
 				return true
 			}
 		}
 	case mt == "message/rfc822":
-		tp := textproto.NewReader(bufio.NewReader(r))
-		inner, err := tp.ReadMIMEHeader()
-		if err != nil && len(inner) == 0 {
-			return false
-		}
-		return decodedPartsContain(inner, tp.R, needle, depth+1)
+		br := bufio.NewReader(r)
+		inner := parseHeaderBlock(readHeader(br, maxSearchHeader))
+		return entityContains(inner, br, needle, headers, depth+1)
 	}
 	switch strings.ToLower(strings.TrimSpace(hdr.Get("Content-Transfer-Encoding"))) {
 	case "base64":
-		return readerContains(base64.NewDecoder(base64.RawStdEncoding, base64Alphabet{r}), needle)
+		r = base64.NewDecoder(base64.RawStdEncoding, base64Alphabet{r})
 	case "quoted-printable":
-		return readerContains(quotedprintable.NewReader(r), needle)
+		r = quotedprintable.NewReader(r)
 	}
-	return false
+	text, convertible := charsetReader(r, params["charset"])
+	found, _ := readerContains(text, needle, convertible)
+	return found
+}
+
+// charsetReader converts a part's text to UTF-8 (RFC 5255 4.6 b); UTF-8 and US-ASCII (also when
+// no charset is named) pass as they are. convertible is false for a charset no decoder knows: the
+// text is then compared as octets (4.6 c).
+func charsetReader(r io.Reader, charset string) (_ io.Reader, convertible bool) {
+	switch cs := strings.ToLower(strings.TrimSpace(charset)); cs {
+	case "", "utf-8", "utf8", "us-ascii", "ascii":
+		return r, true
+	default:
+		e, err := htmlindex.Get(cs)
+		if err != nil || e == encoding.Replacement {
+			return r, false
+		}
+		return e.NewDecoder().Reader(r), true
+	}
 }
 
 // base64Alphabet passes only the base64 alphabet: RFC 2045 6.8 says every other character, padding
@@ -166,49 +177,4 @@ func (a base64Alphabet) Read(p []byte) (int, error) {
 			return k, err
 		}
 	}
-}
-
-// readerContains is rawContains over a stream. Chunks are cut on rune starts, so lowercasing them
-// one by one gives the bytes lowercasing the whole stream would, and each chunk carries the tail
-// of the previous one, long enough for any match crossing the cut.
-func readerContains(r io.Reader, needle string) bool {
-	n := bytes.ToLower([]byte(needle))
-	// A lowered byte comes from at most utf8.UTFMax raw bytes; the extra rune covers the cut.
-	keep := utf8.UTFMax*len(n) + utf8.UTFMax
-	// The carried tail is at most keep bytes plus a rune held back at the cut: searchChunk new
-	// bytes always fit after it.
-	buf := make([]byte, keep+utf8.UTFMax+searchChunk)
-	have := 0
-	for {
-		k, err := io.ReadFull(r, buf[have:])
-		have += k
-		end := have
-		if err == nil {
-			end = completeRunes(buf[:have])
-		}
-		if bytes.Contains(bytes.ToLower(buf[:end]), n) {
-			return true
-		}
-		if err != nil {
-			return false
-		}
-		start := max(0, end-keep)
-		for start < end && !utf8.RuneStart(buf[start]) {
-			start++
-		}
-		have = copy(buf, buf[start:have])
-	}
-}
-
-// completeRunes returns the length of b without a rune cut off at its end.
-func completeRunes(b []byte) int {
-	for i := len(b) - 1; i >= 0 && i >= len(b)-utf8.UTFMax; i-- {
-		if utf8.RuneStart(b[i]) {
-			if !utf8.FullRune(b[i:]) {
-				return i
-			}
-			break
-		}
-	}
-	return len(b)
 }

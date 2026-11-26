@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Fix (IMAP SEARCH/SORT, RFC 5255 / RFC 5051): the server now advertises I18NLEVEL=1. SEARCH
+  compares text with i;unicode-casemap, as SORT already did ("Ｆull" matches "FULL", "cafe"
+  matches "café"), and converts each body part from its declared charset (an ISO-8859-1 part
+  is found by "CAFÉ"). Text in an unknown charset or not valid UTF-8 is compared byte for byte,
+  and SORT puts such strings after all the others. SEARCH TEXT and BODY read the message once and
+  match decoded text only (raw base64 no longer matches). A long run of characters with large
+  decompositions no longer stops the search before the end of the text.
 - Fix (IMAP UIDBATCHES, RFC 10022): repeating the same UIDBATCHES on a mailbox that has not changed
   by more than half a batch is refused with NO [LIMIT], as the RFC asks of servers; other batch
   sizes and batch ranges stay allowed. Numbers past 32 bits are BAD in UIDBATCHES, ESEARCH PARTIAL
