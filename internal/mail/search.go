@@ -3,7 +3,6 @@ package mail
 
 import (
 	"bytes"
-	"mime"
 	"net/textproto"
 	"slices"
 	"strings"
@@ -344,10 +343,6 @@ func stripAddressComments(s string) string {
 	}
 	return out
 }
-
-// headerDecoder decodes the charsets the stdlib knows (UTF-8, ISO-8859-1, US-ASCII);
-// words in other charsets fail to decode and the raw value is searched instead.
-var headerDecoder = new(mime.WordDecoder)
 
 // rawContains is case-insensitive substring search on RFC822 bytes or header text.
 func rawContains(raw []byte, needle string) bool {

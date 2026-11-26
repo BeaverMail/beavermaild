@@ -5,11 +5,11 @@ import (
 	"bytes"
 	"fmt"
 	"mime"
-	"net/mail"
 	"strconv"
 	"strings"
 	"unicode/utf8"
 
+	"github.com/BeaverMail/beavermaild/internal/mail"
 	"github.com/BeaverMail/beavermaild/internal/rfc5322"
 )
 
@@ -44,154 +44,24 @@ func envelopeNIL() string {
 	return "(NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL)"
 }
 
-// parseEnvelopeAddresses parses RFC 822 address lists, skipping group syntax entries.
-func parseEnvelopeAddresses(s string) []*mail.Address {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return nil
-	}
-	addrs, err := mail.ParseAddressList(s)
-	if err != nil {
-		if a, err := mail.ParseAddress(s); err == nil {
-			return []*mail.Address{a}
-		}
-		return parseEnvelopeAddressesFallback(s)
-	}
-	out := make([]*mail.Address, 0, len(addrs))
-	for _, a := range addrs {
-		if strings.TrimSpace(a.Address) == "" {
-			continue
-		}
-		out = append(out, a)
-	}
-	if len(out) > 0 {
-		return out
-	}
-	return parseEnvelopeAddressesFallback(s)
-}
-
-// parseEnvelopeAddressesFallback extracts angle-addr tokens when the stdlib parser fails.
-func parseEnvelopeAddressesFallback(s string) []*mail.Address {
-	var out []*mail.Address
-	for s != "" {
-		s = strings.TrimLeft(s, " \t,")
-		if s == "" {
-			break
-		}
-		if i := strings.IndexByte(s, '<'); i >= 0 {
-			j := strings.IndexByte(s[i:], '>')
-			if j < 0 {
-				break
-			}
-			j += i
-			addr := strings.TrimSpace(s[i+1 : j])
-			name := strings.TrimSpace(strings.Trim(s[:i], `"`))
-			if addr != "" {
-				out = append(out, &mail.Address{Name: name, Address: addr})
-			}
-			s = s[j+1:]
-			continue
-		}
-		if at := strings.IndexByte(s, '@'); at > 0 {
-			end := strings.IndexAny(s[at:], ",; \t")
-			addr := strings.TrimSpace(s)
-			if end >= 0 {
-				addr = strings.TrimSpace(s[:at+end])
-				s = s[at+end:]
-			} else {
-				s = ""
-			}
-			if a, err := mail.ParseAddress(addr); err == nil {
-				out = append(out, a)
-			}
-			continue
-		}
-		break
-	}
-	return out
-}
-
-// formatAddressField renders an address header for ENVELOPE. RFC 822 group syntax
-// ("name: a@b, c@d;") becomes a group start (NIL NIL "name" NIL), the members, and a group end
-// (NIL NIL NIL NIL), as RFC 3501 requires; groups are not expanded away.
+// formatAddressField renders an address header for ENVELOPE (RFC 3501 7.4.2), groups as a group
+// start, the members and a group end; the list is the one SORT derives its keys from.
 func formatAddressField(value string) string {
-	var parts []string
-	var cur strings.Builder
-	flush := func() {
-		for _, a := range parseEnvelopeAddresses(cur.String()) {
-			parts = append(parts, formatMailbox(a))
-		}
-		cur.Reset()
-	}
-	inQuote, inGroup := false, false
-	angle, comment := 0, 0
-	for i := 0; i < len(value); i++ {
-		c := value[i]
-		switch {
-		case c == '\\' && i+1 < len(value):
-			cur.WriteByte(c)
-			i++
-			c = value[i]
-		case comment > 0:
-			if c == '(' {
-				comment++
-			} else if c == ')' {
-				comment--
-			}
-		case inQuote:
-			inQuote = c != '"'
-		case c == '"':
-			inQuote = true
-		case c == '(':
-			comment++
-		case c == '<':
-			angle++
-		case c == '>' && angle > 0:
-			angle--
-		case angle == 0 && c == ':' && !inGroup:
-			name := strings.Trim(strings.TrimSpace(cur.String()), `"`)
-			cur.Reset()
-			parts = append(parts, "(NIL NIL "+nstring(name)+" NIL)")
-			inGroup = true
-			continue
-		case angle == 0 && c == ';' && inGroup:
-			flush()
-			parts = append(parts, "(NIL NIL NIL NIL)")
-			inGroup = false
-			continue
-		case angle == 0 && c == ',':
-			flush()
-			continue
-		}
-		cur.WriteByte(c)
-	}
-	flush()
-	if inGroup {
-		parts = append(parts, "(NIL NIL NIL NIL)")
-	}
-	if len(parts) == 0 {
+	addrs := mail.ParseAddressField(value)
+	if len(addrs) == 0 {
 		return "NIL"
 	}
-	return "(" + strings.Join(parts, "") + ")"
-}
-
-// formatMailbox renders one RFC 3501 address (name adl mailbox host).
-func formatMailbox(a *mail.Address) string {
-	addr := strings.TrimSpace(a.Address)
-	// An obsolete source route ("<@route:user@domain>", RFC 822) goes in the adl slot.
-	var route string
-	if strings.HasPrefix(addr, "@") {
-		if r, rest, ok := strings.Cut(addr, ":"); ok {
-			route, addr = r, rest
+	var b strings.Builder
+	b.WriteByte('(')
+	for _, a := range addrs {
+		if a.Host == "" { // a group start (its name in Mailbox), a group end, or an unreadable address
+			b.WriteString("(NIL NIL " + nstring(a.Mailbox) + " NIL)")
+			continue
 		}
+		fmt.Fprintf(&b, "(%s %s %s %s)", nphrase(a.Name), nstring(a.Route), nstring(a.Mailbox), nstring(a.Host))
 	}
-	// The last "@": a quoted local part may hold one ("\"a@b\"@c" is the mailbox a@b at host c).
-	at := strings.LastIndexByte(addr, '@')
-	mailbox, host := addr[:max(at, 0)], addr[at+1:]
-	if at < 0 || mailbox == "" || host == "" {
-		return "(NIL NIL NIL NIL)"
-	}
-	return fmt.Sprintf("(%s %s %s %s)", nphrase(a.Name), nstring(route), nstring(mailbox), nstring(host))
+	b.WriteByte(')')
+	return b.String()
 }
 
 // nstring returns NIL or a quoted IMAP string for envelope and body structure slots.

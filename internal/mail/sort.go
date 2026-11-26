@@ -4,7 +4,6 @@ package mail
 import (
 	"cmp"
 	"context"
-	"net/mail"
 	"sort"
 	"strings"
 	"time"
@@ -157,39 +156,6 @@ func unicodeCasemap(s string) string {
 		return s
 	}
 	return norm.NFKD.String(strings.Map(unicode.ToTitle, s))
-}
-
-// firstAddrMailbox returns the local part (addr-mailbox) of the first address in a header value.
-// A leading group ("name: a@b;") counts as an address whose mailbox is the group name, as in the
-// IMAP ENVELOPE.
-func firstAddrMailbox(value string) string {
-	plain := strings.TrimSpace(stripAddressComments(value))
-	if i := strings.IndexByte(plain, ':'); i > 0 && !strings.ContainsAny(plain[:i], "@<\",") {
-		return strings.TrimSpace(plain[:i])
-	}
-	for _, v := range []string{value, plain} {
-		if addrs, err := mail.ParseAddressList(v); err == nil && len(addrs) > 0 {
-			local, _, _ := strings.Cut(addrs[0].Address, "@")
-			return local
-		}
-	}
-	return ""
-}
-
-// firstAddrDisplay is the RFC 5957 sort value of the first address: its decoded display name,
-// else mailbox@host, else the mailbox alone (a group name, or a bare local part).
-func firstAddrDisplay(value string) string {
-	plain := strings.TrimSpace(stripAddressComments(value))
-	if i := strings.IndexByte(plain, ':'); i > 0 && !strings.ContainsAny(plain[:i], "@<\",") {
-		return strings.TrimSpace(plain[:i])
-	}
-	if addrs, err := mail.ParseAddressList(value); err == nil && len(addrs) > 0 {
-		if addrs[0].Name != "" {
-			return addrs[0].Name
-		}
-		return addrs[0].Address
-	}
-	return plain // unparsable, e.g. a bare "d": the whole value is the mailbox
 }
 
 func compareSortFields(a, b sortFields, key SortKey) int {

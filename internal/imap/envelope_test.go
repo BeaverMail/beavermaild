@@ -123,6 +123,12 @@ func TestEnvelopeGroupSyntax(t *testing.T) {
 		"undisclosed-recipients:;": `((NIL NIL "undisclosed-recipients" NIL)(NIL NIL NIL NIL))`,
 		`"a: b" <x@example.org>`:   `(("a: b" NIL "x" "example.org"))`,
 		"":                         "NIL",
+		// A bare local part keeps its mailbox with Dovecot's MISSING_DOMAIN host (a NIL host would
+		// read as a group start); other unreadable text is dropped.
+		"d":                       `((NIL NIL "d" "MISSING_DOMAIN"))`,
+		`"Bob" <b@x.example>, ;;`: `(("Bob" NIL "b" "x.example"))`,
+		// Encoded-words in charsets beyond the stdlib's are decoded, then sent back as UTF-8.
+		"=?windows-1252?Q?Zo=EB?= <z@x.example>": `(("=?utf-8?b?Wm/Dqw==?=" NIL "z" "x.example"))`,
 	} {
 		if got := formatAddressField(value); got != want {
 			t.Errorf("%q:\n got %s\nwant %s", value, got, want)

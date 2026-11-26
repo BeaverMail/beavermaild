@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Fix (IMAP SORT, RFC 5957 / RFC 5256): DISPLAYFROM, DISPLAYTO, FROM, TO and CC sort on the
+  ENVELOPE addresses, as the RFCs require: SORT had a parser of its own and, when it failed (a
+  name in windows-1252, trailing junk in the list), sorted on the raw header. Encoded-words in any
+  WHATWG charset are now decoded, so SORT, SEARCH and ENVELOPE see "Zoë" instead of
+  "=?windows-1252?...". A bare name without a domain ("To: d") appears in the ENVELOPE with
+  Dovecot's MISSING_DOMAIN host instead of disappearing.
+- Fix (IMAP ID, RFC 2971): malformed ID arguments get BAD.
 - Fix (IMAP LITERAL+ / UNSELECT, RFC 7888 / RFC 3691): a literal whose octet count is too long to
   parse is refused as too large (BYE, or BAD before the continuation); it was not taken as a
   literal, so the bytes after it were read as commands. UNSELECT with no mailbox selected answers
