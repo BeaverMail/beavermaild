@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Fix (IMAP LITERAL+ / UNSELECT, RFC 7888 / RFC 3691): a literal whose octet count is too long to
+  parse is refused as too large (BYE, or BAD before the continuation); it was not taken as a
+  literal, so the bytes after it were read as commands. UNSELECT with no mailbox selected answers
+  BAD, as RFC 3691 says (it was NO).
 - Fix (IMAP LIST-EXTENDED, RFC 5258 / RFC 6154 / RFC 2342): a folder that was subscribed, then
   deleted while it still had subfolders, is listed again by LSUB and LIST (SUBSCRIBED) and marked
   \Subscribed by RETURN (SUBSCRIBED); a missing parent of a subscribed name gets CHILDINFO. An empty

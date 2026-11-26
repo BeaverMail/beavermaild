@@ -25,7 +25,7 @@ func (s *session) cmdClose(ctx context.Context, tag string) error {
 // cmdUnselect closes the selected mailbox without expunging (RFC 3691).
 func (s *session) cmdUnselect(tag string) error {
 	if !s.selected {
-		return s.tagged(tag, "NO not selected")
+		return s.tagged(tag, "BAD no mailbox selected") // RFC 3691 2
 	}
 	s.unselect()
 	return s.tagged(tag, "OK UNSELECT completed")

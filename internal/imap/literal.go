@@ -80,6 +80,11 @@ func (s *session) readCommandLiterals(tag, arg string) (out string, ok bool, err
 	}
 }
 
+// maxLiteralCount stands for an octet count too long to parse: past every literal limit (APPEND's
+// 32 MiB included), yet small enough that a limit check adding it once to a running total cannot
+// overflow even a 32-bit int.
+const maxLiteralCount = 1 << 30
+
 // literalMarker parses a trailing "{n}" or "{n+}" on one command line.
 func literalMarker(line string) (n int, nonSync, ok bool) {
 	if !strings.HasSuffix(line, "}") {
@@ -99,7 +104,9 @@ func literalMarker(line string) (n int, nonSync, ok bool) {
 	}
 	n, err := strconv.Atoi(num)
 	if err != nil {
-		return 0, false, false
+		// Too many digits for an int: still a literal, too large for any limit. Not taking it as one
+		// left its bytes to be read as commands (literal desync, CVE-2026-75002 class).
+		n = maxLiteralCount
 	}
 	return n, nonSync, true
 }
