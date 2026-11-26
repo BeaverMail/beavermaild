@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Fix (IMAP BINARY, RFC 3516): a FETCH naming a BINARY part many times decodes it once (each item
+  decoded it again and held every copy: 200 items on a 2 MiB attachment took about 1 GB), and the
+  FETCH item parser is linear in the line. Multipart and message/rfc822 parts are returned as
+  stored by BINARY, never decoded. A BINARY fetch that fails with UNKNOWN-CTE no longer sets
+  \Seen. A malformed `<origin.count>` (also on BODY) or one on BINARY.SIZE is BAD instead of being
+  ignored. NUL in any command line or literal, and literal8 outside APPEND, are BAD.
 - Fix (IMAP IDLE, RFC 2177 / RFC 2180): IDLE works without a selected mailbox (it answered NO,
   which also broke NOTIFY clients idling in the authenticated state); a DONE that arrives in two
   pieces no longer gets BAD; a session whose selected mailbox another session deletes gets

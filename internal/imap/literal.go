@@ -18,6 +18,8 @@ const (
 // errLiteralTooLarge ends a connection whose non-synchronizing literal is refused.
 var errLiteralTooLarge = errors.New("imap: literal too large")
 
+const errLiteral8 = "BAD literal8 is valid in APPEND only"
+
 // readsOwnLiterals reports whether cmd reads its literals itself: APPEND streams its messages under
 // MaxAppendBytes. Every other command gets its literals read here, whatever it is: a literal left
 // unread would be taken for the next command (command smuggling).
@@ -32,11 +34,26 @@ func (s *session) readCommandLiterals(tag, arg string) (out string, ok bool, err
 	if s.principal.AccountID == 0 {
 		limit = maxPreAuthLiteralBytes
 	}
-	line := arg
+	line, lit8 := arg, false
 	for {
 		n, nonSync, found := literalMarker(line)
 		if !found {
+			// Refused only once every literal is read, so none is taken for a command. No string
+			// holds NUL (RFC 3501 9 CHAR8; CVE-2019-11500, CVE-2007-5740 class).
+			switch {
+			case lit8:
+				return "", false, s.tagged(tag, errLiteral8)
+			case strings.IndexByte(arg, 0) >= 0:
+				return "", false, s.tagged(tag, "BAD NUL in a command")
+			}
 			return arg, true, nil
+		}
+		// literal8 (~{n}) is APPEND data only (RFC 3516 7).
+		if strings.HasSuffix(line[:strings.LastIndexByte(line, '{')], "~") {
+			if !nonSync {
+				return "", false, s.tagged(tag, errLiteral8)
+			}
+			lit8 = true
 		}
 		total += n
 		if total > limit {

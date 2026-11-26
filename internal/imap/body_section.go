@@ -38,12 +38,25 @@ func parsePartial(s string, pos int) (origin, count, n int, ok bool) {
 	if !found || !isDigits(o) || !isDigits(c) {
 		return 0, 0, 0, false
 	}
-	origin, err1 := strconv.Atoi(o)
-	count, err2 := strconv.Atoi(c)
-	if err1 != nil || err2 != nil || count == 0 {
+	// number and nz-number are 32-bit (RFC 3501 9).
+	o32, err1 := strconv.ParseUint(o, 10, 32)
+	c32, err2 := strconv.ParseUint(c, 10, 32)
+	if err1 != nil || err2 != nil || c32 == 0 {
 		return 0, 0, 0, false
 	}
-	return origin, count, end + 1, true
+	return int(o32), int(c32), end + 1, true
+}
+
+// upperASCII is strings.ToUpper for ASCII letters only: the length never changes, so an offset
+// found in it indexes the original string (ToUpper turns an invalid byte into 3).
+func upperASCII(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if 'a' <= c && c <= 'z' {
+			b[i] = c - ('a' - 'A')
+		}
+	}
+	return string(b)
 }
 
 // partialData returns the bytes of data a BODY[...]<origin.count> fetch sends.
@@ -91,21 +104,29 @@ func (bs bodySectionFetch) responseName() string {
 
 func parseAllBodyFetches(rest string) []bodySectionFetch {
 	var out []bodySectionFetch
-	upper := strings.ToUpper(rest)
+	// One pass over the line: each "[" is checked against the item names that end there. Searching
+	// every name from each item on was quadratic in the line (CVE-2026-107581 class).
+	upper := upperASCII(rest)
 	for pos := 0; pos < len(rest); {
-		tail := strings.ToUpper(rest[pos:])
+		open := strings.IndexByte(upper[pos:], '[')
+		if open < 0 {
+			break
+		}
+		open += pos
 		pick, kind := -1, bracketItem{}
 		for _, k := range bracketItems {
-			if at := strings.Index(tail, k.prefix); at >= 0 && (pick < 0 || pos+at < pick) {
-				pick, kind = pos+at, k
+			if strings.HasSuffix(upper[:open+1], k.prefix) {
+				pick, kind = open+1-len(k.prefix), k
+				break
 			}
 		}
 		if pick < 0 {
-			break
+			pos = open + 1
+			continue
 		}
 		end := strings.IndexByte(rest[pick:], ']')
 		if end < 0 {
-			pos = pick + 1
+			pos = open + 1
 			continue
 		}
 		item := rest[pick : pick+end+1]
@@ -124,8 +145,11 @@ func parseAllBodyFetches(rest string) []bodySectionFetch {
 			bs = bodySectionFetch{itemName: item, section: spec, invalid: !validSectionSpec(spec)}
 		}
 		bs.setsSeen = !peek
-		if origin, count, n, ok := parsePartial(rest, next); ok && !bs.sizeOnly {
-			bs.partial, bs.origin, bs.count = true, origin, count
+		if next < len(rest) && rest[next] == '<' {
+			// A malformed <origin.count>, or one on BINARY.SIZE, is a syntax error (RFC 3516 7).
+			origin, count, n, ok := parsePartial(rest, next)
+			bs.invalid = bs.invalid || !ok || bs.sizeOnly
+			bs.partial, bs.origin, bs.count = ok, origin, count
 			next += n
 		}
 		out = append(out, bs)

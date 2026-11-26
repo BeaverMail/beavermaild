@@ -64,7 +64,11 @@ func TestFetchWholeMessageStreamed(t *testing.T) {
 			if items.uid {
 				parts = append(parts, "UID 9")
 			}
-			return s.writeFetchWithLiterals(1, parts, items.bodySections, raw)
+			datas, err := sectionDatas(raw, items.bodySections)
+			if err != nil {
+				return err
+			}
+			return s.writeFetchWithLiterals(1, parts, items.bodySections, datas)
 		})
 		if streamed != inMemory {
 			t.Fatalf("%s: streamed differs\n got %.200q\nwant %.200q", arg, streamed, inMemory)

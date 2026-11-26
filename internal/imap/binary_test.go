@@ -59,3 +59,19 @@ func TestBase64NULParts(t *testing.T) {
 		t.Error("message without NUL changed")
 	}
 }
+
+// TestParseBodyFetchesOffsets: item names are found in an ASCII-only upper-case copy of the line,
+// so a byte strings.ToUpper would widen (invalid UTF-8) cannot shift the items after it.
+func TestParseBodyFetchesOffsets(t *testing.T) {
+	got := parseAllBodyFetches("X-\xff BODY.PEEK[HEADER.FIELDS (X-\xff)] binary.peek[1]<0.2> BODY[2]")
+	var names []string
+	for _, bs := range got {
+		names = append(names, bs.itemName)
+	}
+	if want := "BODY.PEEK[HEADER.FIELDS (X-\xff)]|binary.peek[1]|BODY[2]"; strings.Join(names, "|") != want {
+		t.Fatalf("items %q, want %q", names, want)
+	}
+	if !got[1].binary || !got[1].partial || got[1].count != 2 || got[1].setsSeen || !got[2].setsSeen {
+		t.Fatalf("items %+v", got)
+	}
+}

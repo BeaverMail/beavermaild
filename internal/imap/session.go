@@ -735,16 +735,13 @@ func (s *session) cmdFetch(ctx context.Context, tag, arg string, byUID bool) err
 		}
 	}
 	indices := s.resolveIndices(set, byUID)
+	items.markSeen = true
 	gone := false
 	for _, idx := range indices {
 		if items.hasChangedSince && max(s.messages[idx].Meta.ModSeq, 1) <= items.changedSince {
 			continue
 		}
-		msgItems, err := s.markSeenOnFetch(ctx, idx, items)
-		if err != nil {
-			return err
-		}
-		err = s.writeFetch(ctx, idx+1, s.messages[idx], msgItems, byUID)
+		err = s.writeFetch(ctx, idx+1, s.messages[idx], items, byUID)
 		if errors.Is(err, storage.ErrNotFound) || errors.Is(err, blob.ErrNotFound) {
 			gone = true // expunged by another session, body already removed
 			continue
@@ -1301,6 +1298,21 @@ func (s *session) writeFetch(ctx context.Context, seq int, msg mail.Message, ite
 			return err
 		}
 	}
+	var datas [][]byte
+	if !stream && len(items.bodySections) > 0 {
+		var err error
+		if datas, err = sectionDatas(raw, items.bodySections); err != nil {
+			return err
+		}
+	}
+	// \Seen only once every section is in hand: a FETCH that fails with UNKNOWN-CTE sets nothing.
+	if items.markSeen {
+		var err error
+		if items, err = s.markSeenOnFetch(ctx, seq-1, items); err != nil {
+			return err
+		}
+		msg = s.messages[seq-1]
+	}
 
 	var parts []string
 	if byUID || items.uid {
@@ -1344,25 +1356,30 @@ func (s *session) writeFetch(ctx context.Context, seq int, msg mail.Message, ite
 	// One FETCH response per message, literals after the other items (as Dovecot/Gmail do):
 	// a UID FETCH response must carry UID, so splitting the literals into a second response
 	// left them without one and strict clients dropped the headers.
-	return s.writeFetchWithLiterals(seq, parts, items.bodySections, raw)
+	return s.writeFetchWithLiterals(seq, parts, items.bodySections, datas)
 }
 
-// writeFetchWithLiterals emits one FETCH response: the plain items, then BODY section literals (PEEK omitted per RFC 3501).
-func (s *session) writeFetchWithLiterals(seq int, parts []string, sections []bodySectionFetch, raw []byte) error {
-	// Extract every section first: a BINARY part that cannot be decoded fails the FETCH with
-	// UNKNOWN-CTE (RFC 3516) before any of this response is sent.
+// sectionDatas extracts every section of one FETCH response before any of it is sent: a BINARY
+// part that cannot be decoded fails the FETCH with UNKNOWN-CTE (RFC 3516 4.3).
+func sectionDatas(raw []byte, sections []bodySectionFetch) ([][]byte, error) {
 	datas := make([][]byte, len(sections))
+	bin := binaryParts{raw: raw}
 	for i, bs := range sections {
 		if !bs.binary {
 			datas[i] = bs.partialData(extractBodySection(raw, bs.section, bs.hdrFields))
 			continue
 		}
-		data, err := binarySection(raw, bs.section)
+		data, err := bin.section(bs.section)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		datas[i] = bs.partialData(data)
 	}
+	return datas, nil
+}
+
+// writeFetchWithLiterals emits one FETCH response: the plain items, then BODY section literals (PEEK omitted per RFC 3501).
+func (s *session) writeFetchWithLiterals(seq int, parts []string, sections []bodySectionFetch, datas [][]byte) error {
 	prefix := ""
 	if len(parts) > 0 {
 		prefix = strings.Join(parts, " ") + " "
@@ -1648,6 +1665,7 @@ type fetchItems struct {
 	changedSince                                                          uint64
 	vanished                                                              bool // UID FETCH (... VANISHED): report expunged UIDs first
 	hasChangedSince                                                       bool
+	markSeen                                                              bool // FETCH proper: BODY[...] without PEEK sets \Seen
 }
 
 func parseFetchArg(arg string) (setStr string, items fetchItems, ok bool) {
