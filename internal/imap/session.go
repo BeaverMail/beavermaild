@@ -181,6 +181,12 @@ func (s *session) serveCommands(ctx context.Context) error {
 			}
 			continue
 		}
+		if takesNoArgument[cmd] && strings.TrimSpace(arg) != "" {
+			if err := s.tagged(tag, "BAD "+cmd+" takes no argument"); err != nil {
+				return err
+			}
+			continue
+		}
 		switch cmd {
 		case "CAPABILITY":
 			if err := s.untagged(s.capabilityLine()); err != nil {
@@ -437,6 +443,13 @@ func (s *session) serveCommands(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+// takesNoArgument lists the commands whose syntax has nothing after the name (RFC 3501 9; RFC 2342
+// NAMESPACE, RFC 2177 IDLE, RFC 3691 UNSELECT): an argument is a syntax error, not ignored.
+var takesNoArgument = map[string]bool{
+	"CAPABILITY": true, "NOOP": true, "LOGOUT": true, "STARTTLS": true, "NAMESPACE": true,
+	"CHECK": true, "CLOSE": true, "EXPUNGE": true, "UNSELECT": true, "IDLE": true,
 }
 
 func (s *session) capabilityLine() string {

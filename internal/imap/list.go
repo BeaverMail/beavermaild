@@ -3,6 +3,7 @@ package imap
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/BeaverMail/beavermaild/internal/mail"
@@ -44,8 +45,9 @@ func parseListOptions(arg string) (listOptions, bool) {
 				return listOptions{}, false
 			}
 		}
-		// RFC 5258 §3: RECURSIVEMATCH needs another selection option besides REMOTE.
-		if opt.recursiveMatch && !opt.subscribedOnly && !opt.specialUseOnly {
+		// RFC 5258 6: RECURSIVEMATCH needs a list-select-base-opt, and SUBSCRIBED is the only one;
+		// SPECIAL-USE is an independent option like REMOTE (RFC 6154 6).
+		if opt.recursiveMatch && !opt.subscribedOnly {
 			return listOptions{}, false
 		}
 		arg = rest
@@ -89,7 +91,28 @@ func parseListOptions(arg string) (listOptions, bool) {
 	if rest != "" {
 		return listOptions{}, false
 	}
+	opt.patterns = acceptedPatterns(opt.patterns, opt.extended)
 	return opt, true
+}
+
+// maxListPatterns bounds the patterns one LIST matches: each is tried on every folder, so 6000
+// patterns over 4000 folders took 3 s per LIST (CVE-2026-33607 class). Clients send one to three.
+const maxListPatterns = 64
+
+// acceptedPatterns drops repeated patterns and those past maxListPatterns, and in an extended LIST
+// the empty one (RFC 5258 3: it is no special request there and MUST be ignored for matching). A
+// pattern the server does not accept MUST be silently ignored (RFC 5258 3).
+func acceptedPatterns(pats []string, extended bool) []string {
+	out := make([]string, 0, min(len(pats), maxListPatterns))
+	for _, p := range pats {
+		if len(out) == maxListPatterns {
+			break
+		}
+		if (p != "" || !extended) && !slices.Contains(out, p) {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // parseListAtoms parses a parenthesized list of option atoms, upper-cased.
@@ -161,11 +184,7 @@ func compileListPattern(pattern string) func(string) bool {
 
 // listMailboxAttrs returns IMAP LIST attributes for one folder (RFC 3501 + SPECIAL-USE).
 func listMailboxAttrs(mb mail.Mailbox, parents parentSet, markSubscribed bool) string {
-	childAttr := `\HasNoChildren`
-	if parents.has(mb.Name) {
-		childAttr = `\HasChildren`
-	}
-	attrs := childAttr
+	attrs := childAttr(mb, parents)
 	if markSubscribed && mb.Subscribed {
 		attrs += ` \Subscribed`
 	}
@@ -173,6 +192,14 @@ func listMailboxAttrs(mb mail.Mailbox, parents parentSet, markSubscribed bool) s
 		attrs += " " + su
 	}
 	return attrs
+}
+
+// childAttr is the CHILDREN attribute of a name (RFC 5258 4): some folder lies under it or none.
+func childAttr(mb mail.Mailbox, parents parentSet) string {
+	if parents.has(mb.Name) {
+		return `\HasChildren`
+	}
+	return `\HasNoChildren`
 }
 
 // specialUseAttr returns the RFC 6154 attribute for a folder, or "".
@@ -191,11 +218,41 @@ func specialUseAttr(mb mail.Mailbox) string {
 	return ""
 }
 
-// listCandidate is a folder LIST can return; virtual ones are missing parents of existing folders.
+// listCandidate is a name LIST can return: an existing folder, a missing parent of existing folders
+// (virtual), or a name with no folder: a subscription left by a deleted folder, or a missing parent
+// of one (nonexistent; mb.Subscribed tells which). A virtual parent can be subscribed too.
 type listCandidate struct {
 	mb          mail.Mailbox
 	virtual     bool
-	nonexistent bool // a subscription left by a deleted folder
+	nonexistent bool
+}
+
+// addOrphanSubscriptions adds to cands the subscriptions whose folder is gone, each after its
+// missing parents: a virtual parent of the same name is marked subscribed instead.
+func addOrphanSubscriptions(cands []listCandidate, orphans []string) []listCandidate {
+	at := make(map[string]int, len(cands))
+	for i, c := range cands {
+		at[mail.MailboxKey(c.mb.Name)] = i
+	}
+	add := func(name string, subscribed bool) {
+		if i, ok := at[mail.MailboxKey(name)]; ok {
+			if subscribed && (cands[i].virtual || cands[i].nonexistent) {
+				cands[i].mb.Subscribed, cands[i].nonexistent = true, true
+			}
+			return
+		}
+		at[mail.MailboxKey(name)] = len(cands)
+		cands = append(cands, listCandidate{mb: mail.Mailbox{Name: name, Subscribed: subscribed}, nonexistent: true})
+	}
+	for _, name := range orphans {
+		for i := strings.IndexByte(name, '/'); i >= 0; i = nextSlash(name, i) {
+			if i > 0 {
+				add(name[:i], false)
+			}
+		}
+		add(name, true)
+	}
+	return cands
 }
 
 // listCandidates returns existing folders plus their missing ancestors, each parent before its children.

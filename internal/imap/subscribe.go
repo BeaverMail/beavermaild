@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/BeaverMail/beavermaild/internal/mail"
 	"github.com/BeaverMail/beavermaild/internal/storage"
 )
 
@@ -90,33 +89,34 @@ func (s *session) cmdMailboxList(ctx context.Context, tag, arg, cmd string, subs
 	if opt.specialUseOnly {
 		criteria = append(criteria, `"SPECIAL-USE"`)
 	}
-	// selected reports whether a folder meets the selection options; missing parents meet none.
+	// selected reports whether a name meets the selection options. A missing parent of existing
+	// folders is listed when nothing is selected (RFC 5258 5 example 11); a subscription whose folder
+	// is gone only meets SUBSCRIBED; SPECIAL-USE takes existing folders only.
 	selected := func(c listCandidate) bool {
-		if c.virtual {
-			return len(criteria) == 0
+		exists := !c.virtual && !c.nonexistent
+		if opt.specialUseOnly && (!exists || specialUseAttr(c.mb) == "") {
+			return false
 		}
-		return (!filterSubscribed || c.mb.Subscribed) && (!opt.specialUseOnly || specialUseAttr(c.mb) != "")
+		if filterSubscribed {
+			return c.mb.Subscribed
+		}
+		return exists || c.virtual
 	}
 	names := make([]string, len(mboxes))
 	for i, mb := range mboxes {
 		names[i] = mb.Name
 	}
 	parents := newParentSet(names)
+	markSubscribed := filterSubscribed || opt.markSubscribed
 	cands := listCandidates(mboxes)
-	if filterSubscribed {
+	if markSubscribed {
+		// A subscription outlives its folder (RFC 3501 6.3.4): LSUB and LIST (SUBSCRIBED) MUST list
+		// it, and RETURN (SUBSCRIBED) MUST mark it, also when the name is a missing parent of folders.
 		orphans, err := s.inbox.ListOrphanSubscriptions(ctx, s.principal.AccountID)
 		if err != nil {
 			return err
 		}
-		listed := make(map[string]bool, len(cands))
-		for _, c := range cands {
-			listed[mail.MailboxKey(c.mb.Name)] = true
-		}
-		for _, name := range orphans {
-			if !listed[mail.MailboxKey(name)] {
-				cands = append(cands, listCandidate{mb: mail.Mailbox{Name: name, Subscribed: true}, nonexistent: true})
-			}
-		}
+		cands = addOrphanSubscriptions(cands, orphans)
 	}
 	// RFC 5258 §3 RECURSIVEMATCH and RFC 3501 §6.3.9 LSUB "%" both report parents of descendants
 	// that meet the selection but not the pattern: collect those parents once.
@@ -136,16 +136,16 @@ func (s *session) cmdMailboxList(ctx context.Context, tag, arg, cmd string, subs
 		if !selected(c) && !childInfo {
 			continue
 		}
-		attrs := listMailboxAttrs(c.mb, parents, filterSubscribed || opt.markSubscribed)
+		attrs := listMailboxAttrs(c.mb, parents, markSubscribed)
 		switch {
 		case c.nonexistent && cmd == "LSUB":
 			attrs = `\Noselect`
-		case c.nonexistent:
-			// RFC 5258: \NonExistent implies \Noselect.
-			attrs = `\NonExistent \Subscribed`
-		case c.virtual && opt.extended:
-			// RFC 5258: \NonExistent implies \Noselect.
-			attrs = `\HasChildren \NonExistent`
+		case c.nonexistent || c.virtual && opt.extended:
+			// RFC 5258 3: \NonExistent implies \Noselect.
+			attrs = childAttr(c.mb, parents) + ` \NonExistent`
+			if markSubscribed && c.mb.Subscribed {
+				attrs += ` \Subscribed`
+			}
 		case c.virtual, cmd == "LSUB" && !selected(c):
 			attrs = `\HasChildren \Noselect`
 		}

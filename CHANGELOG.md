@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Fix (IMAP LIST-EXTENDED, RFC 5258 / RFC 6154 / RFC 2342): a folder that was subscribed, then
+  deleted while it still had subfolders, is listed again by LSUB and LIST (SUBSCRIBED) and marked
+  \Subscribed by RETURN (SUBSCRIBED); a missing parent of a subscribed name gets CHILDINFO. An empty
+  pattern in an extended LIST is ignored. (SPECIAL-USE RECURSIVEMATCH) is BAD, as the grammar says.
+  A LIST matches at most 64 distinct patterns, the rest ignored (thousands of patterns took seconds
+  of CPU). Commands that take no argument (NOOP, CAPABILITY, NAMESPACE, CHECK, ...) answer BAD to one.
 - Fix (IMAP MULTIAPPEND, RFC 3502): a MULTIAPPEND is stored in one transaction, all or nothing.
   When a later message failed (over quota, say), the earlier ones had been stored and then deleted
   one by one: other sessions saw them come and go, UIDNEXT and HIGHESTMODSEQ moved, and a failed
