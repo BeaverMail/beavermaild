@@ -49,8 +49,7 @@ func (ib *Inbox) Deliver(ctx context.Context, accountID uint32, raw []byte) (uin
 	return ib.storeMessage(ctx, accountID, InboxMailboxID, raw, 0, time.Now().Unix())
 }
 
-// storeMessage writes the blob, then the message row, index entry, mailbox counters and
-// quota usage in one transaction.
+// storeMessage writes the blob, then stores it as one message (storeMessages).
 func (ib *Inbox) storeMessage(ctx context.Context, accountID, mailboxID uint32, raw []byte, flags uint32, receivedAt int64) (uint32, error) {
 	if err := ib.checkQuota(ctx, accountID, uint64(len(raw)), 1); err != nil {
 		return 0, err
@@ -59,44 +58,65 @@ func (ib *Inbox) storeMessage(ctx context.Context, accountID, mailboxID uint32, 
 	if err != nil {
 		return 0, err
 	}
-	var emailID uint32
-	err = ib.update(ctx, accountID, func(t *txn) error {
+	stored := StoredBlob{Hash: hash, Size: uint32(len(raw)), VSize: wireSize(raw)}
+	out, err := ib.storeMessages(ctx, accountID, mailboxID, []AppendMessage{{Blob: stored, Flags: flags, ReceivedAt: receivedAt}})
+	if err != nil {
+		return 0, err
+	}
+	return out[0].EmailID, nil
+}
+
+// storeMessages writes the message rows, index entries, mailbox counters and quota usage of msgs,
+// whose blobs are stored already, in one transaction: all of them or none. On failure the blobs
+// stay unreferenced until blob.GC removes them.
+func (ib *Inbox) storeMessages(ctx context.Context, accountID, mailboxID uint32, msgs []AppendMessage) ([]Appended, error) {
+	out := make([]Appended, len(msgs))
+	var bytes int64
+	for _, m := range msgs {
+		bytes += int64(m.Blob.Size)
+	}
+	err := ib.update(ctx, accountID, func(t *txn) error {
 		mbox, err := t.mailbox(accountID, mailboxID)
 		if err != nil {
 			return err
 		}
-		if emailID, err = t.nextEmailID(accountID); err != nil {
-			return err
+		for i, m := range msgs {
+			emailID, err := t.nextEmailID(accountID)
+			if err != nil {
+				return err
+			}
+			uid, err := t.nextUID(accountID, &mbox)
+			if err != nil {
+				return err
+			}
+			meta := storage.EmailMeta{
+				Version:    1,
+				MailboxID:  mailboxID,
+				ReceivedAt: m.ReceivedAt,
+				Size:       m.Blob.Size,
+				VSize:      m.Blob.VSize,
+				Flags:      m.Flags | FlagRecent,
+				ModSeq:     nextModSeq(&mbox),
+				IMAPUID:    uid,
+				BlobHash:   m.Blob.Hash,
+			}
+			ApplyKeywords(&meta, m.Keywords, nil)
+			if err := t.putMeta(accountID, emailID, meta); err != nil {
+				return err
+			}
+			t.indexAdd(accountID, mailboxID, emailID)
+			out[i] = Appended{EmailID: emailID, UID: uid}
 		}
-		uid, err := t.nextUID(accountID, &mbox)
-		if err != nil {
-			return err
-		}
-		meta := storage.EmailMeta{
-			Version:    1,
-			MailboxID:  mailboxID,
-			ReceivedAt: receivedAt,
-			Size:       uint32(len(raw)),
-			VSize:      wireSize(raw),
-			Flags:      flags | FlagRecent,
-			ModSeq:     nextModSeq(&mbox),
-			IMAPUID:    uid,
-			BlobHash:   hash,
-		}
-		if err := t.putMeta(accountID, emailID, meta); err != nil {
-			return err
-		}
-		t.indexAdd(accountID, mailboxID, emailID)
-		if err := t.bumpCount(accountID, &mbox, 1); err != nil {
+		if err := t.bumpCount(accountID, &mbox, int32(len(msgs))); err != nil {
 			return err
 		}
 		if err := t.putMailbox(accountID, mbox); err != nil {
 			return err
 		}
-		return t.addQuota(accountID, int64(len(raw)), 1)
+		return t.addQuota(accountID, bytes, int32(len(msgs)))
 	})
 	if err != nil {
-		return 0, err // the blob stays unreferenced until blob.GC removes it
+		return nil, err
 	}
-	return emailID, nil
+	return out, nil
 }

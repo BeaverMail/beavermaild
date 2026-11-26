@@ -106,3 +106,34 @@ func testInboxWithAccount(t *testing.T) (context.Context, *Inbox, uint32) {
 	}
 	return ctx, NewInbox(store, blob.NewFS(t.TempDir()+"/blobs")), acc.ID
 }
+
+// TestUploadMatchesInMemory: an Upload written in pieces, a CR at a piece boundary included, stores
+// what BareCR stores for the whole message, with wireSize as its wire size.
+func TestUploadMatchesInMemory(t *testing.T) {
+	ctx, ib, _ := testInboxWithAccount(t)
+	for _, raw := range []string{
+		"Subject: a\r\n\r\nline\nline\r\n",        // stored as sent
+		"Subject: a\rX-Forged: 1\r\n\r\nb\rc\r\n", // bare CR in header and body
+		"Subject: a\r\n\r\nends with CR\r",        // bare CR at the very end
+	} {
+		for _, step := range []int{1, 2, 7, len(raw)} {
+			up, err := ib.NewUpload(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i := 0; i < len(raw); i += step {
+				_, _ = up.Write([]byte(raw[i:min(i+step, len(raw))]))
+			}
+			got, err := up.Finish(ctx, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := BareCR([]byte(raw))
+			data, err := ib.blobs.Get(ctx, got.Hash)
+			if err != nil || string(data) != string(want) || got.Size != uint32(len(want)) || got.VSize != wireSize(want) {
+				t.Fatalf("%q in %d-byte pieces: stored %q size %d vsize %d; want %q %d %d",
+					raw, step, data, got.Size, got.VSize, want, len(want), wireSize(want))
+			}
+		}
+	}
+}

@@ -39,47 +39,101 @@ func (f *FS) Put(ctx context.Context, data []byte) ([storage.Blake3DigestLen]byt
 	}
 
 	hash := blake3.Sum256(data)
-	path := f.path(hash)
-
-	if _, err := os.Stat(path); err == nil {
-		// Reused: a fresh mtime keeps GC from removing it before the new row commits.
-		now := time.Now()
-		if err := os.Chtimes(path, now, now); err != nil {
-			return zero, err
-		}
-		return hash, nil
-	} else if !os.IsNotExist(err) {
-		return zero, err
+	if reused, err := f.reuse(hash); reused || err != nil {
+		return hash, err
 	}
-
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return zero, err
-	}
-
-	tmp, err := os.CreateTemp(filepath.Dir(path), "put-*")
+	w, err := f.Create(ctx)
 	if err != nil {
 		return zero, err
 	}
-	tmpPath := tmp.Name()
-	cleanup := true
-	defer func() {
-		_ = tmp.Close()
-		if cleanup {
-			_ = os.Remove(tmpPath)
-		}
-	}()
+	defer w.Abort()
+	if _, err := w.Write(data); err != nil {
+		return zero, err
+	}
+	return w.Commit()
+}
 
-	if _, err := tmp.Write(data); err != nil {
-		return zero, err
+// reuse reports whether the blob for hash exists already. Reused: a fresh mtime keeps GC from
+// removing it before the new row commits.
+func (f *FS) reuse(hash [storage.Blake3DigestLen]byte) (bool, error) {
+	_, err := os.Stat(f.path(hash))
+	if os.IsNotExist(err) {
+		return false, nil
+	} else if err != nil {
+		return false, err
 	}
-	if err := tmp.Close(); err != nil {
-		return zero, err
+	now := time.Now()
+	return true, os.Chtimes(f.path(hash), now, now)
+}
+
+// Writer streams a blob to a temp file, hashing it on the way, so a large upload never sits in
+// memory. Commit installs it under its hash; Abort (safe after Commit) drops it. An interrupted
+// writer leaves a put-* file that GC removes.
+type Writer struct {
+	f    *FS
+	tmp  *os.File
+	hash *blake3.Hasher
+	done bool
+}
+
+// Create starts a blob Writer.
+func (f *FS) Create(ctx context.Context) (*Writer, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		return zero, err
+	if err := os.MkdirAll(f.root, 0o755); err != nil {
+		return nil, err
 	}
-	cleanup = false
+	tmp, err := os.CreateTemp(f.root, "put-*")
+	if err != nil {
+		return nil, err
+	}
+	return &Writer{f: f, tmp: tmp, hash: blake3.New()}, nil
+}
+
+func (w *Writer) Write(p []byte) (int, error) {
+	n, err := w.tmp.Write(p)
+	_, _ = w.hash.Write(p[:n])
+	return n, err
+}
+
+// Name is the temp file's path, to read the data back before Commit.
+func (w *Writer) Name() string { return w.tmp.Name() }
+
+// Commit installs the blob under its Blake3 digest and returns the digest. An identical blob
+// already stored is kept (and touched) and the temp file dropped.
+func (w *Writer) Commit() ([storage.Blake3DigestLen]byte, error) {
+	var hash [storage.Blake3DigestLen]byte
+	copy(hash[:], w.hash.Sum(nil))
+	if err := w.tmp.Close(); err != nil {
+		w.Abort()
+		return hash, err
+	}
+	w.done = true
+	if reused, err := w.f.reuse(hash); reused || err != nil {
+		_ = os.Remove(w.tmp.Name())
+		return hash, err
+	}
+	path := w.f.path(hash)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		_ = os.Remove(w.tmp.Name())
+		return hash, err
+	}
+	if err := os.Rename(w.tmp.Name(), path); err != nil {
+		_ = os.Remove(w.tmp.Name())
+		return hash, err
+	}
 	return hash, nil
+}
+
+// Abort drops an uncommitted blob.
+func (w *Writer) Abort() {
+	if w.done {
+		return
+	}
+	w.done = true
+	_ = w.tmp.Close()
+	_ = os.Remove(w.tmp.Name())
 }
 
 // Get reads blob bytes for hash.

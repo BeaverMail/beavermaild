@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Fix (IMAP MULTIAPPEND, RFC 3502): a MULTIAPPEND is stored in one transaction, all or nothing.
+  When a later message failed (over quota, say), the earlier ones had been stored and then deleted
+  one by one: other sessions saw them come and go, UIDNEXT and HIGHESTMODSEQ moved, and a failed
+  undo left them in place. APPEND literals are now streamed to disk as they arrive instead of held
+  in memory: announcing a large literal allocated its whole size at once. A synchronizing literal
+  over quota is refused before the client sends it.
 - Fix (IMAP BINARY, RFC 3516): a FETCH naming a BINARY part many times decodes it once (each item
   decoded it again and held every copy: 200 items on a 2 MiB attachment took about 1 GB), and the
   FETCH item parser is linear in the line. Multipart and message/rfc822 parts are returned as

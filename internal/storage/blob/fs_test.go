@@ -139,3 +139,46 @@ func hex32(h [32]byte) string {
 	}
 	return string(out)
 }
+
+// TestWriterStreams: a blob written in pieces gets the digest Put gives the whole data, an identical
+// blob is reused, and Abort leaves no temp file.
+func TestWriterStreams(t *testing.T) {
+	t.Parallel()
+	root := filepath.Join(t.TempDir(), "blobs")
+	fs := blob.NewFS(root)
+	ctx := context.Background()
+	data := bytes.Repeat([]byte("0123456789"), 10000)
+	want, err := fs.Put(ctx, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 { // reusing the blob Put left, then fresh
+		w, err := fs.Create(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := 0; i < len(data); i += 333 {
+			if _, err := w.Write(data[i:min(i+333, len(data))]); err != nil {
+				t.Fatal(err)
+			}
+		}
+		got, err := w.Commit()
+		w.Abort() // after Commit: no effect
+		if err != nil || got != want {
+			t.Fatalf("Commit = %x, %v; want %x", got, err, want)
+		}
+		if b, err := fs.Get(ctx, got); err != nil || !bytes.Equal(b, data) {
+			t.Fatalf("Get after Commit: %v", err)
+		}
+		_ = fs.Remove(want)
+	}
+	w, err := fs.Create(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = w.Write(data)
+	w.Abort()
+	if left, _ := filepath.Glob(filepath.Join(root, "put-*")); len(left) != 0 {
+		t.Fatalf("temp files left: %v", left)
+	}
+}

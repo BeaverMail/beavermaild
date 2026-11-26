@@ -122,7 +122,8 @@ func TestURLLoadsWaitForSlot(t *testing.T) {
 	if err := s.urlFetchItem(ctx, &b, urlFetchItem{url: "imap://alice@example.org/INBOX/;UID=1"}); err == nil || b.Len() != 0 {
 		t.Fatalf("URLFETCH item ran without a slot: err=%v out=%q", err, b.String())
 	}
-	if _, err := s.catenateURL(ctx, "/INBOX/;UID=1"); err == nil || errors.Is(err, errBadURL) {
+	total := 0
+	if _, err := s.catenateURL(ctx, "c1", "/INBOX/;UID=1", ")", &total, io.Discard); err == nil || errors.Is(err, errBadURL) {
 		t.Fatalf("CATENATE URL ran without a slot: %v", err)
 	}
 }
