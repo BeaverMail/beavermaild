@@ -57,7 +57,9 @@ type session struct {
 	qresync  bool                // ENABLE QRESYNC: expunges are reported as VANISHED
 	notify   *notifyState        // NOTIFY setting (RFC 5465); nil until the first NOTIFY
 	contexts []*searchContext    // updating SEARCH/SORT results (RFC 5267) of the selected mailbox
-	keywords map[string]struct{} // keywords announced in the last FLAGS response
+	// uidBatches: UIDBATCHES requests answered since the selection (RFC 10022 3.1.1).
+	uidBatches []uidBatchesReq
+	keywords   map[string]struct{} // keywords announced in the last FLAGS response
 	// keywordsMbox is the mailbox s.keywords belongs to: reselecting it keeps them, so a QRESYNC
 	// client's cached messages never carry a keyword the new FLAGS dropped.
 	keywordsMbox uint32
@@ -670,6 +672,7 @@ func (s *session) openMailbox(ctx context.Context, tag, name string, examine boo
 	s.mbox = mbox
 	s.selected = true
 	s.contexts = nil
+	s.uidBatches = nil
 	s.idleWatchModSeq = highestMod
 	if err := s.untagged(s.flagsLine()); err != nil {
 		return err

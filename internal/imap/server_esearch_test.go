@@ -82,6 +82,16 @@ func TestIMAPESearchESortID(t *testing.T) {
 	if _, tagged := until("b4"); !strings.HasPrefix(tagged, "b4 BAD") {
 		t.Fatal(tagged)
 	}
+	// RFC 10022 3.1.1: resending the same request on an unchanged mailbox is NO [LIMIT].
+	send(t, c, "b5 UIDBATCHES 500")
+	if _, tagged := until("b5"); !strings.HasPrefix(tagged, "b5 NO [LIMIT]") {
+		t.Fatal(tagged)
+	}
+	// nz-number is 32 bits (RFC 9051 9).
+	send(t, c, "b6 UIDBATCHES 4294967296")
+	if _, tagged := until("b6"); !strings.HasPrefix(tagged, "b6 BAD") {
+		t.Fatal(tagged)
+	}
 
 	// CONTEXT (RFC 5267): PARTIAL ranges in result order, UPDATE contexts, CANCELUPDATE.
 	check("p1 SORT RETURN (PARTIAL 3:2) (REVERSE SIZE) US-ASCII ALL", `* ESEARCH (TAG "p1") PARTIAL (2:3 2,1)`)

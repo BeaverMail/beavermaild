@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Fix (IMAP UIDBATCHES, RFC 10022): repeating the same UIDBATCHES on a mailbox that has not changed
+  by more than half a batch is refused with NO [LIMIT], as the RFC asks of servers; other batch
+  sizes and batch ranges stay allowed. Numbers past 32 bits are BAD in UIDBATCHES, ESEARCH PARTIAL
+  and IMAP URLs (a URL with UID=4294967297 pointed to message 1).
 - Fix (IMAP SORT, RFC 5957 / RFC 5256): DISPLAYFROM, DISPLAYTO, FROM, TO and CC sort on the
   ENVELOPE addresses, as the RFCs require: SORT had a parser of its own and, when it failed (a
   name in windows-1252, trailing junk in the list), sorted on the raw header. Encoded-words in any
