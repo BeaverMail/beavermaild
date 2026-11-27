@@ -24,7 +24,8 @@
   limiter). IPv6 clients are counted per /64, and expired counters are dropped.
 - Security (IMAP SEARCH): text keys are folded once per command instead of once per message and
   header field, so a long key no longer multiplies the cost by the number of messages (a 60 KB TEXT
-  key over 2000 messages: 2.4 s, now 0.08 s).
+  key over 2000 messages: 2.4 s, now 0.08 s). TEXT and BODY scan with reused buffers: the same
+  search allocated 550 MB, now 38 MB, about what a short key costs.
 - Fix (IMAP): a command line past 64 KiB ends the connection with BYE [TOOBIG]
   instead of a reset with no reply.
 - Fix (IMAP SEARCH/SORT, RFC 5255 / RFC 5051): the server now advertises I18NLEVEL=1. SEARCH

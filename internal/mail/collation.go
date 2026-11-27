@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"io"
 	"strings"
+	"sync"
 	"unicode"
 	"unicode/utf8"
 
@@ -92,17 +93,18 @@ func unicodeCasemap(s string) string {
 	return "\xff" + s
 }
 
-// needle is a SEARCH key with its i;unicode-casemap form (foldOK false for invalid UTF-8). It is
-// folded once per command: folding per message costs the key's length times the messages
-// (CVE-2026-107581 class).
+// needle is a SEARCH key with its i;unicode-casemap form (foldOK false for invalid UTF-8), as
+// strings and as bytes for the stream scanners. It is built once per command: any per-message
+// work the size of the key costs the key's length times the messages (CVE-2026-107581 class).
 type needle struct {
-	raw, folded string
-	foldOK      bool
+	raw, folded   string
+	rawB, foldedB []byte
+	foldOK        bool
 }
 
 func newNeedle(s string) needle {
 	f, ok := casemapKey(s)
-	return needle{raw: s, folded: f, foldOK: ok}
+	return needle{raw: s, folded: f, rawB: []byte(s), foldedB: []byte(f), foldOK: ok}
 }
 
 // textContains is the SEARCH substring operation (RFC 5255 4.6 c): i;unicode-casemap when both
@@ -120,12 +122,13 @@ func textContains(haystack string, n needle) bool {
 // once the end shows whether all of it was valid UTF-8 (reported as valid). convertible false (an
 // unknown charset) means i;octet only.
 func readerContains(r io.Reader, n needle, convertible bool) (found, valid bool) {
-	oct := &octetScan{needle: []byte(n.raw), found: n.raw == ""}
+	oct := newOctetScan(n.rawB)
+	defer func() { oct.needle = nil; octetScans.Put(oct) }()
 	tee := io.TeeReader(r, oct)
 	ok := n.foldOK
 	if ok && convertible {
 		var err error
-		found, err = scanContains(transform.NewReader(tee, newCasemap()), []byte(n.folded))
+		found, err = scanContains(transform.NewReader(tee, newCasemap()), n.foldedB)
 		// A transform that fails is a failed conversion (4.6 c): i;octet decides.
 		convertible = err == nil
 	}
@@ -145,7 +148,12 @@ var searchChunk = 64 << 10
 // last len(n)-1 bytes over each cut. err is a read error other than the end of r.
 func scanContains(r io.Reader, n []byte) (bool, error) {
 	keep := max(len(n)-1, 0)
-	buf := make([]byte, keep+searchChunk)
+	bp := scanBufs.Get().(*[]byte)
+	defer scanBufs.Put(bp)
+	if cap(*bp) < keep+searchChunk {
+		*bp = make([]byte, keep+searchChunk)
+	}
+	buf := (*bp)[:keep+searchChunk]
 	have := 0
 	for {
 		k, err := io.ReadFull(r, buf[have:])
@@ -170,6 +178,21 @@ type octetScan struct {
 	found, invalid   bool
 	tail, pending    []byte // last len(needle)-1 bytes; an incomplete rune at the end
 	window, runesBuf []byte // reused scratch
+}
+
+// Scratch reused across messages and sessions: a SEARCH scans every message, and buffers made per
+// message (64 KiB plus the key's length) were garbage in proportion to both.
+var (
+	scanBufs   = sync.Pool{New: func() any { return new([]byte) }}
+	octetScans = sync.Pool{New: func() any { return new(octetScan) }}
+)
+
+// newOctetScan returns a pooled octetScan reset for needle; the caller puts it back.
+func newOctetScan(needle []byte) *octetScan {
+	o := octetScans.Get().(*octetScan)
+	o.needle, o.found, o.invalid = needle, len(needle) == 0, false
+	o.tail, o.pending = o.tail[:0], o.pending[:0]
+	return o
 }
 
 func (o *octetScan) Write(p []byte) (int, error) {

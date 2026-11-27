@@ -142,3 +142,30 @@ func TestSearchTextDecodesTransferEncodings(t *testing.T) {
 		}
 	}
 }
+
+// BODY matches no header field at any level, TEXT matches them all (RFC 9051 6.4.4: BODY "doesn't
+// match any header fields", TEXT covers "header (including MIME header fields)"): neither a MIME
+// part header nor the header of an attached message/rfc822 counts for BODY.
+func TestSearchBodySkipsNestedHeaders(t *testing.T) {
+	raw := map[uint32]string{1: "From: a@example.com\r\nSubject: report\r\nMIME-Version: 1.0\r\n" +
+		"Content-Type: multipart/mixed; boundary=b\r\n\r\n" +
+		"--b\r\nContent-Type: text/plain\r\nContent-Description: partdesc\r\n\r\nouter text\r\n" +
+		"--b\r\nContent-Type: message/rfc822\r\n\r\n" +
+		"Subject: hiddensubject\r\nFrom: b@example.org\r\n\r\nnested text\r\n" +
+		"--b--\r\n"}
+	for _, tc := range []struct {
+		key        string
+		body, text bool
+	}{
+		{"outer text", true, true},
+		{"nested text", true, true},
+		{"partdesc", false, true},
+		{"hiddensubject", false, true},
+	} {
+		body := len(MatchSearchWithLoader([]Message{{UID: 1}}, SearchCriteria{Body: tc.key}, loaderOf(raw))) == 1
+		text := len(MatchSearchWithLoader([]Message{{UID: 1}}, SearchCriteria{Text: tc.key}, loaderOf(raw))) == 1
+		if body != tc.body || text != tc.text {
+			t.Errorf("%q: BODY %v TEXT %v, want %v %v", tc.key, body, text, tc.body, tc.text)
+		}
+	}
+}
