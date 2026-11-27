@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Fix (SMTP, RFC 2045 / RFC 3030 / RFC 6152): a NUL octet in a message is refused (554 5.6.0), by
+  DATA and BDAT: it is binary content, which needs BINARYMIME (not offered). The client never
+  sends one: such a message (stored with IMAP APPEND) fails for good with a DSN (5.6.0), and
+  notifications never copy it.
+- Fix (SMTP MAIL, RFC 6152 / RFC 5321 4.1.1.11): BODY= with no value is refused with 501 (it was
+  taken as 7BIT), and a known parameter without its value (BODY, SIZE, RET, ENVID, AUTH) gets 501
+  instead of 555.
+
 ## 0.5.0
 
 - Fix (SMTP BDAT, RFC 3030 / RFC 5321 4.5.3.1.6): lines over 998 octets are refused with the 552

@@ -16,6 +16,11 @@ const MaxLineOctets = 998
 // delivery fails for good (5.6.0).
 var ErrLineTooLong = errors.New("mail: message has a line too long for SMTP (over 998 octets)")
 
+// ErrNUL is returned by the SMTP client, before connecting, for a message with a NUL octet: binary
+// data (RFC 2045 2.7, 2.8), which RFC 3030 3 and RFC 6152 3 forbid without BINARYMIME. The delivery
+// fails for good (5.6.0).
+var ErrNUL = errors.New("mail: message has a NUL octet, binary content SMTP cannot carry")
+
 // Has8Bit reports whether b holds any octet outside US-ASCII.
 func Has8Bit(b []byte) bool {
 	for _, c := range b {

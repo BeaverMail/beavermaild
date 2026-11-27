@@ -138,6 +138,9 @@ func SendMessage(ctx context.Context, addr, mailFrom, rcptTo string, msg *mail.O
 	if msg.MaxLine > mail.MaxLineOctets {
 		return "", &DeliveryError{Err: mail.ErrLineTooLong, Permanent: true}
 	}
+	if msg.NUL { // binary content, never sent without BINARYMIME (RFC 3030 3, RFC 6152 3)
+		return "", &DeliveryError{Err: mail.ErrNUL, Permanent: true}
+	}
 	// RFC 6531 3.2: an A-label domain is not internationalized, so only a UTF-8 local part or UTF-8
 	// header fields need SMTPUTF8.
 	mailFrom, rcptTo = asciiDomain(mailFrom), asciiDomain(rcptTo)

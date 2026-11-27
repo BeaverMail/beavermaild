@@ -26,6 +26,9 @@ var (
 	// ErrBareLF is returned when a DATA line holds a bare LF or bare CR (SMTP smuggling,
 	// CVE-2023-51764 class): the end of the message can no longer be trusted.
 	ErrBareLF = errors.New("smtp: bare CR or LF in data")
+	// ErrNUL is returned for a NUL octet in the message: 7bit and 8bit content have none (RFC 2045
+	// 2.7, 2.8); it is binary data, which needs BINARYMIME (RFC 3030 3), not offered.
+	ErrNUL = errors.New("smtp: NUL octet in data")
 )
 
 // DataLimits caps inbound SMTP DATA size and line length.
@@ -79,6 +82,9 @@ func readDATA(r *bufio.Reader, limits DataLimits, w io.Writer, beforeRead ...fun
 		}
 		if bytes.Equal(content, []byte(".")) {
 			return nil
+		}
+		if bytes.IndexByte(content, 0) >= 0 {
+			return ErrNUL
 		}
 		if len(content) > 0 && content[0] == '.' {
 			content = content[1:]
@@ -203,6 +209,8 @@ func dataErrorResponse(err error) string {
 		return "552 5.3.4 Line length exceeds maximum permitted"
 	case errors.Is(err, ErrBareLF):
 		return replyBareCRLF
+	case errors.Is(err, ErrNUL):
+		return "554 5.6.0 NUL octet in message: binary content is not accepted"
 	default:
 		return fmt.Sprintf("554 5.6.0 %s", err.Error())
 	}

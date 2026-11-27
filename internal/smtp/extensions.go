@@ -53,11 +53,14 @@ func parseMailArg(arg string) (address string, declaredSize int, params MailPara
 		}
 		seen[key] = true
 		if !hasVal {
-			if key == "SMTPUTF8" {
+			switch key {
+			case "SMTPUTF8":
 				params.SMTPUTF8 = true
-				continue
+			case "SIZE", "RET", "ENVID", "BODY", "AUTH":
+				return "", 0, MailParams{}, false // a known keyword without its value: 501, not 555
+			default:
+				params.Unsupported = replyParamUnknown
 			}
-			params.Unsupported = replyParamUnknown
 			continue
 		}
 		switch key {
@@ -83,6 +86,10 @@ func parseMailArg(arg string) (address string, declaredSize int, params MailPara
 				return "", 0, MailParams{}, false
 			}
 		case "BODY":
+			// body-value = "7BIT" / "8BITMIME" (RFC 6152 2): empty is no value, not an absent BODY.
+			if val == "" {
+				return "", 0, MailParams{}, false
+			}
 			params.Body = val
 		case "AUTH":
 			// RFC 4954 5: a server advertising AUTH MUST accept the parameter, logged in or not. This

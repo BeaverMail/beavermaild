@@ -69,6 +69,16 @@ func TestParseMailArg(t *testing.T) {
 	if _, _, ok := parseBDAT("x LAST"); ok {
 		t.Fatal("bad bdat")
 	}
+	// RFC 6152 2: body-value is 7BIT or 8BITMIME, never empty; a known keyword without its value
+	// is a syntax error (501), not an unknown parameter (555).
+	for _, arg := range []string{"FROM:<> BODY=", "FROM:<> BODY", "FROM:<> SIZE", "FROM:<> RET", "FROM:<> ENVID", "FROM:<> AUTH"} {
+		if _, _, _, ok := parseMailArg(arg); ok {
+			t.Errorf("%q accepted", arg)
+		}
+	}
+	if _, _, p, ok := parseMailArg("FROM:<> SMTPUTF8 BODY=8bitmime"); !ok || !p.SMTPUTF8 || p.Body != "8BITMIME" {
+		t.Errorf("SMTPUTF8 BODY=8bitmime: %+v %v", p, ok)
+	}
 	// RFC 3030 2: chunk-size = 1*DIGIT; strconv.Atoi alone took a sign.
 	for _, arg := range []string{"+5", "-0", "+0 LAST", "5x", "99999999999999999999999", "5 LAST more"} {
 		if _, _, ok := parseBDAT(arg); ok {

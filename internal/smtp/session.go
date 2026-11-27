@@ -1122,7 +1122,7 @@ type bdatChunk struct {
 	size int
 	last bool
 	// err refuses the message once its chunk is read and dropped (answered as DATA would):
-	// ErrMessageTooLarge, errHeaderTooLarge, ErrLineTooLong, or errSpoolWrite (451).
+	// ErrMessageTooLarge, errHeaderTooLarge, ErrLineTooLong, ErrNUL, or errSpoolWrite (451).
 	err error
 }
 
@@ -1182,7 +1182,8 @@ func (s *session) consumeBDAT(arg string, mailBlocked bool) (bdatChunk, error) {
 
 // refused reports a spool error that refuses the message but leaves the session in step.
 func refused(err error) bool {
-	return errors.Is(err, errHeaderTooLarge) || errors.Is(err, ErrLineTooLong) || errors.Is(err, errSpoolWrite)
+	return errors.Is(err, errHeaderTooLarge) || errors.Is(err, ErrLineTooLong) || errors.Is(err, ErrNUL) ||
+		errors.Is(err, errSpoolWrite)
 }
 
 func (s *session) cmdBDAT(ctx context.Context, c bdatChunk) error {

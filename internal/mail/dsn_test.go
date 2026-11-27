@@ -191,4 +191,11 @@ func TestDSNLinesFitSMTP(t *testing.T) {
 	if n := longestLine(dsn); n > MaxLineOctets || !strings.Contains(string(dsn), "Content-Type: text/rfc822-headers\r\nContent-Transfer-Encoding: base64") {
 		t.Errorf("original with long lines: longest line %d", n)
 	}
+	// A NUL (ErrNUL) the same: never copied into the notification.
+	nul := []byte("From: a@example.org\r\nSubject: a\x00b\r\n\r\nbody\x00\r\n")
+	dsn = BuildDSN(DSNBuildOpts{ReturnPath: "a@example.org", FinalRcpt: "b@example.net", Ret: RetFull,
+		Action: DSNActionFailed, Status: "5.6.0", Diagnostic: ErrNUL.Error(), OriginalRaw: nul, Hostname: "mx.example.net"})
+	if !smtpText(dsn) {
+		t.Error("original with a NUL: the notification carries it")
+	}
 }

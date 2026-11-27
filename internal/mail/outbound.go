@@ -31,6 +31,7 @@ type Outbound struct {
 	EightBit        bool  // an octet outside US-ASCII anywhere (needs 8BITMIME)
 	EightBitHeaders bool  // one in a header field at any MIME level (needs SMTPUTF8, Has8BitHeaders)
 	MaxLine         int   // longest line, CR LF excluded (SMTP allows MaxLineOctets)
+	NUL             bool  // a NUL octet: binary content, which SMTP without BINARYMIME cannot carry
 
 	prefix []byte // signature field, written before the message
 	header []byte // wire-form header block, at most maxOutboundHeader octets
@@ -44,6 +45,7 @@ func OutboundBytes(raw []byte) *Outbound {
 		Size:     int64(len(wire)),
 		EightBit: Has8Bit(wire),
 		MaxLine:  longestLine(wire),
+		NUL:      bytes.IndexByte(wire, 0) >= 0,
 		header:   extractHeaders(wire),
 		open:     func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(wire)), nil },
 	}
@@ -96,6 +98,7 @@ func newOutbound(open func() (io.ReadCloser, error), signer OutboundSigner, sign
 	o.Size = count.n + int64(len(o.prefix))
 	o.EightBit = count.eightBit || Has8Bit(o.prefix)
 	o.MaxLine = max(count.maxLine, longestLine(o.prefix))
+	o.NUL = count.nul
 	if o.EightBit {
 		if src, err = open(); err != nil {
 			return nil, err
@@ -169,7 +172,7 @@ func readHeaderBlock(r *bufio.Reader, max int) ([]byte, error) {
 // wireCount counts octets, notes any outside US-ASCII and the longest line.
 type wireCount struct {
 	n                int64
-	eightBit         bool
+	eightBit, nul    bool
 	lineLen, maxLine int
 }
 
@@ -182,11 +185,17 @@ func (c *wireCount) Write(p []byte) (int, error) {
 			c.lineLen = 0
 		case '\r':
 		default:
+			c.nul = c.nul || b == 0
 			c.lineLen++
 			c.maxLine = max(c.maxLine, c.lineLen)
 		}
 	}
 	return len(p), nil
+}
+
+// smtpText reports whether b can go over SMTP as it is: lines within MaxLineOctets, no NUL.
+func smtpText(b []byte) bool {
+	return longestLine(b) <= MaxLineOctets && bytes.IndexByte(b, 0) < 0
 }
 
 // longestLine is the longest line of b, CR LF excluded.

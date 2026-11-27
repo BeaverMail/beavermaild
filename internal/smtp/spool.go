@@ -30,7 +30,7 @@ type spool struct {
 	file      *os.File
 	w         *bufio.Writer
 	bodyN     int64
-	maxLine   int // longest line allowed, CR LF excluded; 0 for none (DATA checks its lines itself)
+	maxLine   int // BDAT: longest line allowed, CR LF excluded, and no NUL; 0 for no check (DATA checks itself)
 	lineLen   int // octets of the current line so far
 }
 
@@ -53,6 +53,8 @@ func (sp *spool) Write(p []byte) (int, error) {
 			case '\n':
 				sp.lineLen = 0
 			case '\r':
+			case 0:
+				return 0, ErrNUL
 			default:
 				if sp.lineLen++; sp.lineLen > sp.maxLine {
 					return 0, ErrLineTooLong

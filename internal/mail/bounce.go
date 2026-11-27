@@ -117,7 +117,7 @@ func BuildDSN(opts DSNBuildOpts) []byte {
 			}
 			b.WriteString("\r\nContent-Type: " + typ + "\r\nContent-Transfer-Encoding: base64\r\n\r\n")
 			part = base64Lines(CRLF(part))
-		} else if headersOnly && longestLine(part) > MaxLineOctets {
+		} else if headersOnly && !smtpText(part) {
 			// A header line SMTP cannot carry: base64, so the notification itself can be sent.
 			b.WriteString("\r\nContent-Type: text/rfc822-headers\r\nContent-Transfer-Encoding: base64\r\n\r\n")
 			part = base64Lines(CRLF(part))
@@ -256,7 +256,7 @@ func clipUTF8(s string, n int) string {
 func dsnReturnPart(opts DSNBuildOpts) ([]byte, bool) {
 	switch {
 	case opts.Ret == RetFull && opts.Action == DSNActionFailed && !opts.HeaderOnly && len(opts.OriginalRaw) <= MaxDSNReturnBytes &&
-		longestLine(opts.OriginalRaw) <= MaxLineOctets:
+		smtpText(opts.OriginalRaw):
 		return opts.OriginalRaw, false
 	case opts.Ret == RetFull, opts.Ret == RetHdrs:
 		return extractHeaders(opts.OriginalRaw), true
@@ -308,7 +308,7 @@ func SMTPStatusFromError(err error) string {
 	if errors.Is(err, ErrNeeds7Bit) {
 		return "5.6.3" // conversion required and not possible (RFC 3463)
 	}
-	if errors.Is(err, ErrLineTooLong) {
+	if errors.Is(err, ErrLineTooLong) || errors.Is(err, ErrNUL) {
 		return "5.6.0" // other media error: content SMTP cannot carry (RFC 3463)
 	}
 	if errors.Is(err, ErrNeedsSMTPUTF8) {
