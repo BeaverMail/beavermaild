@@ -70,7 +70,7 @@ func readHeader(br *bufio.Reader, limit int) []byte {
 // once, as a stream. Text is compared as RFC 5255 4.6 says: transfer encodings and RFC 2047 words
 // removed, charsets converted to UTF-8, then i;unicode-casemap (i;octet where that fails). TEXT
 // also covers the header fields of the message and of its parts.
-func openContains(load RawLoader, m Message, needle string, body bool) bool {
+func openContains(load RawLoader, m Message, needle needle, body bool) bool {
 	r, err := load(m)
 	if err != nil {
 		return false
@@ -89,7 +89,7 @@ func parseHeaderBlock(raw []byte) textproto.MIMEHeader {
 
 // fieldsContain reports whether a header field, as "Name: value" with encoded words decoded,
 // holds needle.
-func fieldsContain(hdr textproto.MIMEHeader, needle string) bool {
+func fieldsContain(hdr textproto.MIMEHeader, needle needle) bool {
 	for name, values := range hdr {
 		for _, v := range values {
 			if headerContains(name+": "+v, needle) {
@@ -106,7 +106,7 @@ const maxSearchMIMEDepth = 100
 // entityContains walks the entity with header hdr and body r as a stream and reports whether the
 // decoded text of a leaf holds needle; with headers set, its header fields and those of every
 // part and attached message count too.
-func entityContains(hdr textproto.MIMEHeader, r io.Reader, needle string, headers bool, depth int) bool {
+func entityContains(hdr textproto.MIMEHeader, r io.Reader, needle needle, headers bool, depth int) bool {
 	if headers && fieldsContain(hdr, needle) {
 		return true
 	}

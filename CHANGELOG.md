@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Security (login, RFC 3501 11.2): a successful login no longer clears the failed attempts made
+  from the same address under other user names, so signing in to one's own account between
+  guesses no longer gives unlimited guesses at another (IMAP, SMTP AUTH and the web login share the
+  limiter). IPv6 clients are counted per /64, and expired counters are dropped.
+- Security (IMAP SEARCH): text keys are folded once per command instead of once per message and
+  header field, so a long key no longer multiplies the cost by the number of messages (a 60 KB TEXT
+  key over 2000 messages: 2.4 s, now 0.08 s).
+- Fix (IMAP): a command line past 64 KiB ends the connection with BYE [TOOBIG]
+  instead of a reset with no reply.
 - Fix (IMAP SEARCH/SORT, RFC 5255 / RFC 5051): the server now advertises I18NLEVEL=1. SEARCH
   compares text with i;unicode-casemap, as SORT already did ("Ｆull" matches "FULL", "cafe"
   matches "café"), and converts each body part from its declared charset (an ISO-8859-1 part

@@ -48,6 +48,28 @@ type SearchCriteria struct {
 	SentOn     *time.Time // Date header, calendar day in the sender's zone
 	Keyword    string     // KEYWORD criterion
 	Unkeyword  string     // UNKEYWORD criterion
+
+	keys *searchKeys // the text keys folded once per command (withKeys)
+}
+
+// searchKeys holds the text criteria of one SearchCriteria as needles.
+type searchKeys struct {
+	from, to, cc, bcc, subject, text, body needle
+	headers                                []needle
+}
+
+// withKeys returns c with its text keys folded, for a command to match many messages against.
+func (c SearchCriteria) withKeys() SearchCriteria {
+	if c.keys != nil {
+		return c
+	}
+	k := &searchKeys{from: newNeedle(c.From), to: newNeedle(c.To), cc: newNeedle(c.CC), bcc: newNeedle(c.BCC),
+		subject: newNeedle(c.Subject), text: newNeedle(c.Text), body: newNeedle(c.Body)}
+	for _, h := range c.Headers {
+		k.headers = append(k.headers, newNeedle(h.Value))
+	}
+	c.keys = k
+	return c
 }
 
 // SeqRange is one IMAP sequence-set range; 0 stands for "*" (the largest value in the mailbox).
@@ -102,6 +124,7 @@ func MatchSearch(msgs []Message, c SearchCriteria) []uint32 {
 func MatchSearchWithLoader(msgs []Message, c SearchCriteria, load RawLoader) []uint32 {
 	var out []uint32
 	pos := newSearchPos(msgs)
+	c = c.withKeys()
 	for i, m := range msgs {
 		pos.seq = uint32(i + 1)
 		if !matchSearchOne(m, pos, c, load) {
@@ -176,6 +199,7 @@ func matchSearchOne(m Message, pos searchPos, c SearchCriteria, load RawLoader) 
 		return false
 	}
 	if needsRawSearch(c) {
+		c = c.withKeys() // already done by every caller that matches many messages
 		if load == nil {
 			return false
 		}
@@ -191,10 +215,10 @@ func matchSearchOne(m Message, pos searchPos, c SearchCriteria, load RawLoader) 
 				}
 			}
 		}
-		if c.Text != "" && !openContains(load, m, c.Text, false) {
+		if c.Text != "" && !openContains(load, m, c.keys.text, false) {
 			return false
 		}
-		if c.Body != "" && !openContains(load, m, c.Body, true) {
+		if c.Body != "" && !openContains(load, m, c.keys.body, true) {
 			return false
 		}
 	}
@@ -268,26 +292,26 @@ func matchSearchHeaders(raw []byte, c SearchCriteria) bool {
 	if err != nil {
 		return false
 	}
-	if c.From != "" && !addressContains(msg.Header.Get("From"), c.From) {
+	if c.From != "" && !addressContains(msg.Header.Get("From"), c.keys.from) {
 		return false
 	}
-	if c.To != "" && !addressContains(msg.Header.Get("To"), c.To) {
+	if c.To != "" && !addressContains(msg.Header.Get("To"), c.keys.to) {
 		return false
 	}
-	if c.CC != "" && !addressContains(msg.Header.Get("Cc"), c.CC) {
+	if c.CC != "" && !addressContains(msg.Header.Get("Cc"), c.keys.cc) {
 		return false
 	}
-	if c.BCC != "" && !addressContains(msg.Header.Get("Bcc"), c.BCC) {
+	if c.BCC != "" && !addressContains(msg.Header.Get("Bcc"), c.keys.bcc) {
 		return false
 	}
-	if c.Subject != "" && !headerContains(msg.Header.Get("Subject"), c.Subject) {
+	if c.Subject != "" && !headerContains(msg.Header.Get("Subject"), c.keys.subject) {
 		return false
 	}
-	for _, h := range c.Headers {
+	for i, h := range c.Headers {
 		// HEADER field "" matches messages that have the field, whatever its value (RFC 3501).
 		// Every occurrence counts: a repeated field matches if any of its values does.
 		values, present := msg.Header[textproto.CanonicalMIMEHeaderKey(h.Field)]
-		if !present || !slices.ContainsFunc(values, func(v string) bool { return headerContains(v, h.Value) }) {
+		if !present || !slices.ContainsFunc(values, func(v string) bool { return headerContains(v, c.keys.headers[i]) }) {
 			return false
 		}
 	}
@@ -296,7 +320,7 @@ func matchSearchHeaders(raw []byte, c SearchCriteria) bool {
 
 // headerContains matches needle against the header value with RFC 2047 encoded words decoded,
 // so a UTF-8 search finds "=?UTF-8?Q?...?=" subjects and names.
-func headerContains(haystack, needle string) bool {
+func headerContains(haystack string, needle needle) bool {
 	if decoded, err := headerDecoder.DecodeHeader(haystack); err == nil {
 		haystack = decoded
 	}
@@ -306,7 +330,7 @@ func headerContains(haystack, needle string) bool {
 // addressContains matches an address criterion against the field as written and without RFC 5322
 // comments, so "user@example.org" finds "<user (c)@ (c) example.org>" while a real name kept in
 // a comment ("user@example.org (Real Name)") still matches.
-func addressContains(value, needle string) bool {
+func addressContains(value string, needle needle) bool {
 	return headerContains(value, needle) || headerContains(stripAddressComments(value), needle)
 }
 

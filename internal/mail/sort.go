@@ -79,12 +79,13 @@ func SortMessagesContext(ctx context.Context, msgs []Message, crits []SortCriter
 func matchSortRows(ctx context.Context, msgs []Message, expr SearchExpr, load RawLoader) ([]sortRow, error) {
 	var rows []sortRow
 	pos := newSearchPos(msgs)
+	prepared := expr.withKeys()
 	for i, m := range msgs {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		pos.seq = uint32(i + 1)
-		if !matchSearchExprOne(m, pos, &expr, load) {
+		if !matchSearchExprOne(m, pos, prepared, load) {
 			continue
 		}
 		rows = append(rows, sortRow{seq: uint32(i + 1), fields: loadSortFields(m, load)})

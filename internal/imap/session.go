@@ -113,6 +113,9 @@ func (s *session) run(ctx context.Context) error {
 	}
 	for {
 		err := s.serveCommands(ctx)
+		if errors.Is(err, errLineTooLong) {
+			return s.byeLineTooLong()
+		}
 		if !errors.Is(err, mail.ErrContention) {
 			return err
 		}
@@ -1612,6 +1615,18 @@ const maxLineBytes = 64 << 10
 
 // errLineTooLong ends the connection: the rest of the line cannot be told apart from new commands.
 var errLineTooLong = errors.New("imap: line too long")
+
+// byeLineTooLong says why the connection ends, then reads what the client is still
+// sending for a moment: closing with unread input resets the connection and the BYE can be lost.
+func (s *session) byeLineTooLong() error {
+	_ = s.untagged("BYE [TOOBIG] Command line too long")
+	if c, ok := s.conn.(interface{ CloseWrite() error }); ok {
+		_ = c.CloseWrite()
+	}
+	_ = s.conn.SetReadDeadline(time.Now().Add(time.Second))
+	_, _ = io.CopyN(io.Discard, s.r, 1<<20)
+	return errByeSent
+}
 
 // readLineNoDeadline reads one line under whatever read deadline the caller set. It stops at
 // maxLineBytes instead of buffering whatever a client sends before its newline.

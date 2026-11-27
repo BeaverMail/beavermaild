@@ -46,12 +46,13 @@ func ThreadReferencesContext(ctx context.Context, msgs []Message, expr SearchExp
 	}
 	var all []*threadContainer
 	pos := newSearchPos(msgs)
+	prepared := expr.withKeys()
 	for i, m := range msgs {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		pos.seq = uint32(i + 1)
-		if !matchSearchExprOne(m, pos, &expr, load) {
+		if !matchSearchExprOne(m, pos, prepared, load) {
 			continue
 		}
 		var h MsgHeaders

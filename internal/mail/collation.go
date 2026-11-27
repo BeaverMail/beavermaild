@@ -5,6 +5,7 @@ package mail
 import (
 	"bytes"
 	"io"
+	"strings"
 	"unicode"
 	"unicode/utf8"
 
@@ -91,28 +92,40 @@ func unicodeCasemap(s string) string {
 	return "\xff" + s
 }
 
+// needle is a SEARCH key with its i;unicode-casemap form (foldOK false for invalid UTF-8). It is
+// folded once per command: folding per message costs the key's length times the messages
+// (CVE-2026-107581 class).
+type needle struct {
+	raw, folded string
+	foldOK      bool
+}
+
+func newNeedle(s string) needle {
+	f, ok := casemapKey(s)
+	return needle{raw: s, folded: f, foldOK: ok}
+}
+
 // textContains is the SEARCH substring operation (RFC 5255 4.6 c): i;unicode-casemap when both
 // strings are valid UTF-8, else i;octet on the text as it is.
-func textContains(haystack, needle string) bool {
+func textContains(haystack string, n needle) bool {
 	h, okH := casemapKey(haystack)
-	n, okN := casemapKey(needle)
-	if !okH || !okN {
-		return bytes.Contains([]byte(haystack), []byte(needle))
+	if !okH || !n.foldOK {
+		return strings.Contains(haystack, n.raw)
 	}
-	return bytes.Contains([]byte(h), []byte(n))
+	return strings.Contains(h, n.folded)
 }
 
 // readerContains is textContains over a stream, never held in memory whole: the text is matched
 // as octets and, through the casemap transform, as i;unicode-casemap; which answer counts is known
 // once the end shows whether all of it was valid UTF-8 (reported as valid). convertible false (an
 // unknown charset) means i;octet only.
-func readerContains(r io.Reader, needle string, convertible bool) (found, valid bool) {
-	oct := &octetScan{needle: []byte(needle), found: needle == ""}
+func readerContains(r io.Reader, n needle, convertible bool) (found, valid bool) {
+	oct := &octetScan{needle: []byte(n.raw), found: n.raw == ""}
 	tee := io.TeeReader(r, oct)
-	folded, ok := casemapKey(needle)
+	ok := n.foldOK
 	if ok && convertible {
 		var err error
-		found, err = scanContains(transform.NewReader(tee, newCasemap()), []byte(folded))
+		found, err = scanContains(transform.NewReader(tee, newCasemap()), []byte(n.folded))
 		// A transform that fails is a failed conversion (4.6 c): i;octet decides.
 		convertible = err == nil
 	}

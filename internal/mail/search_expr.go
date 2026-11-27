@@ -37,12 +37,13 @@ func MatchSearchExprWithLoader(msgs []Message, expr SearchExpr, load RawLoader) 
 func MatchSearchExprContext(ctx context.Context, msgs []Message, expr SearchExpr, load RawLoader) ([]uint32, error) {
 	var out []uint32
 	pos := newSearchPos(msgs)
+	prepared := expr.withKeys()
 	for i, m := range msgs {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		pos.seq = uint32(i + 1)
-		if !matchSearchExprOne(m, pos, &expr, load) {
+		if !matchSearchExprOne(m, pos, prepared, load) {
 			continue
 		}
 		out = append(out, pos.seq)
@@ -149,6 +150,23 @@ func MatchSearchUIDExprWithLoader(msgs []Message, expr SearchExpr, load RawLoade
 		out[i] = msgs[seq-1].UID
 	}
 	return out
+}
+
+// withKeys returns a copy of the tree with every criterion's text keys folded; the tree itself is
+// left alone, as it may be shared (a saved CONTEXT search).
+func (e *SearchExpr) withKeys() *SearchExpr {
+	if e == nil {
+		return nil
+	}
+	out := *e
+	out.Crit = e.Crit.withKeys()
+	out.And = make([]*SearchExpr, len(e.And))
+	for i, child := range e.And {
+		out.And[i] = child.withKeys()
+	}
+	out.Or = [2]*SearchExpr{e.Or[0].withKeys(), e.Or[1].withKeys()}
+	out.Not = e.Not.withKeys()
+	return &out
 }
 
 func matchSearchExprOne(m Message, pos searchPos, expr *SearchExpr, load RawLoader) bool {

@@ -79,10 +79,10 @@ func TestSearchUnicodeCasemap(t *testing.T) {
 // was never searched.
 func TestSearchAfterLargeDecompositions(t *testing.T) {
 	text := strings.Repeat("\uFDFA", 1<<16) + " hidden word"
-	if found, valid := readerContains(strings.NewReader(text), "HIDDEN WORD", true); !found || !valid {
+	if found, valid := readerContains(strings.NewReader(text), newNeedle("HIDDEN WORD"), true); !found || !valid {
 		t.Fatalf("found=%v valid=%v", found, valid)
 	}
-	if found, _ := readerContains(strings.NewReader(strings.Repeat("\uFDFA", 3)), "\u0639\u0644\u064A\u0647", true); !found {
+	if found, _ := readerContains(strings.NewReader(strings.Repeat("\uFDFA", 3)), newNeedle("\u0639\u0644\u064A\u0647"), true); !found {
 		t.Fatal("expansion of U+FDFA not matched")
 	}
 }

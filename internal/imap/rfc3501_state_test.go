@@ -1,10 +1,13 @@
 package imap_test
 
 import (
+	"bufio"
 	"encoding/base64"
+	"net"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // RFC 3501 2.2.1, 6.1.1, 6.2, 6.2.2 and RFC 4616 2: login commands only before login, capabilities
@@ -108,4 +111,22 @@ func TestRFC3501MessagesAndMailboxes(t *testing.T) {
 	if got := strings.Join(list, ""); !strings.Contains(got, `"Moved/Deeper/a/b"`) || !strings.Contains(got, `(\HasChildren) "/" "Moved"`+"\r\n") {
 		t.Fatalf("RENAME did not take the children or create the superior: %q", list)
 	}
+}
+
+// RFC 3501 7.1.5: a command line past the limit ends the connection with BYE
+// instead of a reset that loses every reply.
+func TestLineTooLongSaysBye(t *testing.T) {
+	t.Parallel()
+	_, _, _, ln, cleanup := startIMAPTestServer(t)
+	defer cleanup()
+	c, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	_ = c.SetDeadline(time.Now().Add(10 * time.Second))
+	r := bufio.NewReader(c)
+	expectPrefix(t, r, "* OK")
+	go func() { _, _ = c.Write([]byte("a1 NOOP " + strings.Repeat("x", 200<<10) + "\r\n")) }()
+	expectPrefix(t, r, "* BYE [TOOBIG]")
 }

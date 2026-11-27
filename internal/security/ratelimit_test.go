@@ -48,3 +48,38 @@ func TestRateLimitGateSuccessClearsFailures(t *testing.T) {
 		t.Fatal("success should reset counter")
 	}
 }
+
+// TestRateLimitSuccessForgivesOnlyItsName: signing in to one's own account must not reset the
+// guesses at another (RFC 3501 11.2; CVE-2026-126618 class: keeping an address from being blocked).
+func TestRateLimitSuccessForgivesOnlyItsName(t *testing.T) {
+	t.Parallel()
+	gate := security.NewRateLimitGate(security.RateLimitConfig{MaxAttempts: 3, Window: time.Minute})
+	ip := "203.0.113.9"
+	for round := 0; round < 3; round++ {
+		gate.RecordAuthFailure(ip, "bob@example.com")
+		gate.RecordAuthSuccess(ip, "alice@example.com")
+	}
+	if gate.AllowAuth(ip, "bob@example.com") {
+		t.Fatal("a success under another name reset the failures")
+	}
+	gate.RecordAuthSuccess(ip, " BOB@example.com")
+	if !gate.AllowAuth(ip, "bob@example.com") {
+		t.Fatal("a success under the same name must forgive its failures")
+	}
+}
+
+// TestRateLimitIPv6Network: an IPv6 client holds a whole /64, so every address in it shares one
+// counter.
+func TestRateLimitIPv6Network(t *testing.T) {
+	t.Parallel()
+	gate := security.NewRateLimitGate(security.RateLimitConfig{MaxAttempts: 3, Window: time.Minute})
+	for _, ip := range []string{"2001:db8:1:2::1", "2001:db8:1:2::2", "2001:db8:1:2:ffff::3"} {
+		gate.RecordAuthFailure(ip, "bob")
+	}
+	if gate.AllowAuth("2001:db8:1:2::99", "bob") {
+		t.Fatal("rotating addresses inside one /64 escaped the limit")
+	}
+	if !gate.AllowAuth("2001:db8:1:3::1", "bob") {
+		t.Fatal("another /64 must have its own counter")
+	}
+}

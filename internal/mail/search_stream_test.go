@@ -23,8 +23,8 @@ func TestReaderContainsMatchesTextContains(t *testing.T) {
 		searchChunk = size
 		for _, text := range texts {
 			for _, n := range needles {
-				want := textContains(text, n)
-				if got, _ := readerContains(strings.NewReader(text), n, true); got != want {
+				want := textContains(text, newNeedle(n))
+				if got, _ := readerContains(strings.NewReader(text), newNeedle(n), true); got != want {
 					t.Errorf("chunk %d: readerContains(%q, %q) = %v, textContains = %v", size, text, n, got, want)
 				}
 			}
@@ -36,7 +36,7 @@ func TestReaderContainsMatchesTextContains(t *testing.T) {
 // message ever existing as one slice.
 func TestSearchTextStreamsLargeMessage(t *testing.T) {
 	body := io.MultiReader(strings.NewReader("Subject: x\r\n\r\n"), io.LimitReader(zeros{}, 32<<20), strings.NewReader("Needle\r\n"))
-	if found, _ := readerContains(body, "needle", true); !found {
+	if found, _ := readerContains(body, newNeedle("needle"), true); !found {
 		t.Fatal("needle at the end of a large message not found")
 	}
 }
@@ -103,7 +103,7 @@ func TestReadHeaderCapped(t *testing.T) {
 	if rest, _ := io.ReadAll(br); string(rest) != "body text\r\n" {
 		t.Fatalf("body after capped header = %q", rest)
 	}
-	if !openContains(BytesLoader(func(Message) ([]byte, error) { return []byte(raw), nil }), Message{}, "BODY TEXT", true) {
+	if !openContains(BytesLoader(func(Message) ([]byte, error) { return []byte(raw), nil }), Message{}, newNeedle("BODY TEXT"), true) {
 		t.Fatal("BODY after a long header not found")
 	}
 }
@@ -130,14 +130,14 @@ func TestSearchTextDecodesTransferEncodings(t *testing.T) {
 		{"qp", "café tres", true, true}, // "tr=\r\nes": a soft line break
 		{"nested", "secret word", true, true},
 		{"nested", "secret word", false, true},
-		{"hdr", "été", false, true},     // TEXT covers the decoded header
-		{"hdr", "été", true, false},     // BODY does not
+		{"hdr", "été", false, true},      // TEXT covers the decoded header
+		{"hdr", "été", true, false},      // BODY does not
 		{"b64", "aGVsbG8g", true, false}, // RFC 5255 4.6 a: the decoded text, not the base64
 		{"qp", "absent", false, false},
 	}
 	for _, tc := range cases {
 		load := BytesLoader(func(Message) ([]byte, error) { return []byte(msgs[tc.msg]), nil })
-		if got := openContains(load, Message{}, tc.needle, tc.body); got != tc.want {
+		if got := openContains(load, Message{}, newNeedle(tc.needle), tc.body); got != tc.want {
 			t.Errorf("%s body=%v %q: %v, want %v", tc.msg, tc.body, tc.needle, got, tc.want)
 		}
 	}
