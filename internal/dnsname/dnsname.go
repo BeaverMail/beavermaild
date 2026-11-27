@@ -3,6 +3,7 @@ package dnsname
 
 import (
 	"strings"
+	"unicode/utf8"
 
 	"golang.org/x/net/idna"
 )
@@ -15,7 +16,7 @@ var lookup = idna.New(idna.MapForLookup(), idna.StrictDomainName(false), idna.Tr
 // ToASCII returns name lowercased, with every U-label as its A-label (RFC 6531 3.2: lookups and
 // comparisons use A-labels). The Go resolver answers "no such host" to a non-ASCII name without
 // querying, so an unconverted U-label silently turns SPF and DMARC into "none". A name IDNA
-// rejects comes back lowercased only: it names no registered domain.
+// rejects, or one that is not valid UTF-8, comes back lowercased only: it names no registered domain.
 func ToASCII(name string) string {
 	name = strings.TrimSpace(name)
 	ascii := true
@@ -25,12 +26,28 @@ func ToASCII(name string) string {
 			break
 		}
 	}
+	// Bytes that are not UTF-8 are no U-label. IDNA would read them as U+FFFD and, depending on
+	// the Unicode tables of the Go release, refuse them or invent an A-label for them.
 	if ascii {
 		return strings.ToLower(name)
+	}
+	if !utf8.ValidString(name) {
+		return lowerASCII(name) // strings.ToLower would also turn the bad bytes into U+FFFD
 	}
 	a, err := lookup.ToASCII(name)
 	if err != nil {
 		return strings.ToLower(name)
 	}
 	return strings.ToLower(a)
+}
+
+// lowerASCII lowercases A-Z and leaves every other byte as it is.
+func lowerASCII(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if 'A' <= c && c <= 'Z' {
+			b[i] = c + 'a' - 'A'
+		}
+	}
+	return string(b)
 }

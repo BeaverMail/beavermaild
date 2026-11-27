@@ -2,6 +2,9 @@
 
 ## 0.5.0
 
+- Fix (domain names): a name that is not valid UTF-8 (for example a HELO argument with stray 8-bit
+  bytes) is no longer passed to IDNA. Depending on the Go release it was refused or turned into a
+  made-up A-label; it now stays as it is, with ASCII letters lowercased.
 - Security (outbound queue): queued messages are sent as a stream from the store. DKIM signing,
   the CRLF conversion and DATA/BDAT no longer load the message: a 10 MB message took about 38 MB
   per delivery (16 at once), now a fixed 3 MB whatever its size.

@@ -12,6 +12,8 @@ func TestToASCII(t *testing.T) {
 		"_dmarc.münchen.example":        "_dmarc.xn--mnchen-3ya.example",
 		"sel._domainkey.bücher.example": "sel._domainkey.xn--bcher-kva.example",
 		"xn--mnchen-3ya.example":        "xn--mnchen-3ya.example",
+		// Not UTF-8: no U-label, and no A-label made up for U+FFFD (Go 1.26 IDNA tables did).
+		"a\xffb.Example": "a\xffb.example",
 	} {
 		if got := ToASCII(in); got != want {
 			t.Errorf("ToASCII(%q) = %q, want %q", in, got, want)
