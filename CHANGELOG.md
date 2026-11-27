@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.0
 
 - Fix (SMTP BDAT, RFC 3030 / RFC 5321 4.5.3.1.6): lines over 998 octets are refused with the 552
   DATA gives (before, BDAT accepted and relayed them). The rest of the chunk is dropped and the
@@ -13,9 +13,6 @@
   returned as its header only, in base64 when the header itself has one.
 - Fix (SMTP BDAT): the chunk size takes digits only (BDAT +5 was accepted), and a message sent in
   many small chunks no longer allocates a 32 KB buffer per chunk.
-
-## 0.5.0
-
 - Fix (domain names): a name that is not valid UTF-8 (for example a HELO argument with stray 8-bit
   bytes) is no longer passed to IDNA. Depending on the Go release it was refused or turned into a
   made-up A-label; it now stays as it is, with ASCII letters lowercased.
