@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"slices"
 	"strings"
 	"time"
@@ -64,12 +65,40 @@ func (q *Queue) EnqueueDSN(ctx context.Context, env EnvelopeDSN, raw []byte) (ui
 	if len(env.Recipients) == 0 {
 		return 0, fmt.Errorf("mail: no recipients")
 	}
-
 	hash, err := q.blobs.Put(ctx, raw)
 	if err != nil {
 		return 0, err
 	}
+	return q.enqueueBlob(ctx, env, hash, uint64(len(raw)))
+}
 
+// EnqueueReader is EnqueueDSN for a message read from r, streamed to the blob store and never
+// held in memory.
+func (q *Queue) EnqueueReader(ctx context.Context, env EnvelopeDSN, r io.Reader) (uint32, error) {
+	if len(env.Recipients) == 0 {
+		return 0, fmt.Errorf("mail: no recipients")
+	}
+	w, err := q.blobs.Create(ctx)
+	if err != nil {
+		return 0, err
+	}
+	n, err := io.Copy(w, r)
+	if err == nil && n == 0 {
+		err = fmt.Errorf("mail: empty message")
+	}
+	if err != nil {
+		w.Abort()
+		return 0, err
+	}
+	hash, err := w.Commit()
+	if err != nil {
+		return 0, err
+	}
+	return q.enqueueBlob(ctx, env, hash, uint64(n))
+}
+
+// enqueueBlob queues a message whose blob is stored already.
+func (q *Queue) enqueueBlob(ctx context.Context, env EnvelopeDSN, hash [storage.Blake3DigestLen]byte, size uint64) (uint32, error) {
 	id, err := q.nextQueueID(ctx)
 	if err != nil {
 		return 0, err
@@ -93,7 +122,7 @@ func (q *Queue) EnqueueDSN(ctx context.Context, env EnvelopeDSN, raw []byte) (ui
 		ReturnPath: strings.TrimSpace(env.ReturnPath),
 		SignAs:     strings.TrimSpace(env.SignAs),
 		Recipients: rcpts,
-		Size:       uint64(len(raw)),
+		Size:       size,
 		Ret:        string(env.Ret),
 		Envid:      env.Envid,
 		Body:       env.Body,

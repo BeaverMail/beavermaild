@@ -46,7 +46,7 @@ func TestMXTargets(t *testing.T) {
 func TestReadDATAHugeLineBounded(t *testing.T) {
 	t.Parallel()
 	r := bufio.NewReader(strings.NewReader(strings.Repeat("a", 4<<20) + "\r\nnext\r\n"))
-	if _, err := readDATA(r, DataLimits{}); !errors.Is(err, ErrLineTooLong) {
+	if _, err := readDATABytes(r, DataLimits{}); !errors.Is(err, ErrLineTooLong) {
 		t.Fatalf("err %v", err)
 	}
 	if rest, _ := r.ReadString('\n'); rest != "next\r\n" {

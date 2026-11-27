@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+
+	"github.com/BeaverMail/beavermaild/internal/mail"
 )
 
 const (
@@ -43,52 +45,61 @@ func (l DataLimits) withDefaults() DataLimits {
 	return l
 }
 
-// readDATA reads dot-stuffed message data until CRLF.CRLF, enforcing limits and strict CRLF lines.
-// beforeRead, if non-nil, is called before each line read (idle read deadline refresh).
-func readDATA(r *bufio.Reader, limits DataLimits, beforeRead ...func()) ([]byte, error) {
+// readDATA reads dot-stuffed message data until CRLF.CRLF, enforcing limits and strict CRLF lines,
+// and writes the message to w with LF line ends, as it is stored. beforeRead, if non-nil, is called
+// before each line read (idle read deadline refresh).
+func readDATA(r *bufio.Reader, limits DataLimits, w io.Writer, beforeRead ...func()) error {
 	limits = limits.withDefaults()
 	var refresh func()
 	if len(beforeRead) > 0 {
 		refresh = beforeRead[0]
 	}
-	var buf bytes.Buffer
-	lines := 0 // stored with LF: the message size counts CRLF (RFC 1870 5), one more octet per line
+	var buf []byte      // one line buffer for the whole message
+	var size, lines int // stored with LF: the message size counts CRLF (RFC 1870 5), one more octet per line
 	for {
 		if refresh != nil {
 			refresh()
 		}
-		line, tooLong, err := readLineBounded(r, limits.MaxLineBytes+2)
+		line, tooLong, err := readLineBounded(r, limits.MaxLineBytes+2, buf)
+		if line != nil {
+			buf = line
+		}
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if tooLong {
-			return nil, ErrLineTooLong
+			return ErrLineTooLong
 		}
 		if len(line) < 2 || line[len(line)-2] != '\r' {
-			return nil, ErrBareLF
+			return ErrBareLF
 		}
 		content := line[:len(line)-2]
 		if bytes.IndexByte(content, '\r') >= 0 {
-			return nil, ErrBareLF
+			return ErrBareLF
 		}
 		if bytes.Equal(content, []byte(".")) {
-			break
+			return nil
 		}
 		if len(content) > 0 && content[0] == '.' {
 			content = content[1:]
 		}
-		buf.Write(content)
-		buf.WriteByte('\n')
-		if lines++; buf.Len()+lines > limits.MaxMessageBytes {
-			return nil, ErrMessageTooLarge
+		size += len(content) + 1
+		if lines++; size+lines > limits.MaxMessageBytes {
+			return ErrMessageTooLarge
+		}
+		// The LF goes in place of the CR: content is a slice of line, which ends "\r\n".
+		content = append(content, '\n')
+		if _, err := w.Write(content); err != nil {
+			return err
 		}
 	}
-	return buf.Bytes(), nil
 }
 
 // readLineBounded reads through the next '\n' but keeps at most max bytes of it: a longer line is
-// consumed to its end, reported with tooLong, and never buffered whole.
-func readLineBounded(r *bufio.Reader, max int) (line []byte, tooLong bool, err error) {
+// consumed to its end, reported with tooLong, and never buffered whole. The line is appended to
+// buf[:0], so a caller reading many lines can reuse one buffer.
+func readLineBounded(r *bufio.Reader, max int, buf []byte) (line []byte, tooLong bool, err error) {
+	line = buf[:0]
 	for {
 		frag, err := r.ReadSlice('\n')
 		if len(line)+len(frag) > max {
@@ -115,11 +126,15 @@ func drainDATA(r *bufio.Reader, limits DataLimits, beforeRead ...func()) (clean 
 	if len(beforeRead) > 0 {
 		refresh = beforeRead[0]
 	}
+	var buf []byte
 	for {
 		if refresh != nil {
 			refresh()
 		}
-		line, tooLong, err := readLineBounded(r, limits.MaxLineBytes+2)
+		line, tooLong, err := readLineBounded(r, limits.MaxLineBytes+2, buf)
+		if line != nil {
+			buf = line
+		}
 		if err != nil {
 			return false
 		}
@@ -132,42 +147,58 @@ func drainDATA(r *bufio.Reader, limits DataLimits, beforeRead ...func()) (clean 
 	}
 }
 
-// writeDATABody sends dot-stuffed DATA and the CRLF.CRLF terminator.
-func writeDATABody(w io.Writer, data []byte) error {
-	for len(data) > 0 {
-		idx := bytes.IndexByte(data, '\n')
-		var line []byte
-		if idx < 0 {
-			line = data
-			data = nil
-		} else {
-			line = data[:idx]
-			data = data[idx+1:]
-		}
-		if n := len(line); n > 0 && line[n-1] == '\r' {
-			line = line[:n-1]
-		}
-		if len(line) > 0 && line[0] == '.' {
-			if _, err := w.Write([]byte(".")); err != nil {
-				return err
-			}
-		}
-		if _, err := w.Write(line); err != nil {
-			return err
-		}
-		if _, err := w.Write([]byte("\r\n")); err != nil {
+// writeDATABody sends msg dot-stuffed (RFC 5321 4.5.2), then the CRLF.CRLF terminator.
+func writeDATABody(w io.Writer, msg *mail.Outbound) error {
+	bw := bufio.NewWriterSize(w, 32<<10)
+	d := &dotStuffer{w: bw, lineStart: true}
+	if _, err := msg.WriteTo(d); err != nil {
+		return err
+	}
+	if !d.lineStart { // a last line without its line end still needs one before the "."
+		if _, err := bw.WriteString("\r\n"); err != nil {
 			return err
 		}
 	}
-	_, err := w.Write([]byte(".\r\n"))
-	return err
+	if _, err := bw.WriteString(".\r\n"); err != nil {
+		return err
+	}
+	return bw.Flush()
+}
+
+// dotStuffer doubles a "." that starts a line of the CRLF stream written to it.
+type dotStuffer struct {
+	w         io.Writer
+	lineStart bool
+}
+
+func (d *dotStuffer) Write(p []byte) (int, error) {
+	n := len(p)
+	for len(p) > 0 {
+		if d.lineStart && p[0] == '.' {
+			if _, err := d.w.Write([]byte{'.'}); err != nil {
+				return 0, err
+			}
+		}
+		line := p
+		if i := bytes.IndexByte(p, '\n'); i >= 0 {
+			line = p[:i+1]
+		}
+		if _, err := d.w.Write(line); err != nil {
+			return 0, err
+		}
+		d.lineStart = line[len(line)-1] == '\n'
+		p = p[len(line):]
+	}
+	return n, nil
 }
 
 // dataErrorResponse maps readDATA errors to SMTP reply lines.
 func dataErrorResponse(err error) string {
 	switch {
-	case errors.Is(err, ErrMessageTooLarge):
+	case errors.Is(err, ErrMessageTooLarge), errors.Is(err, errHeaderTooLarge):
 		return replyMessageTooLarge
+	case errors.Is(err, errSpoolWrite):
+		return replyLocalError
 	case errors.Is(err, ErrLineTooLong):
 		return "552 5.3.4 Line length exceeds maximum permitted"
 	case errors.Is(err, ErrBareLF):

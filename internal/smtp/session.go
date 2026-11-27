@@ -84,7 +84,8 @@ type session struct {
 	// otherwise repeat RCPT TO:<postmaster@...> up to MaxRecipients times per transaction.
 	postmasters map[uint32][]storage.Account
 
-	bdatBuf  []byte
+	spool    *spool             // the message being received, DATA or BDAT; nil between transactions
+	bdatCR   *mail.BareCRWriter // BDAT: chunks go through BareCR into spool
 	bdatUsed bool
 }
 
@@ -264,7 +265,7 @@ func (s *session) dispatch(ctx context.Context, cmd, arg string, mailBlocked boo
 	// (SMTP smuggling through BDAT).
 	var chunk bdatChunk
 	if cmd == "BDAT" {
-		if chunk, err = s.consumeBDAT(arg); err != nil {
+		if chunk, err = s.consumeBDAT(arg, mailBlocked); err != nil {
 			return false, false, err
 		}
 	}
@@ -272,7 +273,7 @@ func (s *session) dispatch(ctx context.Context, cmd, arg string, mailBlocked boo
 	// clients that must use TLS (RFC 3207 6): like a server that requires TLS, answer every command but
 	// NOOP, EHLO, STARTTLS and QUIT with 530 (RFC 3207 4). AUTH keeps the more specific 538 5.7.11 of
 	// RFC 4954 6.
-	if (s.submission || s.requireTLS) && !s.secure && s.tls != nil {
+	if s.tlsBlocks() {
 		switch cmd {
 		case "NOOP", "EHLO", "STARTTLS", "QUIT", "AUTH":
 		default:
@@ -649,16 +650,25 @@ func (s *session) handleDATA(ctx context.Context) error {
 		}
 		return s.writef(reply)
 	}
+	sp, err := newSpool(s.inbox.Blobs().TempFile)
+	if err != nil { // before 354: the client has sent nothing yet
+		s.log.Warn("smtp spool", slog.Any("err", err))
+		return s.writef(replyLocalError)
+	}
+	s.spool = sp
 	if err := s.writef(replyDataStart); err != nil {
 		return err
 	}
-	raw, err := readDATA(s.r, s.dataLimits, s.bumpReadDeadline)
+	err = readDATA(s.r, s.dataLimits, sp, s.bumpReadDeadline)
 	// SMTP smuggling: past a bare CR/LF, or a line too long to check, the end of data is unknowable,
 	// and resuming after the next "." could run attacker text as commands. Answer and hang up, as
 	// Postfix does; the same when the drain of any other failed DATA meets broken framing.
 	if errors.Is(err, ErrBareLF) || errors.Is(err, ErrLineTooLong) {
 		_ = s.writef(dataErrorResponse(err))
 		return errCloseSession
+	}
+	if errors.Is(err, errSpoolWrite) {
+		s.log.Warn("smtp spool", slog.Any("err", err))
 	}
 	if err != nil {
 		if !drainDATA(s.r, s.dataLimits, s.bumpReadDeadline) {
@@ -671,7 +681,7 @@ func (s *session) handleDATA(ctx context.Context) error {
 		s.reset()
 		return nil
 	}
-	return s.deliverAfterFilter(ctx, raw)
+	return s.deliverAfterFilter(ctx)
 }
 
 // filterHelo runs the helo-phase plugin filter before the EHLO/HELO response.
@@ -920,7 +930,10 @@ func (s *session) reset() {
 	s.mailBody = ""
 	s.mailUTF8 = false
 	s.rcpt = s.rcpt[:0]
-	s.bdatBuf = s.bdatBuf[:0]
+	if s.spool != nil {
+		s.spool.close()
+		s.spool, s.bdatCR = nil, nil
+	}
 	s.bdatUsed = false
 	s.filterTxnID = ""
 	s.authState = mailauth.SessionState{SPFEhlo: s.authState.SPFEhlo}
@@ -952,7 +965,9 @@ func (s *session) resolveLocalRcpt(ctx context.Context, addr, domName string) ([
 }
 
 // finishDelivery stores the message for local recipients and enqueues remote ones.
-func (s *session) finishDelivery(ctx context.Context, raw []byte) error {
+// finishDelivery stores and queues the message: header as it now stands, and the spooled body.
+// The local copy is written to the blob store once, for every local recipient.
+func (s *session) finishDelivery(ctx context.Context, header []byte) error {
 	if s.submission && s.principal.AccountID != 0 {
 		email := s.principal.Email()
 		if !s.sendGate.AllowSend(email) {
@@ -966,11 +981,12 @@ func (s *session) finishDelivery(ctx context.Context, raw []byte) error {
 	var remotes []string
 	// Final delivery (RFC 5321 §4.4): local copies carry the envelope sender as Return-Path,
 	// replacing any the message brought along; relayed copies get none (the last hop adds it).
-	local := prependHeader(stripHeaderFields(raw, "Return-Path", nil), "Return-Path", "<"+s.mailFrom+">")
+	local := prependHeader(stripHeaderFields(header, "Return-Path", nil), "Return-Path", "<"+s.mailFrom+">")
 	delivered := make(map[uint32]bool) // one copy per mailbox even when aliases or catch-all overlap
+	var localBlob *mail.StoredBlob
 	for _, t := range s.rcpt {
 		if t.report != "" {
-			if err := s.storeReport(ctx, t, raw); err != nil {
+			if err := s.storeReport(ctx, t, header); err != nil {
 				s.log.Warn("store report failed", "rcpt", t.address, slog.Any("err", err))
 				if err := s.writef(replyLocalError); err != nil {
 					return err
@@ -988,7 +1004,19 @@ func (s *session) finishDelivery(ctx context.Context, raw []byte) error {
 			continue
 		}
 		delivered[t.accountID] = true
-		if _, err := s.inbox.Deliver(ctx, t.accountID, local); err != nil {
+		if localBlob == nil {
+			b, err := s.storeLocalCopy(ctx, local)
+			if err != nil {
+				s.log.Warn("deliver failed", "rcpt", t.address, slog.Any("err", err))
+				if err := s.writef(replyLocalError); err != nil {
+					return err
+				}
+				s.reset()
+				return nil
+			}
+			localBlob = &b
+		}
+		if _, err := s.inbox.DeliverBlob(ctx, t.accountID, *localBlob); err != nil {
 			if errors.Is(err, mail.ErrOverQuota) {
 				if err := s.writef(replyMailboxFull); err != nil {
 					return err
@@ -1012,7 +1040,11 @@ func (s *session) finishDelivery(ctx context.Context, raw []byte) error {
 			s.reset()
 			return nil
 		}
-		if _, err := s.queue.EnqueueDSN(ctx, s.buildEnvelopeDSN(remotes), raw); err != nil {
+		msg, err := s.spool.message(header)
+		if err == nil {
+			_, err = s.queue.EnqueueReader(ctx, s.buildEnvelopeDSN(remotes), msg)
+		}
+		if err != nil {
 			s.log.Warn("enqueue failed", slog.Any("err", err))
 			if err := s.writef(replyLocalError); err != nil {
 				return err
@@ -1021,12 +1053,12 @@ func (s *session) finishDelivery(ctx context.Context, raw []byte) error {
 			return nil
 		}
 	}
-	s.notifyLocalSuccess(ctx, raw)
+	s.notifyLocalSuccess(ctx, header)
 	if s.submission && s.principal.AccountID != 0 {
 		s.sendGate.RecordSend(s.principal.Email())
 	}
 	s.accepted++
-	s.log.Info("smtp accepted", "ip", s.clientIP(), "from", s.mailFrom, "rcpts", s.rcptAddresses(), "size", len(raw), "submission", s.submission, "tls", tlsload.Describe(s.conn))
+	s.log.Info("smtp accepted", "ip", s.clientIP(), "from", s.mailFrom, "rcpts", s.rcptAddresses(), "size", int64(len(header))+s.spool.bodyN, "submission", s.submission, "tls", tlsload.Describe(s.conn))
 	if err := s.writef(replyOK); err != nil {
 		return err
 	}
@@ -1034,10 +1066,19 @@ func (s *session) finishDelivery(ctx context.Context, raw []byte) error {
 	return nil
 }
 
+// storeLocalCopy writes the local copy (header, then the spooled body) to the blob store.
+func (s *session) storeLocalCopy(ctx context.Context, header []byte) (mail.StoredBlob, error) {
+	msg, err := s.spool.message(header)
+	if err != nil {
+		return mail.StoredBlob{}, err
+	}
+	return s.inbox.StoreBlob(ctx, msg)
+}
+
 // notifyLocalSuccess issues a "delivered" DSN for each local recipient that asked for one with
 // NOTIFY=SUCCESS (RFC 3461 5.2.3 (a)). The messages are already stored: a failure here is logged.
 // The DSN goes out with a null sender and NOTIFY=NEVER (RFC 3461 6.1).
-func (s *session) notifyLocalSuccess(ctx context.Context, raw []byte) {
+func (s *session) notifyLocalSuccess(ctx context.Context, header []byte) {
 	if s.mailFrom == "" {
 		return
 	}
@@ -1053,7 +1094,7 @@ func (s *session) notifyLocalSuccess(ctx context.Context, raw []byte) {
 		}
 		dsn := mail.BuildDSN(mail.DSNBuildOpts{
 			ReturnPath: s.mailFrom, FinalRcpt: t.address, Orcpt: t.orcpt, Envid: s.mailEnvid, Ret: s.mailRet,
-			Action: mail.DSNActionDelivered, Status: "2.0.0", OriginalRaw: raw, Hostname: s.hostname,
+			Action: mail.DSNActionDelivered, Status: "2.0.0", OriginalRaw: header, Hostname: s.hostname,
 		})
 		var err error
 		if acc, _, rerr := s.dir.ResolveEmail(ctx, s.mailFrom); rerr == nil && acc.Active {
@@ -1069,34 +1110,61 @@ func (s *session) notifyLocalSuccess(ctx context.Context, raw []byte) {
 	}
 }
 
-// cmdBDAT receives one binary chunk and delivers the message on the final LAST chunk.
-// bdatChunk is a BDAT command with its data already off the stream.
-type bdatChunk struct {
-	data   []byte
-	last   bool
-	tooBig bool // over MaxMessageBytes: read and dropped
+// tlsBlocks reports whether this session refuses mail commands until STARTTLS: submission, or a
+// client smtp.require_starttls_from names (RFC 3207 4, 6).
+func (s *session) tlsBlocks() bool {
+	return (s.submission || s.requireTLS) && !s.secure && s.tls != nil
 }
 
-// consumeBDAT parses a BDAT command and reads its chunk: kept in memory when it fits the message
-// limit, discarded otherwise. A size that cannot be parsed leaves no way to find the next command,
-// so the session ends.
-func (s *session) consumeBDAT(arg string) (bdatChunk, error) {
+// bdatChunk is a BDAT command with its data already off the stream.
+type bdatChunk struct {
+	size     int
+	last     bool
+	tooBig   bool // over MaxMessageBytes, or a header past maxHeaderBytes: read and dropped
+	localErr bool // the spool failed: read and dropped, answered 451
+}
+
+// consumeBDAT parses a BDAT command and reads its chunk: into the spool when cmdBDAT will take it,
+// discarded otherwise (a refused chunk, or one over the message limit). A size that cannot be
+// parsed leaves no way to find the next command, so the session ends.
+func (s *session) consumeBDAT(arg string, mailBlocked bool) (bdatChunk, error) {
 	size, last, ok := parseBDAT(arg)
 	if !ok {
 		_ = s.writef(replySyntaxBDAT)
 		return bdatChunk{}, fmt.Errorf("smtp: bdat syntax %q", arg)
 	}
-	c := bdatChunk{last: last}
-	if size > s.dataLimits.MaxMessageBytes || len(s.bdatBuf)+size > s.dataLimits.MaxMessageBytes {
-		c.tooBig = true
+	c := bdatChunk{size: size, last: last}
+	taken := s.inTxn && len(s.rcpt) > 0 && !mailBlocked && !s.tlsBlocks()
+	if !taken || size > s.dataLimits.MaxMessageBytes || s.spool != nil && s.spool.size()+int64(size) > int64(s.dataLimits.MaxMessageBytes) {
+		c.tooBig = taken
 		if err := discardBDATChunk(s.r, int64(size), s.bumpReadDeadline); err != nil {
 			s.reset()
 			return bdatChunk{}, err
 		}
 		return c, nil
 	}
-	var err error
-	if c.data, err = readBDATChunk(s.r, size, s.bumpReadDeadline); err != nil {
+	if s.spool == nil {
+		sp, err := newSpool(s.inbox.Blobs().TempFile)
+		if err != nil {
+			s.log.Warn("smtp spool", slog.Any("err", err))
+			c.localErr = true
+			if err := discardBDATChunk(s.r, int64(size), s.bumpReadDeadline); err != nil {
+				s.reset()
+				return bdatChunk{}, err
+			}
+			return c, nil
+		}
+		s.spool, s.bdatCR = sp, mail.NewBareCRWriter(sp)
+	}
+	read, err := copyBDATChunk(s.bdatCR, s.r, int64(size), s.bumpReadDeadline)
+	if errors.Is(err, errHeaderTooLarge) || errors.Is(err, errSpoolWrite) {
+		if errors.Is(err, errSpoolWrite) {
+			s.log.Warn("smtp spool", slog.Any("err", err))
+		}
+		c.tooBig, c.localErr = errors.Is(err, errHeaderTooLarge), errors.Is(err, errSpoolWrite)
+		err = discardBDATChunk(s.r, int64(size)-read, s.bumpReadDeadline)
+	}
+	if err != nil {
 		s.reset()
 		return bdatChunk{}, err
 	}
@@ -1107,18 +1175,28 @@ func (s *session) cmdBDAT(ctx context.Context, c bdatChunk) error {
 	if !s.inTxn || len(s.rcpt) == 0 {
 		return s.writef(replyBadSequence)
 	}
-	if c.tooBig {
+	if c.tooBig || c.localErr {
 		s.reset() // the message is lost; RSET state, the session goes on (RFC 3030 2)
+		if c.localErr {
+			return s.writef(replyLocalError)
+		}
 		return s.writef(replyMessageTooLarge)
 	}
 	s.bdatUsed = true
-	s.bdatBuf = append(s.bdatBuf, c.data...)
 	if !c.last {
-		return s.writef("250 2.0.0 %d octets received", len(c.data))
+		return s.writef("250 2.0.0 %d octets received", c.size)
 	}
 	// BDAT is length-framed, so a bare CR cannot end the data; stored, it would still end a header
-	// line for some readers. Same rule as Exim: a continuation in the header, a line end in the body.
-	return s.deliverAfterFilter(ctx, mail.BareCR(s.bdatBuf))
+	// line for some readers. Same rule as Exim: a continuation in the header, a line end in the body
+	// (BareCRWriter, applied as the chunks arrive).
+	if err := s.bdatCR.Close(); err != nil {
+		if errors.Is(err, errHeaderTooLarge) {
+			s.reset()
+			return s.writef(replyMessageTooLarge)
+		}
+		return err
+	}
+	return s.deliverAfterFilter(ctx)
 }
 
 // buildEnvelopeDSN collects MAIL/RCPT DSN parameters for queued remote recipients.
@@ -1191,7 +1269,7 @@ func (s *session) readLine() (string, error) {
 	} else {
 		s.bumpReadDeadline()
 	}
-	line, tooLong, err := readLineBounded(s.r, maxCommandLine)
+	line, tooLong, err := readLineBounded(s.r, maxCommandLine, nil)
 	if err != nil {
 		if stopping || (s.stopping != nil && s.stopping.Load()) {
 			_ = s.writef("421 4.3.2 %s Service shutting down", s.hostname)

@@ -37,7 +37,7 @@ func remoteConfigFrom(c *config.Config) smtp.RemoteConfig {
 	}
 }
 
-func (d remoteDeliverer) DeliverRemote(ctx context.Context, mailFrom, rcptTo string, data []byte, dsn *mail.RelayDSN) (string, error) {
+func (d remoteDeliverer) DeliverRemote(ctx context.Context, mailFrom, rcptTo string, msg *mail.Outbound, dsn *mail.RelayDSN) (string, error) {
 	cfg := d.base
 	cfg.RelayOptions.DSN, cfg.MXOptions.DSN = dsn, dsn
 	if d.dir != nil {
@@ -51,5 +51,5 @@ func (d remoteDeliverer) DeliverRemote(ctx context.Context, mailFrom, rcptTo str
 			}
 		}
 	}
-	return smtp.DeliverRemote(ctx, cfg, mailFrom, rcptTo, data)
+	return smtp.DeliverRemote(ctx, cfg, mailFrom, rcptTo, msg)
 }

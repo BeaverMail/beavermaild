@@ -24,7 +24,7 @@ type stallRemote struct {
 	peak    int // highest stalled seen
 }
 
-func (r *stallRemote) DeliverRemote(ctx context.Context, _, rcptTo string, _ []byte, _ *mail.RelayDSN) (string, error) {
+func (r *stallRemote) DeliverRemote(ctx context.Context, _, rcptTo string, _ *mail.Outbound, _ *mail.RelayDSN) (string, error) {
 	if strings.HasSuffix(rcptTo, "@tarpit.example") {
 		r.mu.Lock()
 		r.stalled++
@@ -87,11 +87,11 @@ type recordSigner struct {
 	ids []string
 }
 
-func (s *recordSigner) Sign(returnPath string, raw []byte) ([]byte, error) {
+func (s *recordSigner) NewSigner(returnPath string, _ []byte) (mail.MessageSigner, error) {
 	s.mu.Lock()
 	s.ids = append(s.ids, returnPath)
 	s.mu.Unlock()
-	return raw, nil
+	return nil, nil
 }
 
 // A null-sender message from submission is DKIM-signed as the authenticated user, never left unsigned

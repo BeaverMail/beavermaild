@@ -6,17 +6,25 @@ import (
 	"io"
 )
 
-// readBDATChunk reads exactly size raw bytes after a BDAT command line (RFC 3030: no
-// framing CRLF follows the chunk). beforeRead, if provided, refreshes the idle read deadline.
-func readBDATChunk(r *bufio.Reader, size int, beforeRead ...func()) ([]byte, error) {
-	if len(beforeRead) > 0 && beforeRead[0] != nil {
-		beforeRead[0]()
+// copyBDATChunk copies a size-byte chunk from r to w in pieces, renewing the deadline for every
+// MiB, and returns how many bytes it took from r: when w fails mid-chunk, the caller discards
+// exactly the rest, so the next command starts where the client put it.
+func copyBDATChunk(w io.Writer, r *bufio.Reader, size int64, beforeRead func()) (read int64, err error) {
+	buf := make([]byte, 32<<10)
+	for read < size {
+		if read%(1<<20) < int64(len(buf)) && beforeRead != nil {
+			beforeRead()
+		}
+		n, err := io.ReadFull(r, buf[:min(int64(len(buf)), size-read)])
+		read += int64(n)
+		if err != nil {
+			return read, err
+		}
+		if _, err := w.Write(buf[:n]); err != nil {
+			return read, err
+		}
 	}
-	buf := make([]byte, size)
-	if _, err := io.ReadFull(r, buf); err != nil {
-		return nil, err
-	}
-	return buf, nil
+	return read, nil
 }
 
 // discardBDATChunk reads and drops size bytes: a chunk the server will not keep still has to leave

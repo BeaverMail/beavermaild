@@ -20,7 +20,7 @@ type stubRemote struct {
 	ok  bool
 }
 
-func (s stubRemote) DeliverRemote(ctx context.Context, mailFrom, rcptTo string, data []byte, _ *mail.RelayDSN) (string, error) {
+func (s stubRemote) DeliverRemote(ctx context.Context, mailFrom, rcptTo string, _ *mail.Outbound, _ *mail.RelayDSN) (string, error) {
 	if s.ok {
 		return "250 OK", nil
 	}

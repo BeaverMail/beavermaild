@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/BeaverMail/beavermaild/internal/dnsname"
+	"github.com/BeaverMail/beavermaild/internal/mail"
 	"github.com/BeaverMail/beavermaild/internal/mtasts"
 )
 
@@ -40,13 +41,13 @@ func (cfg RemoteConfig) tlsLevel(domain string) string {
 
 // DeliverRemote submits mail using relay when set, otherwise MX lookup on rcptTo domain.
 // On success it returns "host: final server reply" for the delivery record.
-func DeliverRemote(ctx context.Context, cfg RemoteConfig, mailFrom, rcptTo string, data []byte) (string, error) {
+func DeliverRemote(ctx context.Context, cfg RemoteConfig, mailFrom, rcptTo string, msg *mail.Outbound) (string, error) {
 	if cfg.Relay != "" {
 		opts, err := relayOptionsForPolicy(ctx, cfg)
 		if err != nil {
 			return "", err
 		}
-		reply, err := SendReply(ctx, cfg.Relay, mailFrom, rcptTo, data, opts)
+		reply, err := SendMessage(ctx, cfg.Relay, mailFrom, rcptTo, msg, opts)
 		if err != nil {
 			return "", err
 		}
@@ -71,7 +72,7 @@ func DeliverRemote(ctx context.Context, cfg RemoteConfig, mailFrom, rcptTo strin
 	if err != nil {
 		return "", err
 	}
-	return deliverMX(ctx, hosts, mailFrom, rcptTo, data, mxOptionsForPolicy(cfg.MXOptions, policy, cfg.tlsLevel(domain), domain))
+	return deliverMX(ctx, hosts, mailFrom, rcptTo, msg, mxOptionsForPolicy(cfg.MXOptions, policy, cfg.tlsLevel(domain), domain))
 }
 
 // relayOptionsForPolicy applies MTA-STS to a smart host: its domain is the Policy Domain (RFC 8461
@@ -145,7 +146,7 @@ func mxOptionsForPolicy(base ClientOptions, policy *mtasts.Policy, level, domain
 	return opts
 }
 
-func deliverMX(ctx context.Context, hosts []string, mailFrom, rcptTo string, data []byte, opts ClientOptions) (string, error) {
+func deliverMX(ctx context.Context, hosts []string, mailFrom, rcptTo string, msg *mail.Outbound, opts ClientOptions) (string, error) {
 	mxOpts := opts
 	if !mxOpts.OpportunisticSTARTTLS && !mxOpts.RequireTLS {
 		mxOpts.OpportunisticSTARTTLS = true
@@ -153,7 +154,7 @@ func deliverMX(ctx context.Context, hosts []string, mailFrom, rcptTo string, dat
 	var last error
 	allPrivate := true
 	for _, host := range hosts {
-		reply, err := SendReply(ctx, host, mailFrom, rcptTo, data, mxOpts)
+		reply, err := SendMessage(ctx, host, mailFrom, rcptTo, msg, mxOpts)
 		if err == nil {
 			return host + ": " + reply, nil
 		}

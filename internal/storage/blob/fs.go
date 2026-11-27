@@ -136,6 +136,15 @@ func (w *Writer) Abort() {
 	_ = os.Remove(w.tmp.Name())
 }
 
+// TempFile creates a scratch file in the store's directory, on the same disk as the blobs; one a
+// crash leaves behind is removed by GC like an unfinished Writer (the put- prefix).
+func (f *FS) TempFile() (*os.File, error) {
+	if err := os.MkdirAll(f.root, 0o755); err != nil {
+		return nil, err
+	}
+	return os.CreateTemp(f.root, "put-spool-*")
+}
+
 // Get reads blob bytes for hash.
 func (f *FS) Get(ctx context.Context, hash [storage.Blake3DigestLen]byte) ([]byte, error) {
 	if err := ctx.Err(); err != nil {

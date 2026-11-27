@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/BeaverMail/beavermaild/internal/mail"
 )
 
 // captureMX accepts one session and returns the raw message bytes the client sent after DATA (or in
@@ -216,7 +218,7 @@ func TestMXDeliveryRefusesPrivateAddresses(t *testing.T) {
 	t.Parallel()
 	mx := startMockMX(t, mxScript{})
 	t.Cleanup(mx.close)
-	_, err := deliverMX(context.Background(), []string{mx.addr}, "a@example.net", "b@example.org", []byte("hi\r\n"), ClientOptions{RejectPrivate: true})
+	_, err := deliverMX(context.Background(), []string{mx.addr}, "a@example.net", "b@example.org", mail.OutboundBytes([]byte("hi\r\n")), ClientOptions{RejectPrivate: true})
 	if !errors.Is(err, errPrivateAddr) || !deliveryPermanent(err) {
 		t.Fatalf("err %v, want permanent errPrivateAddr", err)
 	}

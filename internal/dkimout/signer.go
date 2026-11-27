@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"fmt"
+	"io"
 	netmail "net/mail"
 	"net/textproto"
 	"os"
@@ -26,6 +27,12 @@ type Signer struct {
 	selector string
 	domain   string // fixed SDID; empty uses return-path domain
 	signer   crypto.Signer
+}
+
+// MessageSigner is mail.MessageSigner: hashes the wire form written to it; Signature after Close.
+type MessageSigner = interface {
+	io.WriteCloser
+	Signature() string
 }
 
 // Config holds DKIM signing parameters.
@@ -55,14 +62,13 @@ func New(cfg Config) (*Signer, error) {
 	}, nil
 }
 
-// Sign returns raw unchanged when signing is skipped; otherwise appends DKIM-Signature.
-func (s *Signer) Sign(returnPath string, raw []byte) ([]byte, error) {
-	if s == nil || len(raw) == 0 {
-		return raw, nil
-	}
+// NewSigner returns a signer for a message from returnPath whose wire-form header block is header,
+// or nil when there is nothing to sign with. Write the whole message (header included), Close,
+// then prepend Signature.
+func (s *Signer) NewSigner(returnPath string, header []byte) (MessageSigner, error) {
 	returnPath = strings.TrimSpace(returnPath)
-	if returnPath == "" {
-		return raw, nil
+	if s == nil || returnPath == "" {
+		return nil, nil
 	}
 	domain := s.domain
 	if domain == "" {
@@ -72,8 +78,7 @@ func (s *Signer) Sign(returnPath string, raw []byte) ([]byte, error) {
 			return nil, err
 		}
 	}
-	var out bytes.Buffer
-	err := dkim.Sign(&out, bytes.NewReader(raw), &dkim.SignOptions{
+	ms, err := dkim.NewSigner(&dkim.SignOptions{
 		Domain:   domain,
 		Selector: s.selector,
 		Signer:   s.signer,
@@ -81,12 +86,12 @@ func (s *Signer) Sign(returnPath string, raw []byte) ([]byte, error) {
 		// RFC 6376 5.4.1: "relaxed" survives the refolding intermediaries do to person-to-person mail.
 		HeaderCanonicalization: dkim.CanonicalizationRelaxed,
 		BodyCanonicalization:   dkim.CanonicalizationRelaxed,
-		HeaderKeys:             headerKeys(raw),
+		HeaderKeys:             headerKeys(header),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("dkimout: sign: %w", err)
 	}
-	return out.Bytes(), nil
+	return ms, nil
 }
 
 func loadPrivateKey(path string) (crypto.Signer, error) {

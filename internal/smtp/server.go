@@ -260,6 +260,7 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn, secure, submissio
 	// Close the session's current conn: after STARTTLS it is the TLS conn, whose Close sends
 	// close_notify (closing only the raw TCP conn makes peers log "TLS not properly terminated").
 	defer func() { _ = sess.conn.Close() }()
+	defer sess.reset() // a transaction cut short leaves its spool file: drop it
 	// A bug on one message must not take down the whole server (and every other session).
 	defer func() {
 		if r := recover(); r != nil {

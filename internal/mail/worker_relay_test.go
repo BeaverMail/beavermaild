@@ -25,9 +25,9 @@ type relayRemote struct {
 	cfg smtp.RemoteConfig
 }
 
-func (r relayRemote) DeliverRemote(ctx context.Context, mailFrom, rcptTo string, data []byte, dsn *mail.RelayDSN) (string, error) {
+func (r relayRemote) DeliverRemote(ctx context.Context, mailFrom, rcptTo string, msg *mail.Outbound, dsn *mail.RelayDSN) (string, error) {
 	r.cfg.RelayOptions.DSN, r.cfg.MXOptions.DSN = dsn, dsn
-	return smtp.DeliverRemote(ctx, r.cfg, mailFrom, rcptTo, data)
+	return smtp.DeliverRemote(ctx, r.cfg, mailFrom, rcptTo, msg)
 }
 
 func TestWorkerDeliversRemoteRelaySTARTTLS(t *testing.T) {

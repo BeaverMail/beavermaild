@@ -22,19 +22,50 @@ const maxUTF8HeaderDepth = 100
 // of its MIME structure (RFC 6531 3.2, RFC 6532): the message then needs SMTPUTF8. Body octets do
 // not count, they only need 8BITMIME.
 func Has8BitHeaders(raw []byte) bool {
-	end := bytesIndexHeadersEnd(raw) // stored messages may use bare LF
-	if end < 0 {
-		end = len(raw)
+	return Has8BitHeadersFrom(bytes.NewReader(raw))
+}
+
+// Has8BitHeadersFrom is Has8BitHeaders on a stream, read only as far as the answer needs.
+func Has8BitHeadersFrom(r io.Reader) bool {
+	top := &header8Bit{lineStart: true} // the raw top-level header, line ends LF or CRLF
+	tp := textproto.NewReader(bufio.NewReader(io.TeeReader(r, top)))
+	hdr, err := tp.ReadMIMEHeader()
+	var buf [512]byte
+	for !top.done { // a malformed field stops the parser before the end of the header
+		if _, rerr := tp.R.Read(buf[:]); rerr != nil {
+			break
+		}
 	}
-	if Has8Bit(raw[:end]) {
+	if top.eightBit {
 		return true
 	}
-	tp := textproto.NewReader(bufio.NewReader(bytes.NewReader(raw)))
-	hdr, err := tp.ReadMIMEHeader()
 	if err != nil && len(hdr) == 0 {
 		return false
 	}
 	return partHeaders8Bit(hdr, tp.R, 0)
+}
+
+// header8Bit watches a stream for an octet outside US-ASCII before the first empty line.
+type header8Bit struct {
+	lineStart, done, eightBit bool
+}
+
+func (h *header8Bit) Write(p []byte) (int, error) {
+	for _, c := range p {
+		if h.done {
+			break
+		}
+		switch {
+		case c >= 0x80:
+			h.eightBit, h.lineStart = true, false
+		case c == '\n':
+			h.done = h.lineStart
+			h.lineStart = true
+		case c != '\r':
+			h.lineStart = false
+		}
+	}
+	return len(p), nil
 }
 
 // partHeaders8Bit walks the body r of an entity with header hdr and reports an 8-bit header field

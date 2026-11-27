@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -98,7 +99,9 @@ func (s *session) runFilter(ctx context.Context, phase string, to []string, body
 	return s.filter.Filter(ctx, s.buildFilterRequest(phase, to, bodyPath))
 }
 
-func (s *session) filterEom(ctx context.Context, raw []byte) (FilterOutcome, error) {
+// filterEom runs authentication and the plugin filter on the message: header (as it stands before
+// the fields added after the filter) and the spooled body.
+func (s *session) filterEom(ctx context.Context, header []byte) (FilterOutcome, error) {
 	runFilter := s.filter != nil && !s.skipAntiSpam(ctx, FilterPhaseEom, s.rcptAddresses())
 	// Inbound mail is always verified, filter or not, so Authentication-Results can be added.
 	runAuth := s.authApplies()
@@ -116,10 +119,10 @@ func (s *session) filterEom(ctx context.Context, raw []byte) (FilterOutcome, err
 	}
 	id := s.currentFilterID()
 	path := filepath.Join(s.filterTmpDir, "smtp-filter-"+id+".eml")
-	if err := os.WriteFile(path, raw, 0o600); err != nil {
+	defer os.Remove(path)
+	if err := s.writeMessage(path, header); err != nil {
 		return FilterOutcome{}, err
 	}
-	defer os.Remove(path)
 
 	if runAuth {
 		s.authState = s.mailAuth.FinishEom(ctx, path, s.mailFrom, s.heloDomain, s.authState)
@@ -235,8 +238,11 @@ func appendFilterHeaders(raw []byte, headers map[string]string) []byte {
 	return append(append(prefix, raw...), '\r', '\n')
 }
 
-func (s *session) deliverAfterFilter(ctx context.Context, raw []byte) error {
-	if countReceived(raw) > maxReceivedHops {
+// deliverAfterFilter checks, filters and delivers the message in s.spool. Every check and every
+// field added on top works on the header block alone; the body stays in the spool file.
+func (s *session) deliverAfterFilter(ctx context.Context) error {
+	header := s.spool.header
+	if countReceived(header) > maxReceivedHops {
 		if err := s.writef(replyMailLoop); err != nil {
 			return err
 		}
@@ -246,7 +252,7 @@ func (s *session) deliverAfterFilter(ctx context.Context, raw []byte) error {
 	// Before the filter, so it judges the message as it will leave the MSA.
 	if s.submission && s.principal.AccountID != 0 {
 		seen := map[string]bool{} // one lookup per domain, however many addresses the header lists
-		if why := checkSubmissionHeaders(raw, func(d string) bool {
+		if why := checkSubmissionHeaders(header, func(d string) bool {
 			if h, ok := seen[d]; ok {
 				return h
 			}
@@ -260,10 +266,10 @@ func (s *session) deliverAfterFilter(ctx context.Context, raw []byte) error {
 			s.reset()
 			return nil
 		}
-		raw = completeSubmission(raw, s.hostname, time.Now())
+		header = completeSubmission(header, s.hostname, time.Now())
 	}
 	if !s.submission {
-		if why := checkInboundHeaders(raw); why != "" {
+		if why := checkInboundHeaders(header); why != "" {
 			if err := s.writef("554 5.6.0 Message rejected: %s (RFC 5322 3.6)", why); err != nil {
 				return err
 			}
@@ -271,7 +277,7 @@ func (s *session) deliverAfterFilter(ctx context.Context, raw []byte) error {
 			return nil
 		}
 	}
-	out, err := s.filterEom(ctx, raw)
+	out, err := s.filterEom(ctx, header)
 	if err != nil {
 		s.log.Warn("smtp filter error", slog.Any("err", err))
 		if err := s.writef(replyFilterTempfail); err != nil {
@@ -292,17 +298,17 @@ func (s *session) deliverAfterFilter(ctx context.Context, raw []byte) error {
 		return nil
 	}
 	if len(out.Headers) > 0 {
-		raw = appendFilterHeaders(raw, out.Headers)
+		header = appendFilterHeaders(header, out.Headers)
 	}
 	// RFC 5321 §4.4: every SMTP server that accepts a message records its hop on top.
-	raw = prependHeader(raw, "Received", s.receivedField(time.Now()))
+	header = prependHeader(header, "Received", s.receivedField(time.Now()))
 	// RFC 8601 §5: fields claiming our authserv-id did not come from us, on every path (submission,
 	// mail-auth off included); §4: ours goes above our Received.
-	raw = stripAuthResults(raw, s.hostname)
+	header = stripAuthResults(header, s.hostname)
 	if s.authDone && !s.submission {
-		raw = prependHeader(raw, "Authentication-Results", mailauth.AuthResults(s.hostname, s.mailFrom, s.heloDomain, s.clientIP(), s.authState))
+		header = prependHeader(header, "Authentication-Results", mailauth.AuthResults(s.hostname, s.mailFrom, s.heloDomain, s.clientIP(), s.authState))
 	}
-	return s.finishDelivery(ctx, raw)
+	return s.finishDelivery(ctx, header)
 }
 
 // stripAuthResults drops "Authentication-Results: <authservID>[ version];..." fields (RFC 8601 §5:
@@ -405,4 +411,21 @@ func (s *session) ensureASN(ctx context.Context) {
 		return
 	}
 	s.clientASN, s.clientCountry = s.asnLookup.Lookup(ctx, s.clientIP())
+}
+
+// writeMessage writes header and the spooled body to a new file at path.
+func (s *session) writeMessage(path string, header []byte) error {
+	msg, err := s.spool.message(header)
+	if err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(f, msg)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	return err
 }

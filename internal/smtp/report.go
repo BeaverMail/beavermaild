@@ -18,9 +18,9 @@ func reportKindForAddress(addr string) string {
 	return directory.ReportLocalParts[strings.ToLower(addr[:i])]
 }
 
-// storeReport saves the raw report message to the domain report store in the data dir.
+// storeReport saves the report message (header, then the spooled body) to the domain report store.
 // The payload is kept verbatim; parsing happens later.
-func (s *session) storeReport(ctx context.Context, t rcptTarget, raw []byte) error {
+func (s *session) storeReport(ctx context.Context, t rcptTarget, header []byte) error {
 	domName, err := DomainFromAddress(t.address)
 	if err != nil {
 		return err
@@ -29,7 +29,11 @@ func (s *session) storeReport(ctx context.Context, t rcptTarget, raw []byte) err
 	if err != nil {
 		return err
 	}
-	path, err := directory.SaveDomainReport(s.dir.DataDir(), dom.ID, t.report, s.mailFrom, t.address, raw)
+	msg, err := s.spool.message(header)
+	if err != nil {
+		return err
+	}
+	path, err := directory.SaveDomainReportFrom(s.dir.DataDir(), dom.ID, t.report, s.mailFrom, t.address, msg)
 	if err != nil {
 		return err
 	}

@@ -27,7 +27,7 @@ func TestSignAndVerify(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw := []byte("From: alice@example.com\r\nTo: bob@example.com\r\nSubject: hi\r\n\r\nbody\r\n")
-	signed, err := s.Sign("alice@example.com", raw)
+	signed, err := signBytes(s, "alice@example.com", raw)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +51,7 @@ func TestSignDomainFromReturnPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw := []byte("From: a@mail.test\r\n\r\nx\r\n")
-	signed, err := s.Sign("sender@mail.test", raw)
+	signed, err := signBytes(s, "sender@mail.test", raw)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestSignDespiteForeignSignature(t *testing.T) {
 	s, rec := newSigner(t)
 	raw := []byte("DKIM-Signature: v=1; a=rsa-sha256; d=other.example; s=beaver; h=from; bh=AAAA; b=AAAA\r\n" +
 		"From: alice@example.com\r\nSubject: fwd\r\n\r\nour selector is s=beaver\r\n")
-	signed, err := s.Sign("alice@example.com", raw)
+	signed, err := signBytes(s, "alice@example.com", raw)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestSignHeaderSelection(t *testing.T) {
 	s, rec := newSigner(t)
 	raw := []byte("Received: from client by mx.example.com\r\nX-Mailer: test\r\nFrom: alice@example.com\r\n" +
 		"To: bob@example.org\r\nSubject: hello\r\nDate: Tue, 20 Oct 2026 12:00:00 +0000\r\n\r\nbody\r\n")
-	signed, err := s.Sign("alice@example.com", raw)
+	signed, err := signBytes(s, "alice@example.com", raw)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ func TestEd25519KeyDNS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	signed, err := s.Sign("alice@example.com", []byte("From: alice@example.com\r\n\r\nx\r\n"))
+	signed, err := signBytes(s, "alice@example.com", []byte("From: alice@example.com\r\n\r\nx\r\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,4 +207,24 @@ func rsa512PEM(t *testing.T) []byte {
 		key := &rsa.PrivateKey{PublicKey: rsa.PublicKey{N: n, E: 65537}, D: d, Primes: []*big.Int{p, q}}
 		return pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
 	}
+}
+
+// signBytes signs raw (CRLF form) the way the queue does: header block for h=, whole message
+// streamed, signature field prepended.
+func signBytes(s *Signer, returnPath string, raw []byte) ([]byte, error) {
+	header := raw
+	if i := bytes.Index(raw, []byte("\r\n\r\n")); i >= 0 {
+		header = raw[:i+4]
+	}
+	ms, err := s.NewSigner(returnPath, header)
+	if err != nil || ms == nil {
+		return raw, err
+	}
+	if _, err := ms.Write(raw); err != nil {
+		return nil, err
+	}
+	if err := ms.Close(); err != nil {
+		return nil, err
+	}
+	return append([]byte(ms.Signature()), raw...), nil
 }

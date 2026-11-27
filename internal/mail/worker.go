@@ -21,12 +21,14 @@ type RemoteDeliverer interface {
 	// DeliverRemote returns the accepting server's reply on success.
 	// dsn carries the recipient's DSN parameters to a next hop that supports DSN (nil for a
 	// notification, which is sent without them).
-	DeliverRemote(ctx context.Context, mailFrom, rcptTo string, data []byte, dsn *RelayDSN) (string, error)
+	DeliverRemote(ctx context.Context, mailFrom, rcptTo string, msg *Outbound, dsn *RelayDSN) (string, error)
 }
 
 // OutboundSigner adds DKIM signatures before remote delivery.
 type OutboundSigner interface {
-	Sign(returnPath string, raw []byte) ([]byte, error)
+	// NewSigner returns the signer for a message from signAs with the wire-form header block, or
+	// nil when it is not signed.
+	NewSigner(signAs string, header []byte) (MessageSigner, error)
 }
 
 // Worker delivers queued messages locally or via RemoteDeliverer.
@@ -203,17 +205,26 @@ func (w *Worker) deliverEntry(ctx context.Context, e QueueEntry) error {
 		return w.expireEntry(ctx, e)
 	}
 
-	raw, err := w.queue.LoadRaw(ctx, msg)
+	// Signed over the exact bytes that go on the wire (stored DATA messages use bare LF).
+	var signer OutboundSigner
+	if w.signer != nil && w.hasPendingRemote(ctx, msg) {
+		signer = w.signer
+	}
+	out, err := w.queue.OpenOutbound(ctx, msg, signer, cmp.Or(msg.ReturnPath, msg.SignAs))
 	if err != nil {
 		return err
 	}
-	// Sign the exact bytes that go on the wire (stored DATA messages use bare LF).
-	raw = CRLF(raw)
-	if w.signer != nil && w.hasPendingRemote(ctx, msg) {
-		raw, err = w.signer.Sign(cmp.Or(msg.ReturnPath, msg.SignAs), raw)
-		if err != nil {
-			return err
+	// One blob serves every local recipient, stored on the first.
+	var local *StoredBlob
+	storeLocal := func() (StoredBlob, error) {
+		if local == nil {
+			b, err := w.inbox.storeStream(ctx, out.WriteTo)
+			if err != nil {
+				return StoredBlob{}, err
+			}
+			local = &b
 		}
+		return *local, nil
 	}
 
 	changed := false
@@ -227,16 +238,16 @@ func (w *Worker) deliverEntry(ctx context.Context, e QueueEntry) error {
 		}
 		RecordAttempt(&msg, i, now)
 		dsn := &RelayDSN{Ret: RetMode(msg.Ret), Envid: msg.Envid, Notify: rcpt.Notify, Orcpt: rcpt.Orcpt, SMTPUTF8: msg.SMTPUTF8}
-		reply, local, err := w.deliverTo(ctx, msg.ReturnPath, rcpt.Address, raw, dsn)
+		reply, isLocal, err := w.deliverTo(ctx, msg.ReturnPath, rcpt.Address, out, storeLocal, dsn)
 		if err != nil {
 			w.log.Warn("queue rcpt failed", "queue_id", e.ID, "rcpt", rcpt.Address, slog.Any("err", err))
 			rcpt.LastDiag = err.Error()
 			if deliveryPermanent(err) {
 				MarkPermanentFail(&msg, i)
-				w.maybeSendDSN(ctx, e.ID, msg, *rcpt, raw, DSNActionFailed, err)
+				w.maybeSendDSN(ctx, e.ID, msg, *rcpt, out, DSNActionFailed, err)
 			} else {
 				ScheduleNextRetry(&msg, i, w.policy, now)
-				if w.maybeSendDelayDSN(ctx, e.ID, msg, i, raw, created, now, err) {
+				if w.maybeSendDelayDSN(ctx, e.ID, msg, i, out, created, now, err) {
 					MarkDelayNotified(&msg, i)
 					changed = true
 				}
@@ -249,11 +260,11 @@ func (w *Worker) deliverEntry(ctx context.Context, e QueueEntry) error {
 		// RFC 3461 5.2: delivered here → "delivered"; passed to a server that took the DSN
 		// parameters → it reports; passed to one without DSN → "relayed" (only for SUCCESS).
 		switch {
-		case local:
-			w.maybeSendDSN(ctx, e.ID, msg, *rcpt, raw, DSNActionDelivered, nil)
+		case isLocal:
+			w.maybeSendDSN(ctx, e.ID, msg, *rcpt, out, DSNActionDelivered, nil)
 		case dsn.Passed:
 		default:
-			w.maybeSendDSN(ctx, e.ID, msg, *rcpt, raw, DSNActionRelayed, nil)
+			w.maybeSendDSN(ctx, e.ID, msg, *rcpt, out, DSNActionRelayed, nil)
 		}
 		changed = true
 	}
@@ -271,7 +282,7 @@ func (w *Worker) deliverEntry(ctx context.Context, e QueueEntry) error {
 func (w *Worker) expireEntry(ctx context.Context, e QueueEntry) error {
 	msg := e.Msg
 	w.log.Info("queue message expired", "id", e.ID, "return_path", msg.ReturnPath)
-	raw, _ := w.queue.LoadRaw(ctx, msg)
+	out, _ := w.queue.OpenOutbound(ctx, msg, nil, "")
 	returnPath := strings.TrimSpace(msg.ReturnPath)
 	for i := range msg.Recipients {
 		if !recipientPending(msg.Recipients[i]) {
@@ -279,14 +290,14 @@ func (w *Worker) expireEntry(ctx context.Context, e QueueEntry) error {
 		}
 		msg.Recipients[i].LastDiag = "delivery time expired"
 		if returnPath != "" {
-			w.maybeSendDSN(ctx, e.ID, msg, msg.Recipients[i], raw, DSNActionFailed, fmt.Errorf("delivery time expired"))
+			w.maybeSendDSN(ctx, e.ID, msg, msg.Recipients[i], out, DSNActionFailed, fmt.Errorf("delivery time expired"))
 		}
 		MarkPermanentFail(&msg, i)
 	}
 	return w.finishEntry(ctx, e.ID, msg, time.Now())
 }
 
-func (w *Worker) maybeSendDelayDSN(ctx context.Context, queueID uint32, msg storage.QueueMessage, rcptIdx int, raw []byte, created, now time.Time, err error) bool {
+func (w *Worker) maybeSendDelayDSN(ctx context.Context, queueID uint32, msg storage.QueueMessage, rcptIdx int, out *Outbound, created, now time.Time, err error) bool {
 	rcpt := msg.Recipients[rcptIdx]
 	if DelayNotified(rcpt) {
 		return false
@@ -294,11 +305,11 @@ func (w *Worker) maybeSendDelayDSN(ctx context.Context, queueID uint32, msg stor
 	if w.policy.DelayNotifyAfter > 0 && now.Sub(created) < w.policy.DelayNotifyAfter {
 		return false
 	}
-	w.maybeSendDSN(ctx, queueID, msg, rcpt, raw, DSNActionDelayed, err)
+	w.maybeSendDSN(ctx, queueID, msg, rcpt, out, DSNActionDelayed, err)
 	return true
 }
 
-func (w *Worker) maybeSendDSN(ctx context.Context, queueID uint32, msg storage.QueueMessage, rcpt storage.QueueRecipient, raw []byte, action DSNAction, err error) {
+func (w *Worker) maybeSendDSN(ctx context.Context, queueID uint32, msg storage.QueueMessage, rcpt storage.QueueRecipient, out *Outbound, action DSNAction, err error) {
 	returnPath := strings.TrimSpace(msg.ReturnPath)
 	if returnPath == "" {
 		return
@@ -315,6 +326,7 @@ func (w *Worker) maybeSendDSN(ctx context.Context, queueID uint32, msg storage.Q
 		diag = err.Error()
 	}
 	status := dsnStatusFor(action, err)
+	original, headerOnly := dsnOriginal(out)
 	opts := DSNBuildOpts{
 		ReturnPath:  returnPath,
 		FinalRcpt:   rcpt.Address,
@@ -325,13 +337,29 @@ func (w *Worker) maybeSendDSN(ctx context.Context, queueID uint32, msg storage.Q
 		Status:      status,
 		Diagnostic:  diag,
 		QueueID:     queueID,
-		OriginalRaw: raw,
+		OriginalRaw: original,
+		HeaderOnly:  headerOnly,
+		HeaderUTF8:  out != nil && out.EightBitHeaders,
 		Hostname:    w.policy.Hostname,
 	}
 	bounce := BuildDSN(opts)
 	if err := w.deliverBounce(ctx, returnPath, bounce); err != nil {
 		w.log.Warn("dsn deliver failed", "return_path", returnPath, "action", action, slog.Any("err", err))
 	}
+}
+
+// dsnOriginal is the message as a notification sees it: whole when within MaxDSNReturnBytes (read
+// then), otherwise only its header block.
+func dsnOriginal(out *Outbound) (raw []byte, headerOnly bool) {
+	if out == nil {
+		return nil, false
+	}
+	if out.Size <= MaxDSNReturnBytes {
+		if raw, err := out.Bytes(); err == nil {
+			return raw, false
+		}
+	}
+	return out.Header(), true
 }
 
 func dsnStatusFor(action DSNAction, err error) string {
@@ -377,20 +405,24 @@ func (w *Worker) deliverBounce(ctx context.Context, returnPath string, raw []byt
 	if w.remote == nil {
 		return errors.New("mail: no remote delivery for bounce")
 	}
-	_, err := w.remote.DeliverRemote(ctx, "", returnPath, raw, nil)
+	_, err := w.remote.DeliverRemote(ctx, "", returnPath, OutboundBytes(raw), nil)
 	return err
 }
 
 // deliverTo returns a short delivery record on success (local mailbox or the remote server's reply)
 // and whether it was delivered here. For a remote delivery, dsn records whether the next hop took
 // the DSN parameters.
-func (w *Worker) deliverTo(ctx context.Context, returnPath, rcpt string, raw []byte, dsn *RelayDSN) (reply string, local bool, err error) {
+func (w *Worker) deliverTo(ctx context.Context, returnPath, rcpt string, out *Outbound, storeLocal func() (StoredBlob, error), dsn *RelayDSN) (reply string, local bool, err error) {
 	acc, _, err := w.dir.ResolveEmail(ctx, rcpt)
 	if err == nil {
 		if !acc.Active {
 			return "", false, directory.ErrInactive
 		}
-		if _, err = w.inbox.Deliver(ctx, acc.ID, raw); err != nil {
+		b, err := storeLocal()
+		if err != nil {
+			return "", false, err
+		}
+		if _, err = w.inbox.DeliverBlob(ctx, acc.ID, b); err != nil {
 			return "", false, err
 		}
 		return "delivered to local mailbox", true, nil
@@ -401,7 +433,7 @@ func (w *Worker) deliverTo(ctx context.Context, returnPath, rcpt string, raw []b
 	if w.remote == nil {
 		return "", false, errors.New("mail: no remote delivery configured")
 	}
-	reply, err = w.remote.DeliverRemote(ctx, returnPath, rcpt, raw, dsn)
+	reply, err = w.remote.DeliverRemote(ctx, returnPath, rcpt, out, dsn)
 	return reply, false, err
 }
 

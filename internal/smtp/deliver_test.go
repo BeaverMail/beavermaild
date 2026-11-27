@@ -35,7 +35,7 @@ func TestDeliverMXPermanentStops(t *testing.T) {
 	})
 	t.Cleanup(func() { first.close(); second.close() })
 
-	_, err := deliverMX(context.Background(), []string{first.addr, second.addr}, "a@b.c", "x@y.z", []byte("hi\r\n"), ClientOptions{})
+	_, err := deliverMX(context.Background(), []string{first.addr, second.addr}, "a@b.c", "x@y.z", mail.OutboundBytes([]byte("hi\r\n")), ClientOptions{})
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -56,7 +56,7 @@ func TestDeliverMX421TriesNext(t *testing.T) {
 	second := startMockMX(t, mxScript{})
 	t.Cleanup(func() { first.close(); second.close() })
 
-	_, err := deliverMX(context.Background(), []string{first.addr, second.addr}, "a@b.c", "x@y.z", []byte("hi\r\n"), ClientOptions{})
+	_, err := deliverMX(context.Background(), []string{first.addr, second.addr}, "a@b.c", "x@y.z", mail.OutboundBytes([]byte("hi\r\n")), ClientOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestDeliverMXDialFailTriesNext(t *testing.T) {
 	second := startMockMX(t, mxScript{})
 	t.Cleanup(second.close)
 
-	_, err := deliverMX(context.Background(), []string{"127.0.0.1:1", second.addr}, "a@b.c", "x@y.z", []byte("hi\r\n"), ClientOptions{})
+	_, err := deliverMX(context.Background(), []string{"127.0.0.1:1", second.addr}, "a@b.c", "x@y.z", mail.OutboundBytes([]byte("hi\r\n")), ClientOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestDeliverMXMTASTSEnforceRequiresSTARTTLS(t *testing.T) {
 		Mode: mtasts.ModeEnforce,
 		MX:   []string{strings.ToLower(host)},
 	}
-	_, err := deliverMX(context.Background(), []string{mx.addr}, "a@b.c", "x@example.com", []byte("hi\r\n"), mxOptionsForPolicy(ClientOptions{}, policy, "", "example.com"))
+	_, err := deliverMX(context.Background(), []string{mx.addr}, "a@b.c", "x@example.com", mail.OutboundBytes([]byte("hi\r\n")), mxOptionsForPolicy(ClientOptions{}, policy, "", "example.com"))
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -136,7 +136,7 @@ func TestDeliverMXOpportunisticTLSIgnoresCertificate(t *testing.T) {
 		if mode != "" {
 			policy = &mtasts.Policy{Mode: mode, MX: []string{"other.example"}}
 		}
-		_, err := deliverMX(context.Background(), []string{mx.addr}, "a@b.c", "x@example.com", []byte("hi\r\n"), mxOptionsForPolicy(ClientOptions{}, policy, "", "example.com"))
+		_, err := deliverMX(context.Background(), []string{mx.addr}, "a@b.c", "x@example.com", mail.OutboundBytes([]byte("hi\r\n")), mxOptionsForPolicy(ClientOptions{}, policy, "", "example.com"))
 		mx.close()
 		if err != nil {
 			t.Fatalf("mode %q: %v", mode, err)
@@ -151,7 +151,7 @@ func TestDeliverMXRefusesTLS10(t *testing.T) {
 	for _, v := range []uint16{tls.VersionTLS10, tls.VersionTLS11} {
 		first := startMockMX(t, mxScript{advertiseSTARTTLS: true, tls: wrongNameTLS(t, v, v)})
 		second := startMockMX(t, mxScript{})
-		_, err := deliverMX(context.Background(), []string{first.addr, second.addr}, "a@b.c", "x@example.com", []byte("hi\r\n"), mxOptionsForPolicy(ClientOptions{}, nil, "", "example.com"))
+		_, err := deliverMX(context.Background(), []string{first.addr, second.addr}, "a@b.c", "x@example.com", mail.OutboundBytes([]byte("hi\r\n")), mxOptionsForPolicy(ClientOptions{}, nil, "", "example.com"))
 		first.close()
 		second.close()
 		if err != nil {
@@ -171,7 +171,7 @@ func TestDeliverMXEnforceBadCertificateTriesNext(t *testing.T) {
 	second := startMockMX(t, mxScript{})
 	t.Cleanup(func() { first.close(); second.close() })
 	policy := &mtasts.Policy{Mode: mtasts.ModeEnforce, MX: []string{"127.0.0.1"}}
-	_, err := deliverMX(context.Background(), []string{first.addr, second.addr}, "a@b.c", "x@example.com", []byte("hi\r\n"), mxOptionsForPolicy(ClientOptions{}, policy, "", "example.com"))
+	_, err := deliverMX(context.Background(), []string{first.addr, second.addr}, "a@b.c", "x@example.com", mail.OutboundBytes([]byte("hi\r\n")), mxOptionsForPolicy(ClientOptions{}, policy, "", "example.com"))
 	if err == nil || deliveryPermanent(err) {
 		t.Fatalf("got %v; want a transient failure", err)
 	}
@@ -327,7 +327,7 @@ func TestDeliverMXSTARTTLSRefusedContinuesInClear(t *testing.T) {
 	t.Parallel()
 	for _, reply := range []string{"454 4.7.0 TLS not available\r\n", "502 5.5.1 not implemented\r\n"} {
 		mx := startMockMX(t, mxScript{advertiseSTARTTLS: true, startTLSReply: reply})
-		_, err := deliverMX(context.Background(), []string{mx.addr}, "a@b.c", "x@example.com", []byte("hi\r\n"), mxOptionsForPolicy(ClientOptions{}, nil, "", "example.com"))
+		_, err := deliverMX(context.Background(), []string{mx.addr}, "a@b.c", "x@example.com", mail.OutboundBytes([]byte("hi\r\n")), mxOptionsForPolicy(ClientOptions{}, nil, "", "example.com"))
 		mx.close()
 		if err != nil {
 			t.Fatalf("%q: %v", reply, err)
@@ -336,7 +336,7 @@ func TestDeliverMXSTARTTLSRefusedContinuesInClear(t *testing.T) {
 
 	first := startMockMX(t, mxScript{advertiseSTARTTLS: true, startTLSReply: "421 4.3.2 closing\r\n"})
 	second := startMockMX(t, mxScript{})
-	_, err := deliverMX(context.Background(), []string{first.addr, second.addr}, "a@b.c", "x@example.com", []byte("hi\r\n"), mxOptionsForPolicy(ClientOptions{}, nil, "", "example.com"))
+	_, err := deliverMX(context.Background(), []string{first.addr, second.addr}, "a@b.c", "x@example.com", mail.OutboundBytes([]byte("hi\r\n")), mxOptionsForPolicy(ClientOptions{}, nil, "", "example.com"))
 	first.close()
 	second.close()
 	if err != nil {
@@ -346,7 +346,7 @@ func TestDeliverMXSTARTTLSRefusedContinuesInClear(t *testing.T) {
 	mx := startMockMX(t, mxScript{advertiseSTARTTLS: true, startTLSReply: "454 4.7.0 TLS not available\r\n"})
 	t.Cleanup(mx.close)
 	policy := &mtasts.Policy{Mode: mtasts.ModeEnforce, MX: []string{"127.0.0.1"}}
-	_, err = deliverMX(context.Background(), []string{mx.addr}, "a@b.c", "x@example.com", []byte("hi\r\n"), mxOptionsForPolicy(ClientOptions{}, policy, "", "example.com"))
+	_, err = deliverMX(context.Background(), []string{mx.addr}, "a@b.c", "x@example.com", mail.OutboundBytes([]byte("hi\r\n")), mxOptionsForPolicy(ClientOptions{}, policy, "", "example.com"))
 	if err == nil || deliveryPermanent(err) {
 		t.Fatalf("enforce: %v; want a transient failure, never clear", err)
 	}
@@ -360,7 +360,7 @@ func TestDeliverMXStaticTLSPolicy(t *testing.T) {
 	deliver := func(script mxScript, level string) error {
 		mx := startMockMX(t, script)
 		defer mx.close()
-		_, err := deliverMX(context.Background(), []string{mx.addr}, "a@b.c", "x@example.com", []byte("hi\r\n"), mxOptionsForPolicy(ClientOptions{}, nil, level, "example.com"))
+		_, err := deliverMX(context.Background(), []string{mx.addr}, "a@b.c", "x@example.com", mail.OutboundBytes([]byte("hi\r\n")), mxOptionsForPolicy(ClientOptions{}, nil, level, "example.com"))
 		return err
 	}
 	badCert := mxScript{advertiseSTARTTLS: true, tls: wrongNameTLS(t, tls.VersionTLS12, 0)}
@@ -396,14 +396,14 @@ func TestDeliverMXCBCOnlyOpportunistic(t *testing.T) {
 		return c
 	}
 	mx := startMockMX(t, mxScript{advertiseSTARTTLS: true, tls: cbcOnly()})
-	_, err := deliverMX(context.Background(), []string{mx.addr}, "a@b.c", "x@example.com", []byte("hi\r\n"), mxOptionsForPolicy(ClientOptions{}, nil, "", "example.com"))
+	_, err := deliverMX(context.Background(), []string{mx.addr}, "a@b.c", "x@example.com", mail.OutboundBytes([]byte("hi\r\n")), mxOptionsForPolicy(ClientOptions{}, nil, "", "example.com"))
 	mx.close()
 	if err != nil {
 		t.Fatalf("opportunistic: %v", err)
 	}
 	mx = startMockMX(t, mxScript{advertiseSTARTTLS: true, tls: cbcOnly()})
 	t.Cleanup(mx.close)
-	_, err = deliverMX(context.Background(), []string{mx.addr}, "a@b.c", "x@example.com", []byte("hi\r\n"), mxOptionsForPolicy(ClientOptions{}, nil, TLSEncrypt, "example.com"))
+	_, err = deliverMX(context.Background(), []string{mx.addr}, "a@b.c", "x@example.com", mail.OutboundBytes([]byte("hi\r\n")), mxOptionsForPolicy(ClientOptions{}, nil, TLSEncrypt, "example.com"))
 	if err == nil || deliveryPermanent(err) {
 		t.Fatalf("encrypt: %v; want a transient failure", err)
 	}
@@ -487,7 +487,7 @@ func TestDeliverMXRevokedCertificate(t *testing.T) {
 	t.Cleanup(mx.close)
 	opts := mxOptionsForPolicy(ClientOptions{}, nil, TLSSecure, "example.com")
 	opts.rootCAs = roots
-	_, err = deliverMX(context.Background(), []string{mx.addr}, "a@b.c", "x@example.com", []byte("hi\r\n"), opts)
+	_, err = deliverMX(context.Background(), []string{mx.addr}, "a@b.c", "x@example.com", mail.OutboundBytes([]byte("hi\r\n")), opts)
 	if !errors.Is(err, revocation.ErrRevoked) || deliveryPermanent(err) {
 		t.Fatalf("got %v; want a transient revoked-certificate failure", err)
 	}

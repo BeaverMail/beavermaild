@@ -4,6 +4,7 @@ package mail
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"time"
 
@@ -47,6 +48,41 @@ func (ib *Inbox) Deliver(ctx context.Context, accountID uint32, raw []byte) (uin
 		return 0, fmt.Errorf("mail: empty message")
 	}
 	return ib.storeMessage(ctx, accountID, InboxMailboxID, raw, 0, time.Now().Unix())
+}
+
+// StoreBlob streams a message from r to the blob store, never held in memory, for DeliverBlob to
+// file into one INBOX or several (one blob serves them all). It must hold no bare CR.
+func (ib *Inbox) StoreBlob(ctx context.Context, r io.Reader) (StoredBlob, error) {
+	return ib.storeStream(ctx, func(w io.Writer) (int64, error) { return io.Copy(w, r) })
+}
+
+// storeStream is StoreBlob for a message that writes itself (Outbound.WriteTo).
+func (ib *Inbox) storeStream(ctx context.Context, write func(io.Writer) (int64, error)) (StoredBlob, error) {
+	u, err := ib.NewUpload(ctx)
+	if err != nil {
+		return StoredBlob{}, err
+	}
+	if _, err := write(u); err != nil {
+		u.Abort()
+		return StoredBlob{}, err
+	}
+	if u.Size() == 0 || u.NeedsRewrite() {
+		u.Abort()
+		return StoredBlob{}, fmt.Errorf("mail: empty message or bare CR in a streamed message")
+	}
+	return u.Finish(ctx, nil)
+}
+
+// DeliverBlob files a message stored by StoreBlob into accountID's INBOX.
+func (ib *Inbox) DeliverBlob(ctx context.Context, accountID uint32, b StoredBlob) (uint32, error) {
+	if err := ib.checkQuota(ctx, accountID, uint64(b.Size), 1); err != nil {
+		return 0, err
+	}
+	out, err := ib.storeMessages(ctx, accountID, InboxMailboxID, []AppendMessage{{Blob: b, ReceivedAt: time.Now().Unix()}})
+	if err != nil {
+		return 0, err
+	}
+	return out[0].EmailID, nil
 }
 
 // storeMessage writes the blob, then stores it as one message (storeMessages).

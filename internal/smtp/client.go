@@ -114,6 +114,12 @@ func Send(ctx context.Context, addr, mailFrom, rcptTo string, data []byte, opts 
 
 // SendReply is Send returning the server's final reply to the message (e.g. "250 2.0.0 OK ... - gsmtp").
 func SendReply(ctx context.Context, addr, mailFrom, rcptTo string, data []byte, opts ClientOptions) (string, error) {
+	return SendMessage(ctx, addr, mailFrom, rcptTo, mail.OutboundBytes(data), opts)
+}
+
+// SendMessage is SendReply for a message streamed from its source (BDAT and SIZE use its wire
+// form, see mail.Outbound).
+func SendMessage(ctx context.Context, addr, mailFrom, rcptTo string, msg *mail.Outbound, opts ClientOptions) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -122,8 +128,6 @@ func SendReply(ctx context.Context, addr, mailFrom, rcptTo string, data []byte, 
 	if opts.DSN != nil {
 		opts.DSN.Passed = false
 	}
-	// BDAT sends bytes verbatim and SIZE counts them: both need the CRLF wire form.
-	data = mail.CRLF(data)
 	// The addresses go verbatim into the MAIL and RCPT lines: a CR/LF or other control character
 	// would inject SMTP commands (CVE-2026-90467 in aiosmtplib). Callers validate today; this holds
 	// for any future source of addresses.
@@ -133,7 +137,7 @@ func SendReply(ctx context.Context, addr, mailFrom, rcptTo string, data []byte, 
 	// RFC 6531 3.2: an A-label domain is not internationalized, so only a UTF-8 local part or UTF-8
 	// header fields need SMTPUTF8.
 	mailFrom, rcptTo = asciiDomain(mailFrom), asciiDomain(rcptTo)
-	headersUTF8 := mail.Has8Bit(data) && mail.Has8BitHeaders(data)
+	headersUTF8 := msg.EightBitHeaders
 	// A UTF-8 envelope can never go without SMTPUTF8; UTF-8 headers only when the sender asked for it.
 	// Raw 8-bit headers received without SMTPUTF8 are legacy mail (e.g. an unencoded attachment
 	// name): they go on as received over 8BITMIME, as Postfix and Exim do.
@@ -196,8 +200,8 @@ func SendReply(ctx context.Context, addr, mailFrom, rcptTo string, data []byte, 
 
 	// RFC 1870 7: a message over the server's announced limit would only be refused after the
 	// transfer; it is undeliverable there, so fail it now without sending it.
-	if caps.SizeLimit > 0 && len(data) > caps.SizeLimit {
-		return "", &DeliveryError{Err: fmt.Errorf("smtp client: message of %d octets over the server's SIZE %d", len(data), caps.SizeLimit), Permanent: true}
+	if caps.SizeLimit > 0 && msg.Size > int64(caps.SizeLimit) {
+		return "", &DeliveryError{Err: fmt.Errorf("smtp client: message of %d octets over the server's SIZE %d", msg.Size, caps.SizeLimit), Permanent: true}
 	}
 	// RFC 6531 3.2: UTF-8 addresses and header fields never go to a server without SMTPUTF8 (5.6.7).
 	if mustUTF8 && !caps.SMTPUTF8 {
@@ -205,11 +209,11 @@ func SendReply(ctx context.Context, addr, mailFrom, rcptTo string, data []byte, 
 	}
 	needUTF8 := mustUTF8 || headersUTF8 && caps.SMTPUTF8
 	// RFC 6152 3: 8-bit content never goes to a server without 8BITMIME; fail before MAIL (5.6.3).
-	if !caps.EightBitMIME && mail.Has8Bit(data) {
+	if !caps.EightBitMIME && msg.EightBit {
 		return "", &DeliveryError{Err: mail.ErrNeeds7Bit, Permanent: true}
 	}
 	tc.d = clientDataTimeout
-	mailLine := mailFromLine(mailFrom, data, caps, opts.User != "" && opts.Password != "")
+	mailLine := mailFromLine(mailFrom, msg.Size, caps, opts.User != "" && opts.Password != "")
 	if needUTF8 {
 		mailLine += " SMTPUTF8" // RFC 6531 3.4: MUST when the envelope or message needs it
 	}
@@ -237,9 +241,9 @@ func SendReply(ctx context.Context, addr, mailFrom, rcptTo string, data []byte, 
 	}
 
 	if caps.Pipelining {
-		return sendPipelined(conn, r, mailLine, rcptLine, data, caps)
+		return sendPipelined(conn, r, mailLine, rcptLine, msg, caps)
 	}
-	return sendSequential(conn, r, mailLine, rcptLine, data, caps)
+	return sendSequential(conn, r, mailLine, rcptLine, msg, caps)
 }
 
 func wantSTARTTLS(opts ClientOptions) bool {
@@ -249,7 +253,7 @@ func wantSTARTTLS(opts ClientOptions) bool {
 // mailFromLine builds MAIL FROM. After authenticating to the server it adds AUTH=<>: RFC 4954 5
 // requires it when relaying to a server one has authenticated to, and this server vouches for
 // no submitter identity.
-func mailFromLine(mailFrom string, data []byte, caps clientCaps, authenticated bool) string {
+func mailFromLine(mailFrom string, size int64, caps clientCaps, authenticated bool) string {
 	mailLine := "MAIL FROM:<>"
 	if strings.TrimSpace(mailFrom) != "" {
 		mailLine = fmt.Sprintf("MAIL FROM:<%s>", mailFrom)
@@ -257,8 +261,8 @@ func mailFromLine(mailFrom string, data []byte, caps clientCaps, authenticated b
 	if authenticated {
 		mailLine += " AUTH=<>"
 	}
-	if len(data) > 0 && caps.Size { // only to a server offering SIZE (RFC 5321 4.1.1.11)
-		mailLine += fmt.Sprintf(" SIZE=%d", len(data))
+	if size > 0 && caps.Size { // only to a server offering SIZE (RFC 5321 4.1.1.11)
+		mailLine += fmt.Sprintf(" SIZE=%d", size)
 	}
 	if caps.EightBitMIME {
 		mailLine += " BODY=8BITMIME"
@@ -266,18 +270,18 @@ func mailFromLine(mailFrom string, data []byte, caps clientCaps, authenticated b
 	return mailLine
 }
 
-func sendSequential(conn net.Conn, r *bufio.Reader, mailLine, rcptLine string, data []byte, caps clientCaps) (string, error) {
+func sendSequential(conn net.Conn, r *bufio.Reader, mailLine, rcptLine string, msg *mail.Outbound, caps clientCaps) (string, error) {
 	if err := cmd(conn, r, mailLine, 250); err != nil {
 		return "", err
 	}
 	if err := cmd(conn, r, rcptLine, 250); err != nil {
 		return "", err
 	}
-	return sendBody(conn, r, data, caps)
+	return sendBody(conn, r, msg, caps)
 }
 
-func sendPipelined(conn net.Conn, r *bufio.Reader, mailLine, rcptLine string, data []byte, caps clientCaps) (string, error) {
-	useBDAT := caps.Chunking && len(data) > 0
+func sendPipelined(conn net.Conn, r *bufio.Reader, mailLine, rcptLine string, msg *mail.Outbound, caps clientCaps) (string, error) {
+	useBDAT := caps.Chunking && msg.Size > 0
 	if err := writeLine(conn, mailLine); err != nil {
 		return "", err
 	}
@@ -285,7 +289,7 @@ func sendPipelined(conn net.Conn, r *bufio.Reader, mailLine, rcptLine string, da
 		return "", err
 	}
 	if useBDAT {
-		if err := writeBDATChunk(conn, data); err != nil {
+		if err := writeBDATChunk(conn, msg); err != nil {
 			return "", err
 		}
 	} else {
@@ -303,23 +307,23 @@ func sendPipelined(conn net.Conn, r *bufio.Reader, mailLine, rcptLine string, da
 		if err := expectCode(r, 354); err != nil {
 			return "", err
 		}
-		if err := writeDATABody(conn, data); err != nil {
+		if err := writeDATABody(conn, msg); err != nil {
 			return "", err
 		}
 	}
 	return finishMessage(conn, r)
 }
 
-func sendBody(conn net.Conn, r *bufio.Reader, data []byte, caps clientCaps) (string, error) {
-	if caps.Chunking && len(data) > 0 {
-		if err := writeBDATChunk(conn, data); err != nil {
+func sendBody(conn net.Conn, r *bufio.Reader, msg *mail.Outbound, caps clientCaps) (string, error) {
+	if caps.Chunking && msg.Size > 0 {
+		if err := writeBDATChunk(conn, msg); err != nil {
 			return "", err
 		}
 	} else {
 		if err := cmd(conn, r, "DATA", 354); err != nil {
 			return "", err
 		}
-		if err := writeDATABody(conn, data); err != nil {
+		if err := writeDATABody(conn, msg); err != nil {
 			return "", err
 		}
 	}
@@ -338,12 +342,21 @@ func finishMessage(conn net.Conn, r *bufio.Reader) (string, error) {
 
 // writeBDATChunk sends "BDAT n LAST" immediately followed by exactly n bytes (RFC 3030):
 // the server replies only after reading the chunk, so waiting for a reply in between deadlocks.
-func writeBDATChunk(conn net.Conn, data []byte) error {
-	if err := writeLine(conn, fmt.Sprintf("BDAT %d LAST", len(data))); err != nil {
+// writeBDATChunk sends the message as one BDAT LAST chunk of exactly the size announced: a source
+// that wrote another count would leave the server reading the next command as data.
+func writeBDATChunk(conn net.Conn, msg *mail.Outbound) error {
+	if err := writeLine(conn, fmt.Sprintf("BDAT %d LAST", msg.Size)); err != nil {
 		return err
 	}
-	_, err := conn.Write(data)
-	return err
+	w := bufio.NewWriterSize(conn, 32<<10)
+	n, err := msg.WriteTo(w)
+	if err == nil && n != msg.Size {
+		err = fmt.Errorf("smtp client: message wrote %d octets, BDAT announced %d", n, msg.Size)
+	}
+	if err != nil {
+		return err
+	}
+	return w.Flush()
 }
 
 func writeLine(conn net.Conn, line string) error {
@@ -423,8 +436,9 @@ func ehlo(conn net.Conn, r *bufio.Reader, name string) (clientCaps, error) {
 
 func readEHLOCaps(r *bufio.Reader) (clientCaps, error) {
 	var caps clientCaps
-	for first := true; ; first = false {
-		line, err := r.ReadString('\n')
+	for n := 0; ; n++ {
+		first := n == 0
+		line, err := readReplyLine(r, n)
 		if err != nil {
 			return caps, err
 		}
@@ -497,13 +511,38 @@ func expectCode(r *bufio.Reader, want int) error {
 	return err
 }
 
+// Bounds on a remote server's reply: RFC 5321 4.5.3.1.5 allows 512 octets a line; the margin is
+// for servers that exceed it. Unbounded, a hostile MX could fill the memory (CVE-2023-26432 class).
+const (
+	maxReplyLineBytes = 4096
+	maxReplyLines     = 100
+)
+
+// readReplyLine reads line n (from 0) of a reply within the bounds above.
+func readReplyLine(r *bufio.Reader, n int) (string, error) {
+	if n >= maxReplyLines {
+		return "", fmt.Errorf("smtp client: reply longer than %d lines", maxReplyLines)
+	}
+	var line []byte
+	for {
+		frag, err := r.ReadSlice('\n')
+		if len(line)+len(frag) > maxReplyLineBytes { // stop now: the connection is dropped anyway
+			return "", fmt.Errorf("smtp client: reply line longer than %d octets", maxReplyLineBytes)
+		}
+		line = append(line, frag...)
+		if !errors.Is(err, bufio.ErrBufferFull) {
+			return string(line), err
+		}
+	}
+}
+
 // expectReply reads one reply, including every "NNN-" continuation line (RFC 5321
 // multi-line replies, e.g. Exim's BDAT "250- 1249 byte chunk" then "250 OK id=..."), and
 // returns its final line trimmed when the code matches want.
 func expectReply(r *bufio.Reader, want int) (string, error) {
 	var line string
-	for {
-		l, err := r.ReadString('\n')
+	for n := 0; ; n++ {
+		l, err := readReplyLine(r, n)
 		if err != nil {
 			return "", err
 		}

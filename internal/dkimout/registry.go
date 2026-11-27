@@ -33,29 +33,18 @@ func (r *Registry) Set(domain string, s *Signer) {
 	r.byDom[domain] = s
 }
 
-// Sign implements mail.DKIMSigner using the return-path domain's key.
-func (r *Registry) Sign(returnPath string, raw []byte) ([]byte, error) {
+// NewSigner implements mail.OutboundSigner with the return-path domain's key.
+func (r *Registry) NewSigner(returnPath string, header []byte) (MessageSigner, error) {
 	if r == nil {
-		return raw, nil
-	}
-	dom, err := domainFromAddress(returnPath)
-	if err != nil {
-		if r.fallback != nil {
-			return r.fallback.Sign(returnPath, raw)
-		}
-		return raw, nil
+		return nil, nil
 	}
 	r.mu.RLock()
-	s := r.byDom[dom]
-	fb := r.fallback
+	s := r.fallback
+	if dom, err := domainFromAddress(returnPath); err == nil && r.byDom[dom] != nil {
+		s = r.byDom[dom]
+	}
 	r.mu.RUnlock()
-	if s != nil {
-		return s.Sign(returnPath, raw)
-	}
-	if fb != nil {
-		return fb.Sign(returnPath, raw)
-	}
-	return raw, nil
+	return s.NewSigner(returnPath, header)
 }
 
 // LoadDomain adds a signer from path for domain with selector.

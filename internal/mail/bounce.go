@@ -23,8 +23,15 @@ type DSNBuildOpts struct {
 	Diagnostic  string
 	QueueID     uint32
 	OriginalRaw []byte
+	HeaderOnly  bool   // OriginalRaw is only the header block of the message
+	HeaderUTF8  bool   // with HeaderOnly: the whole message has 8-bit header fields (Has8BitHeaders)
 	Hostname    string // Reporting-MTA and From; "localhost" when unset
 }
+
+// MaxDSNReturnBytes is the largest message a failure notification returns whole, even with
+// RET=FULL; a larger one is returned as its header only (RFC 3461 6.2 allows it; Postfix
+// bounce_size_limit has the same default).
+const MaxDSNReturnBytes = 50000
 
 // dsnText makes a value safe for one line of the notification: CR, LF and other control
 // characters become spaces. The diagnostic is the remote server's reply and the addresses and
@@ -47,7 +54,8 @@ func BuildDSN(opts DSNBuildOpts) []byte {
 	// RFC 6533: the notification of an internationalized message (UTF-8 addresses or header
 	// fields) uses the message/global* types.
 	global := !printableASCII(opts.ReturnPath) || !printableASCII(opts.FinalRcpt) ||
-		!printableASCII(OrcptText(opts.Orcpt, true)) || Has8BitHeaders(opts.OriginalRaw)
+		!printableASCII(OrcptText(opts.Orcpt, true)) || Has8BitHeaders(opts.OriginalRaw) ||
+		opts.HeaderOnly && opts.HeaderUTF8
 	boundary := dsnBoundary()
 	subjectAction := dsnSubjectAction(opts.Action)
 	human := dsnHumanText(opts)
@@ -222,10 +230,10 @@ func dsnStatusPart(opts DSNBuildOpts, host string, global bool) string {
 
 // dsnReturnPart is the copy of the message the notification carries, and whether it is only the
 // header. RET=FULL returns the whole message only with a failure: other notifications SHOULD
-// carry only the header (RFC 3461 6.2).
+// carry only the header (RFC 3461 6.2), as does a message over MaxDSNReturnBytes.
 func dsnReturnPart(opts DSNBuildOpts) ([]byte, bool) {
 	switch {
-	case opts.Ret == RetFull && opts.Action == DSNActionFailed:
+	case opts.Ret == RetFull && opts.Action == DSNActionFailed && !opts.HeaderOnly && len(opts.OriginalRaw) <= MaxDSNReturnBytes:
 		return opts.OriginalRaw, false
 	case opts.Ret == RetFull, opts.Ret == RetHdrs:
 		return extractHeaders(opts.OriginalRaw), true

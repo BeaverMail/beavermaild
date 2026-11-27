@@ -280,3 +280,47 @@ func TestBDATBareCRInHeader(t *testing.T) {
 		t.Fatalf("bare CR in the body is not a line end: %q", raw)
 	}
 }
+
+// CVE-2023-26432 class: a hostile MX answers with a huge line or a huge reply. The client
+// gives up at once instead of holding the stream in memory.
+func TestCVE_2023_26432_HostileReplies(t *testing.T) {
+	t.Parallel()
+	for name, serve := range map[string]func(net.Conn){
+		"16 MB greeting line": func(c net.Conn) {
+			_, _ = c.Write([]byte("220-"))
+			for range 256 { // 16 MB: enough to fail, finite so a regression fails instead of exhausting memory
+				if _, err := c.Write([]byte(strings.Repeat("A", 64<<10))); err != nil {
+					return
+				}
+			}
+		},
+		"200000-line EHLO reply": func(c net.Conn) {
+			_, _ = c.Write([]byte("220 mx.example.org\r\n"))
+			_, _ = bufio.NewReader(c).ReadString('\n')
+			for range 200000 {
+				if _, err := c.Write([]byte("250-AUTH PLAIN LOGIN\r\n")); err != nil {
+					return
+				}
+			}
+		},
+	} {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		go func() {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			defer c.Close()
+			serve(c)
+		}()
+		start := time.Now()
+		err = smtp.Send(context.Background(), ln.Addr().String(), "a@example.com", "b@example.org", []byte("x\r\n"), smtp.ClientOptions{})
+		ln.Close()
+		if err == nil || !strings.Contains(err.Error(), "reply") || time.Since(start) > 5*time.Second {
+			t.Errorf("%s: %v after %v, want a bounded reply error at once", name, err, time.Since(start))
+		}
+	}
+}

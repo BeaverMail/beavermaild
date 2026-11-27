@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Security (outbound queue): queued messages are sent as a stream from the store. DKIM signing,
+  the CRLF conversion and DATA/BDAT no longer load the message: a 10 MB message took about 38 MB
+  per delivery (16 at once), now a fixed 3 MB whatever its size.
+- Change (DSN, RFC 3461 6.2): a failure notification returns the whole message only up to 50 000
+  octets, even with RET=FULL; a larger message is returned as its header only, as Postfix does.
+- Security (SMTP, RFC 1870): incoming messages are received to disk instead of memory. Only the
+  header block is held (up to 1 MiB; a larger one is refused with 552, as Exim does), and every
+  check and added field works on it; the body goes from the spool file to the filter, the store
+  (one blob for all local recipients), the queue and the report store as a stream. A 9.7 MB
+  message raised the heap by about 40 MB, now by almost nothing, and a slow client can no longer
+  hold the message limit in memory per connection. A spool that cannot be written answers 451.
+- Security (SMTP client): replies from a remote server are bounded (4096 octets a line, 100 lines a
+  reply). A hostile MX could make the server hold an endless greeting or EHLO reply in memory.
 - Fix (ARC, RFC 8617 / RFC 6376): relaxed canonicalization works on octets, so messages with 8-bit
   text (Latin-1 bodies or headers) no longer fail ARC verification; the message is hashed as a
   stream instead of read whole.
