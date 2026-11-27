@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.0
 
 - Security (outbound queue): queued messages are sent as a stream from the store. DKIM signing,
   the CRLF conversion and DATA/BDAT no longer load the message: a 10 MB message took about 38 MB
