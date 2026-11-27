@@ -2,6 +2,7 @@
 package arc
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto"
@@ -12,6 +13,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"strconv"
 	"strings"
@@ -21,7 +23,6 @@ import (
 
 const (
 	maxARCSetCount = 50
-	maxMessageSize = 32 << 20
 	maxHeaderSize  = 256 << 10
 	maxHeaderCount = 1000
 	maxTagValue    = 64 << 10
@@ -47,7 +48,13 @@ type header struct {
 
 type message struct {
 	headers []header
-	body    []byte
+	body    map[string]bodyDigest // by body canonicalization: "simple", "relaxed"
+}
+
+// bodyDigest is the SHA-256 of a canonicalized body and its canonical length (for l=).
+type bodyDigest struct {
+	sum [sha256.Size]byte
+	n   int64
 }
 
 type signature struct {
@@ -120,34 +127,57 @@ func (c *keyCache) get(ctx context.Context, name string) (crypto.PublicKey, erro
 	return key, err
 }
 
-// readMessage reads and parses a bounded RFC 5322 message.
+// readMessage reads a message as a stream: the header block, bounded, is kept; the body is only
+// hashed, under both body canonicalizations at once, so a message of any size costs no memory.
+// Line ends are CRLF, CR or LF, all read as CRLF (as the whole-message form did).
 func readMessage(r io.Reader) (message, error) {
-	data, err := io.ReadAll(io.LimitReader(r, maxMessageSize+1))
+	br := bufio.NewReader(r)
+	var block []byte
+	for {
+		line, ended, err := readHeaderLine(br, maxHeaderSize-len(block))
+		if err != nil || !ended {
+			return message{}, errors.New("missing or oversized message header")
+		}
+		if len(line) == 0 {
+			break
+		}
+		block = append(append(block, line...), '\r', '\n')
+	}
+	headers, err := parseHeaders(bytes.TrimSuffix(block, []byte("\r\n")))
 	if err != nil {
 		return message{}, err
 	}
-	tooLarge := len(data) > maxMessageSize
-	data = normalizeCRLF(data)
-	at := bytes.Index(data, []byte("\r\n\r\n"))
-	if at < 0 || at > maxHeaderSize {
-		return message{}, errors.New("missing or oversized message header")
+	simple, relaxed := newBodyCanon(false), newBodyCanon(true)
+	if _, err := io.Copy(io.MultiWriter(simple, relaxed), br); err != nil {
+		return message{headers: headers}, err
 	}
-	headers, err := parseHeaders(data[:at])
-	if err != nil {
-		return message{}, err
-	}
-	if tooLarge {
-		// The header still tells whether a chain is there (then it fails: it cannot be checked).
-		return message{headers: headers}, errors.New("message exceeds ARC verification limit")
-	}
-	return message{headers: headers, body: data[at+4:]}, nil
+	return message{headers: headers, body: map[string]bodyDigest{"simple": simple.digest(), "relaxed": relaxed.digest()}}, nil
 }
 
-// normalizeCRLF converts accepted line endings to the canonical CRLF form.
-func normalizeCRLF(data []byte) []byte {
-	data = bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
-	data = bytes.ReplaceAll(data, []byte("\r"), []byte("\n"))
-	return bytes.ReplaceAll(data, []byte("\n"), []byte("\r\n"))
+// readHeaderLine reads one header line of at most max octets, without its line end; ended is false
+// at the end of the input. A CR followed by LF is one line end.
+func readHeaderLine(br *bufio.Reader, max int) (line []byte, ended bool, err error) {
+	for {
+		c, err := br.ReadByte()
+		if err == io.EOF {
+			return line, false, nil
+		} else if err != nil {
+			return nil, false, err
+		}
+		switch c {
+		case '\r':
+			if next, err := br.ReadByte(); err == nil && next != '\n' {
+				_ = br.UnreadByte()
+			}
+			return line, true, nil
+		case '\n':
+			return line, true, nil
+		}
+		if len(line) >= max {
+			return nil, false, errors.New("oversized header")
+		}
+		line = append(line, c)
+	}
 }
 
 // parseHeaders preserves folded fields while enforcing parser limits.
@@ -411,17 +441,16 @@ func verifyMessageSignature(ctx context.Context, msg message, sigHeader header, 
 	if err != nil {
 		return err
 	}
-	body := canonicalizeBody(msg.body, bodyCanon)
+	body := msg.body[bodyCanon]
 	if l := tags["l"]; l != "" {
 		// A shorter l= leaves text appended after signing unsigned; RFC 6376 8.2 lets verifiers
 		// refuse it, and a passing chain earns trust.
-		if n, err := strconv.Atoi(l); err != nil || n != len(body) {
+		if n, err := strconv.ParseInt(l, 10, 64); err != nil || n != body.n {
 			return errors.New("AMS body length does not cover the body")
 		}
 	}
-	bodyHash := sha256.Sum256(body)
 	wantBodyHash, err := decodeBase64(tags["bh"])
-	if err != nil || !bytes.Equal(bodyHash[:], wantBodyHash) {
+	if err != nil || !bytes.Equal(body.sum[:], wantBodyHash) {
 		return errors.New("AMS body hash mismatch")
 	}
 	var signed bytes.Buffer
@@ -635,36 +664,92 @@ func stripBValue(raw string) string {
 	return raw
 }
 
-// canonicalizeBody applies DKIM simple or relaxed body canonicalization.
-func canonicalizeBody(body []byte, mode string) []byte {
-	body = normalizeCRLF(body)
-	lines := bytes.Split(body, []byte("\r\n"))
-	if len(lines) > 0 && len(lines[len(lines)-1]) == 0 {
-		lines = lines[:len(lines)-1]
-	}
-	if mode == "relaxed" {
-		for i, line := range lines {
-			lines[i] = []byte(compressWSP(strings.TrimRight(string(line), " \t")))
+// bodyCanon canonicalizes a body as it is written (RFC 6376 3.4.3 simple, 3.4.4 relaxed) and
+// hashes the result. It works on octets: text in any charset hashes as sent.
+type bodyCanon struct {
+	relaxed  bool
+	h        hash.Hash
+	n        int64
+	out      []byte // canonical octets not hashed yet
+	empty    int    // empty lines held back: dropped at the end of the body
+	content  bool   // the current line has canonical content
+	wsp      bool   // relaxed: a run of SP/HTAB not written yet
+	cr       bool   // the last octet was a CR (a line end; an LF right after is part of it)
+	anything bool   // some line was written
+}
+
+func newBodyCanon(relaxed bool) *bodyCanon { return &bodyCanon{relaxed: relaxed, h: sha256.New()} }
+
+func (b *bodyCanon) Write(p []byte) (int, error) {
+	for _, c := range p {
+		switch {
+		case c == '\n' && b.cr:
+			b.cr = false
+		case c == '\r' || c == '\n':
+			b.cr = c == '\r'
+			b.endLine()
+		case b.relaxed && (c == ' ' || c == '\t'):
+			b.cr = false
+			b.wsp = true
+		default:
+			b.cr = false
+			if !b.content {
+				for ; b.empty > 0; b.empty-- {
+					b.emit('\r', '\n')
+				}
+				b.content, b.anything = true, true
+			}
+			if b.wsp {
+				b.emit(' ') // relaxed: a run inside the line is one SP; trailing runs never get here
+				b.wsp = false
+			}
+			b.emit(c)
 		}
 	}
-	for len(lines) > 0 && len(lines[len(lines)-1]) == 0 {
-		lines = lines[:len(lines)-1]
+	return len(p), nil
+}
+
+func (b *bodyCanon) endLine() {
+	if b.content {
+		b.emit('\r', '\n')
+	} else {
+		b.empty++
 	}
-	if len(lines) == 0 {
-		if mode == "relaxed" {
-			return nil // RFC 6376 3.4.4: an empty body is the null input; only simple makes it CRLF
-		}
-		return []byte("\r\n")
+	b.content, b.wsp = false, false
+}
+
+func (b *bodyCanon) emit(c ...byte) {
+	b.out = append(b.out, c...)
+	b.n += int64(len(c))
+	if len(b.out) >= 32<<10 {
+		b.h.Write(b.out)
+		b.out = b.out[:0]
 	}
-	return append(bytes.Join(lines, []byte("\r\n")), '\r', '\n')
+}
+
+// digest ends the body: a last line without a line end gets one; an empty body is CRLF under simple
+// and the null input under relaxed.
+func (b *bodyCanon) digest() bodyDigest {
+	if b.content {
+		b.emit('\r', '\n')
+	}
+	if !b.anything && !b.relaxed {
+		b.emit('\r', '\n')
+	}
+	b.h.Write(b.out)
+	b.out = b.out[:0]
+	var d bodyDigest
+	copy(d.sum[:], b.h.Sum(nil))
+	d.n = b.n
+	return d
 }
 
 // compressWSP reduces each run of SP or HTAB to one SP.
 func compressWSP(value string) string {
 	var out strings.Builder
 	space := false
-	for _, r := range value {
-		if r == ' ' || r == '\t' {
+	for i := 0; i < len(value); i++ { // octets: a rune loop turned 8-bit text into U+FFFD
+		if c := value[i]; c == ' ' || c == '\t' {
 			space = true
 			continue
 		}
@@ -672,7 +757,7 @@ func compressWSP(value string) string {
 			out.WriteByte(' ')
 			space = false
 		}
-		out.WriteRune(r)
+		out.WriteByte(value[i])
 	}
 	if space {
 		out.WriteByte(' ')

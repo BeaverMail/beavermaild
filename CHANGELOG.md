@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Fix (ARC, RFC 8617 / RFC 6376): relaxed canonicalization works on octets, so messages with 8-bit
+  text (Latin-1 bodies or headers) no longer fail ARC verification; the message is hashed as a
+  stream instead of read whole.
 - Security (login, RFC 3501 11.2): a successful login no longer clears the failed attempts made
   from the same address under other user names, so signing in to one's own account between
   guesses no longer gives unlimited guesses at another (IMAP, SMTP AUTH and the web login share the

@@ -34,7 +34,15 @@ func TestHashPathMatchesIndependentSigner(t *testing.T) {
 		"ed._domainkey.example.test":  "v=DKIM1; k=ed25519; p=" + base64.StdEncoding.EncodeToString(edKey.Public().(ed25519.PublicKey)),
 	}
 	lookup := func(_ context.Context, name string) ([]string, error) { return []string{records[name]}, nil }
-	bodies := map[string]string{"text": "Hello \t world  \r\n\r\n\r\n", "empty": ""}
+	bodies := map[string]string{
+		"text":  "Hello \t world  \r\n\r\n\r\n",
+		"empty": "",
+		// 8-bit text in a legacy charset: canonicalization works on octets.
+		"latin1":                 "caf\xe9 \t cr\xe8me  \r\n \t \r\n\xff\r\n\r\n",
+		"blank lines and spaces": "\r\n  \r\na\r\n\t\r\n\r\n",
+		"no final line end":      "last line  ",
+		"long line":              strings.Repeat("x y  ", 20000) + "\r\n",
+	}
 	for _, canon := range []dkim.Canonicalization{dkim.CanonicalizationSimple, dkim.CanonicalizationRelaxed} {
 		for selector, signer := range map[string]crypto.Signer{"rsa": rsaKey, "ed": edKey} {
 			for bodyName, body := range bodies {
@@ -81,7 +89,7 @@ func TestBodyLengthMustCoverBody(t *testing.T) {
 	if result, _ := Verify(context.Background(), bytes.NewReader(appended), keyLookup(t, key)); result != ResultFail {
 		t.Fatalf("appended body: %q", result)
 	}
-	if err := verifyMessageSignature(context.Background(), message{body: []byte("abc\r\n")}, header{},
+	if err := verifyMessageSignature(context.Background(), message{body: bodyOf("abc\r\n")}, header{},
 		map[string]string{"l": "1", "bh": "x"}, nil); err == nil {
 		t.Fatal("l=1 over a longer body accepted")
 	}
@@ -103,13 +111,13 @@ func TestKeyCacheAndSealer(t *testing.T) {
 	}
 }
 
-// A message over the size limit that carries a chain fails (it cannot be checked); without ARC
-// fields it is none.
+// 32 MB appended to a chained message: the body is hashed as a stream and no longer matches, so
+// the chain fails.
 func TestOversizedWithChain(t *testing.T) {
 	t.Parallel()
 	key := generatedKey(t)
 	raw := buildChain(t, key, "relaxed/relaxed", 1)
-	raw = append(raw, bytes.Repeat([]byte("x"), maxMessageSize)...)
+	raw = append(raw, bytes.Repeat([]byte("x"), 32<<20)...)
 	if result, _ := Verify(context.Background(), bytes.NewReader(raw), keyLookup(t, key)); result != ResultFail {
 		t.Fatalf("result %q, want fail", result)
 	}
@@ -137,7 +145,7 @@ func TestTagListSyntax(t *testing.T) {
 		}
 	}
 	// F4: c= present but empty is an error, not the simple/simple default.
-	err := verifyMessageSignature(context.Background(), message{body: []byte("x\r\n")}, header{}, map[string]string{"c": "", "bh": "x"}, nil)
+	err := verifyMessageSignature(context.Background(), message{body: bodyOf("x\r\n")}, header{}, map[string]string{"c": "", "bh": "x"}, nil)
 	if err == nil || !strings.Contains(err.Error(), "empty c=") {
 		t.Fatalf("empty c=: %v", err)
 	}
@@ -155,5 +163,39 @@ func TestARCSealerALabel(t *testing.T) {
 	})
 	if result != ResultPass || sealer != "xn--mnchen-3ya.example" {
 		t.Fatalf("result %q sealer %q", result, sealer)
+	}
+}
+
+// Relaxed header canonicalization works on octets too: an 8-bit Subject signed elsewhere verifies.
+func TestHeaderCanonicalizationOctets(t *testing.T) {
+	t.Parallel()
+	key := generatedKey(t)
+	der, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := "v=DKIM1; k=rsa; p=" + base64.StdEncoding.EncodeToString(der)
+	lookup := func(context.Context, string) ([]string, error) { return []string{record}, nil }
+	msg := "From: sender@example.test\r\nSubject: caf\xe9  \t cr\xe8me\r\n\r\nbody\r\n"
+	var out bytes.Buffer
+	if err := dkim.Sign(&out, strings.NewReader(msg), &dkim.SignOptions{
+		Domain: "example.test", Selector: "rsa", Signer: key,
+		HeaderCanonicalization: dkim.CanonicalizationRelaxed, BodyCanonicalization: dkim.CanonicalizationRelaxed,
+		HeaderKeys: []string{"From", "Subject"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := readMessage(bytes.NewReader(out.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, _ := headerValue(parsed.headers[0])
+	tags, err := parseTags(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := &keyCache{lookup: lookup, seen: map[string]keyAnswer{}}
+	if err := verifyMessageSignature(context.Background(), parsed, parsed.headers[0], tags, keys); err != nil {
+		t.Fatalf("8-bit Subject: %v", err)
 	}
 }
