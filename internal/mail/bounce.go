@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // DSNBuildOpts configures one delivery status notification message.
@@ -50,7 +51,7 @@ func dsnText(s string) string {
 func BuildDSN(opts DSNBuildOpts) []byte {
 	opts.ReturnPath, opts.FinalRcpt = dsnText(opts.ReturnPath), dsnText(opts.FinalRcpt)
 	opts.Orcpt, opts.Envid = dsnText(opts.Orcpt), dsnText(opts.Envid)
-	opts.Status, opts.Diagnostic = dsnText(opts.Status), dsnText(opts.Diagnostic)
+	opts.Status, opts.Diagnostic = dsnText(opts.Status), clipUTF8(dsnText(opts.Diagnostic), maxDSNDiagnostic)
 	// RFC 6533: the notification of an internationalized message (UTF-8 addresses or header
 	// fields) uses the message/global* types.
 	global := !printableASCII(opts.ReturnPath) || !printableASCII(opts.FinalRcpt) ||
@@ -115,6 +116,10 @@ func BuildDSN(opts DSNBuildOpts) []byte {
 				typ = "message/global-headers"
 			}
 			b.WriteString("\r\nContent-Type: " + typ + "\r\nContent-Transfer-Encoding: base64\r\n\r\n")
+			part = base64Lines(CRLF(part))
+		} else if headersOnly && longestLine(part) > MaxLineOctets {
+			// A header line SMTP cannot carry: base64, so the notification itself can be sent.
+			b.WriteString("\r\nContent-Type: text/rfc822-headers\r\nContent-Transfer-Encoding: base64\r\n\r\n")
 			part = base64Lines(CRLF(part))
 		} else if headersOnly {
 			b.WriteString("\r\nContent-Type: text/rfc822-headers\r\n\r\n") // RFC 6522 4
@@ -228,12 +233,30 @@ func dsnStatusPart(opts DSNBuildOpts, host string, global bool) string {
 	return b.String()
 }
 
+// maxDSNDiagnostic bounds the remote reply quoted in a notification (Diagnostic-Code and the text
+// part): with "Diagnostic-Code: smtp; " in front the line stays within MaxLineOctets. The client
+// accepts replies of 4096 octets a line; the whole reply stays in the log and the queue entry.
+const maxDSNDiagnostic = 900
+
+// clipUTF8 cuts s to at most n octets, never inside a UTF-8 sequence.
+func clipUTF8(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
+}
+
 // dsnReturnPart is the copy of the message the notification carries, and whether it is only the
 // header. RET=FULL returns the whole message only with a failure: other notifications SHOULD
-// carry only the header (RFC 3461 6.2), as does a message over MaxDSNReturnBytes.
+// carry only the header (RFC 3461 6.2), as does a message over MaxDSNReturnBytes or with a line
+// SMTP cannot carry (RFC 3030 3: returned only in a form that makes a valid notification).
 func dsnReturnPart(opts DSNBuildOpts) ([]byte, bool) {
 	switch {
-	case opts.Ret == RetFull && opts.Action == DSNActionFailed && !opts.HeaderOnly && len(opts.OriginalRaw) <= MaxDSNReturnBytes:
+	case opts.Ret == RetFull && opts.Action == DSNActionFailed && !opts.HeaderOnly && len(opts.OriginalRaw) <= MaxDSNReturnBytes &&
+		longestLine(opts.OriginalRaw) <= MaxLineOctets:
 		return opts.OriginalRaw, false
 	case opts.Ret == RetFull, opts.Ret == RetHdrs:
 		return extractHeaders(opts.OriginalRaw), true
@@ -284,6 +307,9 @@ func dsnMessageID() string {
 func SMTPStatusFromError(err error) string {
 	if errors.Is(err, ErrNeeds7Bit) {
 		return "5.6.3" // conversion required and not possible (RFC 3463)
+	}
+	if errors.Is(err, ErrLineTooLong) {
+		return "5.6.0" // other media error: content SMTP cannot carry (RFC 3463)
 	}
 	if errors.Is(err, ErrNeedsSMTPUTF8) {
 		return "5.6.7" // non-ASCII addresses not permitted (RFC 6531 4.2)

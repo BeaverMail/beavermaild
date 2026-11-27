@@ -6,11 +6,11 @@ import (
 	"io"
 )
 
-// copyBDATChunk copies a size-byte chunk from r to w in pieces, renewing the deadline for every
-// MiB, and returns how many bytes it took from r: when w fails mid-chunk, the caller discards
-// exactly the rest, so the next command starts where the client put it.
-func copyBDATChunk(w io.Writer, r *bufio.Reader, size int64, beforeRead func()) (read int64, err error) {
-	buf := make([]byte, 32<<10)
+// copyBDATChunk copies a size-byte chunk from r to w in pieces of buf, renewing the deadline for
+// every MiB, and returns how many bytes it took from r: when w fails mid-chunk, the caller discards
+// exactly the rest, so the next command starts where the client put it. buf is the session's, so
+// a message sent in many small chunks allocates nothing per chunk.
+func copyBDATChunk(w io.Writer, r *bufio.Reader, size int64, beforeRead func(), buf []byte) (read int64, err error) {
 	for read < size {
 		if read%(1<<20) < int64(len(buf)) && beforeRead != nil {
 			beforeRead()

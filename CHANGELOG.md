@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- Fix (SMTP BDAT, RFC 3030 / RFC 5321 4.5.3.1.6): lines over 998 octets are refused with the 552
+  DATA gives (before, BDAT accepted and relayed them). The rest of the chunk is dropped and the
+  session goes on.
+- Fix (outbound): a message with a line over 998 octets (received before this release, or stored
+  with IMAP APPEND) is never sent as is: the delivery fails for good with a DSN (5.6.0), as Exim's
+  message_linelength_limit does.
+- Fix (DSN): notifications always fit SMTP lines. The remote reply quoted in them is cut at 900
+  octets (the full reply stays in the log and the queue), and an original with over-long lines is
+  returned as its header only, in base64 when the header itself has one.
+- Fix (SMTP BDAT): the chunk size takes digits only (BDAT +5 was accepted), and a message sent in
+  many small chunks no longer allocates a 32 KB buffer per chunk.
+
 ## 0.5.0
 
 - Fix (domain names): a name that is not valid UTF-8 (for example a HELO argument with stray 8-bit

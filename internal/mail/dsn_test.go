@@ -164,3 +164,31 @@ func TestGeneratedMessagesHaveRequiredFields(t *testing.T) {
 		}
 	}
 }
+
+// A notification must itself be sendable: no line over 998 octets (RFC 5321 4.5.3.1.6), even with
+// a remote reply as long as the client accepts (4096 octets a line) and ENVID, ORCPT at their
+// RFC 3461 4 maximum. Otherwise the client refuses it (ErrLineTooLong) and the bounce is lost.
+func TestDSNLinesFitSMTP(t *testing.T) {
+	raw := []byte("From: a@example.org\r\nSubject: " + strings.Repeat("s", 900) + "\r\n\r\nbody\r\n")
+	for _, action := range []DSNAction{DSNActionFailed, DSNActionDelayed, DSNActionDelivered} {
+		dsn := BuildDSN(DSNBuildOpts{
+			ReturnPath: "a@example.org", FinalRcpt: "b@example.net",
+			Orcpt: "rfc822;" + strings.Repeat("o", 490) + "@example.net",
+			Envid: strings.Repeat("e", 100),
+			Ret:   RetFull, Action: action, Status: "5.1.1",
+			Diagnostic:  "550 5.1.1 " + strings.Repeat("d", 4086),
+			OriginalRaw: raw, Hostname: "mx.example.net",
+		})
+		if n := longestLine(dsn); n > MaxLineOctets {
+			t.Errorf("%s: line of %d octets", action, n)
+		}
+	}
+	// The original has the lines that made it fail (ErrLineTooLong): returned as its header, in
+	// base64 when the header itself has one.
+	long := []byte("From: a@example.org\r\nSubject: " + strings.Repeat("s", 2000) + "\r\n\r\n" + strings.Repeat("b", 3000) + "\r\n")
+	dsn := BuildDSN(DSNBuildOpts{ReturnPath: "a@example.org", FinalRcpt: "b@example.net", Ret: RetFull,
+		Action: DSNActionFailed, Status: "5.6.0", Diagnostic: ErrLineTooLong.Error(), OriginalRaw: long, Hostname: "mx.example.net"})
+	if n := longestLine(dsn); n > MaxLineOctets || !strings.Contains(string(dsn), "Content-Type: text/rfc822-headers\r\nContent-Transfer-Encoding: base64") {
+		t.Errorf("original with long lines: longest line %d", n)
+	}
+}

@@ -238,7 +238,7 @@ func TestWorkerDSNReturnLimit(t *testing.T) {
 		blobs := blob.NewFS(t.TempDir() + "/blobs")
 		inbox := mail.NewInbox(store, blobs)
 		queue := mail.NewQueue(store, blobs)
-		raw := []byte("From: alice@localhost\r\nSubject: returned\r\n\r\n" + strings.Repeat("y", tc.bodyLen) + "\r\n")
+		raw := []byte("From: alice@localhost\r\nSubject: returned\r\n\r\n" + strings.Repeat(strings.Repeat("y", 98)+"\r\n", tc.bodyLen/100))
 		env := mail.EnvelopeDSN{ReturnPath: "alice@localhost", Ret: mail.RetFull,
 			Recipients: []mail.RcptDSN{{Address: "remote@example.com", Notify: mail.NotifyFailure}}}
 		if _, err := queue.EnqueueDSN(ctx, env, raw); err != nil {

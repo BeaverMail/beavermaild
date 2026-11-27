@@ -69,4 +69,13 @@ func TestParseMailArg(t *testing.T) {
 	if _, _, ok := parseBDAT("x LAST"); ok {
 		t.Fatal("bad bdat")
 	}
+	// RFC 3030 2: chunk-size = 1*DIGIT; strconv.Atoi alone took a sign.
+	for _, arg := range []string{"+5", "-0", "+0 LAST", "5x", "99999999999999999999999", "5 LAST more"} {
+		if _, _, ok := parseBDAT(arg); ok {
+			t.Errorf("BDAT %q accepted", arg)
+		}
+	}
+	if n, last, ok := parseBDAT("007 last"); !ok || n != 7 || !last {
+		t.Errorf("BDAT 007 last: %d %v %v", n, last, ok)
+	}
 }

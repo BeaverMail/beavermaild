@@ -155,8 +155,12 @@ func parseBDAT(arg string) (size int, last bool, ok bool) {
 	if len(fields) == 0 || len(fields) > 2 {
 		return 0, false, false
 	}
+	// chunk-size = 1*DIGIT: no sign, which strconv.Atoi would take.
+	if strings.TrimLeft(fields[0], "0123456789") != "" {
+		return 0, false, false
+	}
 	n, err := strconv.Atoi(fields[0])
-	if err != nil || n < 0 {
+	if err != nil {
 		return 0, false, false
 	}
 	if len(fields) == 2 {

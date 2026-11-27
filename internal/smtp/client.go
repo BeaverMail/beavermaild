@@ -134,6 +134,10 @@ func SendMessage(ctx context.Context, addr, mailFrom, rcptTo string, msg *mail.O
 	if strings.IndexFunc(mailFrom+rcptTo, unicode.IsControl) >= 0 {
 		return "", &DeliveryError{Err: errors.New("smtp client: control character in envelope address"), Permanent: true}
 	}
+	// RFC 5321 4.5.3.1.6: a longer line cannot be sent (received with BDAT, or stored by APPEND).
+	if msg.MaxLine > mail.MaxLineOctets {
+		return "", &DeliveryError{Err: mail.ErrLineTooLong, Permanent: true}
+	}
 	// RFC 6531 3.2: an A-label domain is not internationalized, so only a UTF-8 local part or UTF-8
 	// header fields need SMTPUTF8.
 	mailFrom, rcptTo = asciiDomain(mailFrom), asciiDomain(rcptTo)

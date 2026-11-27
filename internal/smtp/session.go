@@ -86,6 +86,7 @@ type session struct {
 
 	spool    *spool             // the message being received, DATA or BDAT; nil between transactions
 	bdatCR   *mail.BareCRWriter // BDAT: chunks go through BareCR into spool
+	bdatBuf  []byte             // BDAT: copy buffer, one per session
 	bdatUsed bool
 }
 
@@ -1118,10 +1119,11 @@ func (s *session) tlsBlocks() bool {
 
 // bdatChunk is a BDAT command with its data already off the stream.
 type bdatChunk struct {
-	size     int
-	last     bool
-	tooBig   bool // over MaxMessageBytes, or a header past maxHeaderBytes: read and dropped
-	localErr bool // the spool failed: read and dropped, answered 451
+	size int
+	last bool
+	// err refuses the message once its chunk is read and dropped (answered as DATA would):
+	// ErrMessageTooLarge, errHeaderTooLarge, ErrLineTooLong, or errSpoolWrite (451).
+	err error
 }
 
 // consumeBDAT parses a BDAT command and reads its chunk: into the spool when cmdBDAT will take it,
@@ -1136,7 +1138,9 @@ func (s *session) consumeBDAT(arg string, mailBlocked bool) (bdatChunk, error) {
 	c := bdatChunk{size: size, last: last}
 	taken := s.inTxn && len(s.rcpt) > 0 && !mailBlocked && !s.tlsBlocks()
 	if !taken || size > s.dataLimits.MaxMessageBytes || s.spool != nil && s.spool.size()+int64(size) > int64(s.dataLimits.MaxMessageBytes) {
-		c.tooBig = taken
+		if taken {
+			c.err = ErrMessageTooLarge
+		}
 		if err := discardBDATChunk(s.r, int64(size), s.bumpReadDeadline); err != nil {
 			s.reset()
 			return bdatChunk{}, err
@@ -1147,21 +1151,26 @@ func (s *session) consumeBDAT(arg string, mailBlocked bool) (bdatChunk, error) {
 		sp, err := newSpool(s.inbox.Blobs().TempFile)
 		if err != nil {
 			s.log.Warn("smtp spool", slog.Any("err", err))
-			c.localErr = true
+			c.err = errSpoolWrite
 			if err := discardBDATChunk(s.r, int64(size), s.bumpReadDeadline); err != nil {
 				s.reset()
 				return bdatChunk{}, err
 			}
 			return c, nil
 		}
+		// RFC 5321 4.5.3.1.6 as for DATA: without BINARYMIME the content is text in lines.
+		sp.maxLine = s.dataLimits.withDefaults().MaxLineBytes
 		s.spool, s.bdatCR = sp, mail.NewBareCRWriter(sp)
 	}
-	read, err := copyBDATChunk(s.bdatCR, s.r, int64(size), s.bumpReadDeadline)
-	if errors.Is(err, errHeaderTooLarge) || errors.Is(err, errSpoolWrite) {
+	if s.bdatBuf == nil {
+		s.bdatBuf = make([]byte, 32<<10)
+	}
+	read, err := copyBDATChunk(s.bdatCR, s.r, int64(size), s.bumpReadDeadline, s.bdatBuf)
+	if refused(err) {
 		if errors.Is(err, errSpoolWrite) {
 			s.log.Warn("smtp spool", slog.Any("err", err))
 		}
-		c.tooBig, c.localErr = errors.Is(err, errHeaderTooLarge), errors.Is(err, errSpoolWrite)
+		c.err = err
 		err = discardBDATChunk(s.r, int64(size)-read, s.bumpReadDeadline)
 	}
 	if err != nil {
@@ -1171,16 +1180,18 @@ func (s *session) consumeBDAT(arg string, mailBlocked bool) (bdatChunk, error) {
 	return c, nil
 }
 
+// refused reports a spool error that refuses the message but leaves the session in step.
+func refused(err error) bool {
+	return errors.Is(err, errHeaderTooLarge) || errors.Is(err, ErrLineTooLong) || errors.Is(err, errSpoolWrite)
+}
+
 func (s *session) cmdBDAT(ctx context.Context, c bdatChunk) error {
 	if !s.inTxn || len(s.rcpt) == 0 {
 		return s.writef(replyBadSequence)
 	}
-	if c.tooBig || c.localErr {
+	if c.err != nil {
 		s.reset() // the message is lost; RSET state, the session goes on (RFC 3030 2)
-		if c.localErr {
-			return s.writef(replyLocalError)
-		}
-		return s.writef(replyMessageTooLarge)
+		return s.writef(dataErrorResponse(c.err))
 	}
 	s.bdatUsed = true
 	if !c.last {
@@ -1190,9 +1201,9 @@ func (s *session) cmdBDAT(ctx context.Context, c bdatChunk) error {
 	// line for some readers. Same rule as Exim: a continuation in the header, a line end in the body
 	// (BareCRWriter, applied as the chunks arrive).
 	if err := s.bdatCR.Close(); err != nil {
-		if errors.Is(err, errHeaderTooLarge) {
+		if refused(err) {
 			s.reset()
-			return s.writef(replyMessageTooLarge)
+			return s.writef(dataErrorResponse(err))
 		}
 		return err
 	}

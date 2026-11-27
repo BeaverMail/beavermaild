@@ -7,6 +7,15 @@ import "errors"
 // Exim, the message is not converted: the delivery fails for good with status 5.6.3.
 var ErrNeeds7Bit = errors.New("mail: next hop accepts 7-bit content only, message has 8-bit octets")
 
+// MaxLineOctets is the longest line SMTP may carry, CR LF excluded (RFC 5321 4.5.3.1.6).
+const MaxLineOctets = 998
+
+// ErrLineTooLong is returned by the SMTP client, before connecting, for a message with a line over
+// MaxLineOctets: RFC 5321 4.5.3.1.6 forbids sending it, and RFC 3030 3 forbids binary content to a
+// server without BINARYMIME (none is offered or used). Like Exim's message_linelength_limit, the
+// delivery fails for good (5.6.0).
+var ErrLineTooLong = errors.New("mail: message has a line too long for SMTP (over 998 octets)")
+
 // Has8Bit reports whether b holds any octet outside US-ASCII.
 func Has8Bit(b []byte) bool {
 	for _, c := range b {

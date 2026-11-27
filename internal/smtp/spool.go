@@ -30,6 +30,8 @@ type spool struct {
 	file      *os.File
 	w         *bufio.Writer
 	bodyN     int64
+	maxLine   int // longest line allowed, CR LF excluded; 0 for none (DATA checks its lines itself)
+	lineLen   int // octets of the current line so far
 }
 
 // newSpool opens a spool whose body file is created by create (in the blob store's directory, so
@@ -45,6 +47,19 @@ func newSpool(create func() (*os.File, error)) (*spool, error) {
 // Write takes the next bytes of the message as stored (line ends as they will be kept).
 func (sp *spool) Write(p []byte) (int, error) {
 	n := len(p)
+	if sp.maxLine > 0 {
+		for _, c := range p {
+			switch c {
+			case '\n':
+				sp.lineLen = 0
+			case '\r':
+			default:
+				if sp.lineLen++; sp.lineLen > sp.maxLine {
+					return 0, ErrLineTooLong
+				}
+			}
+		}
+	}
 	if !sp.inBody {
 		end := len(p)
 		for i, c := range p {
