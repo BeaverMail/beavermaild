@@ -8,36 +8,25 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BeaverMail/beavermaild/internal/scaletest"
 	"github.com/BeaverMail/beavermaild/mimetree"
 )
-
-// within fails t when fn runs longer than limit: these classes turn a small message into minutes
-// of CPU, so a generous bound still tells linear from quadratic. The race detector slows code
-// down about tenfold, so the bound grows with it.
-func within(t *testing.T, limit time.Duration, fn func()) {
-	t.Helper()
-	if raceEnabled {
-		limit *= 10
-	}
-	start := time.Now()
-	fn()
-	if d := time.Since(start); d > limit {
-		t.Fatalf("took %v, want under %v", d, limit)
-	}
-}
 
 // CVE-2026-27859 class (Dovecot): a Content-Type with very many parameters must not cost
 // quadratic CPU in BODYSTRUCTURE. The parameter list used to be sorted with an O(n²) loop.
 func TestCVE_2026_27859_ManyMIMEParams(t *testing.T) {
-	var ct strings.Builder
-	ct.WriteString("text/plain")
-	for i := range 50000 {
-		fmt.Fprintf(&ct, "; p%d=v", i)
-	}
-	raw := []byte("Content-Type: " + ct.String() + "\r\n\r\nbody\r\n")
-	within(t, 2*time.Second, func() {
-		if bs := formatBodyStructure(raw); !strings.Contains(bs, `"P49999" "v"`) {
-			t.Fatalf("parameter missing: %.200s", bs)
+	scaletest.Linear(t, 20000, func(n int) func() {
+		var ct strings.Builder
+		ct.WriteString("text/plain")
+		for i := range n {
+			fmt.Fprintf(&ct, "; p%d=v", i)
+		}
+		raw := []byte("Content-Type: " + ct.String() + "\r\n\r\nbody\r\n")
+		last := fmt.Sprintf(`"P%d" "v"`, n-1)
+		return func() {
+			if bs := formatBodyStructure(raw); !strings.Contains(bs, last) {
+				t.Fatalf("parameter missing: %.200s", bs)
+			}
 		}
 	})
 }
@@ -123,16 +112,19 @@ func nestedMessages(n int) []byte {
 // 12.8 s per BODYSTRUCTURE. Past mimetree.MaxDepth a part is one opaque leaf, the same in BODYSTRUCTURE,
 // BODY[section] and BINARY.
 func TestCVE_2020_12100_DeepMIMENesting(t *testing.T) {
-	for name, raw := range map[string][]byte{"multipart": nestedMultipart(24000), "message": nestedMessages(24000)} {
-		within(t, 2*time.Second, func() {
-			bs := formatBodyStructure(raw)
-			if !strings.Contains(bs, `"APPLICATION" "OCTET-STREAM"`) {
-				t.Fatalf("%s: no opaque leaf at the depth limit", name)
+	for name, nested := range map[string]func(int) []byte{"multipart": nestedMultipart, "message": nestedMessages} {
+		scaletest.Linear(t, 6000, func(n int) func() {
+			raw := nested(n)
+			return func() {
+				bs := formatBodyStructure(raw)
+				if !strings.Contains(bs, `"APPLICATION" "OCTET-STREAM"`) {
+					t.Fatalf("%s: no opaque leaf at the depth limit", name)
+				}
+				if depth := strings.Count(bs, "(("); depth > 2*mimetree.MaxDepth {
+					t.Fatalf("%s: structure %d levels deep", name, depth)
+				}
+				_ = base64NULParts(append(raw, 0))
 			}
-			if depth := strings.Count(bs, "(("); depth > 2*mimetree.MaxDepth {
-				t.Fatalf("%s: structure %d levels deep", name, depth)
-			}
-			_ = base64NULParts(append(raw, 0))
 		})
 	}
 
@@ -174,26 +166,30 @@ func TestPreAuthIdleTimeout(t *testing.T) {
 // BODYSTRUCTURE was 251 MB built from 22 GB of allocations in 5 s, on every FETCH of a message any
 // SMTP sender can deliver. The tree keeps mimetree.MaxParts parts; BODY[n] numbers the same parts.
 func TestManyMIMEParts(t *testing.T) {
-	var b strings.Builder
-	b.WriteString("Content-Type: multipart/mixed; boundary=m\r\n\r\n")
-	for b.Len() < 32<<20 {
-		b.WriteString("--m\r\n\r\n")
-	}
-	b.WriteString("--m--\r\n")
-	raw := []byte(b.String())
-	within(t, 3*time.Second, func() {
-		bs := formatBodyStructure(raw)
-		if n := strings.Count(bs, `("TEXT"`); n != mimetree.MaxParts-1 || len(bs) > 1<<20 {
-			t.Fatalf("%d parts, %d bytes", n, len(bs))
+	scaletest.Linear(t, 2<<20, func(size int) func() {
+		var b strings.Builder
+		b.WriteString("Content-Type: multipart/mixed; boundary=m\r\n\r\n")
+		for b.Len() < size { // over mimetree.MaxParts parts at any size tried
+			b.WriteString("--m\r\n\r\n")
 		}
-		last := fmt.Sprint(mimetree.MaxParts - 1)
-		if got := extractBodySection(raw, last, nil); !strings.HasSuffix(string(got), "--m--\r\n") {
-			t.Fatalf("BODY[%s] does not hold the rest: %d bytes", last, len(got))
-		}
-		if got := extractBodySection(raw, fmt.Sprint(mimetree.MaxParts), nil); len(got) != 0 {
-			t.Fatalf("a part past the limit returned %d bytes", len(got))
-		}
+		b.WriteString("--m--\r\n")
+		raw := []byte(b.String())
+		return func() { manyMIMEPartsChecks(t, raw) }
 	})
+}
+
+func manyMIMEPartsChecks(t *testing.T, raw []byte) {
+	bs := formatBodyStructure(raw)
+	if n := strings.Count(bs, `("TEXT"`); n != mimetree.MaxParts-1 || len(bs) > 1<<20 {
+		t.Fatalf("%d parts, %d bytes", n, len(bs))
+	}
+	last := fmt.Sprint(mimetree.MaxParts - 1)
+	if got := extractBodySection(raw, last, nil); !strings.HasSuffix(string(got), "--m--\r\n") {
+		t.Fatalf("BODY[%s] does not hold the rest: %d bytes", last, len(got))
+	}
+	if got := extractBodySection(raw, fmt.Sprint(mimetree.MaxParts), nil); len(got) != 0 {
+		t.Fatalf("a part past the limit returned %d bytes", len(got))
+	}
 }
 
 // RFC 2046 5.1.2: a multipart with no close delimiter keeps its last part; it was dropped, so the

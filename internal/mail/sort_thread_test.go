@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/BeaverMail/beavermaild/internal/mail"
+	"github.com/BeaverMail/beavermaild/internal/scaletest"
 	"github.com/BeaverMail/beavermaild/internal/storage"
 )
 
@@ -249,34 +250,41 @@ func TestThreadSubjectCasemap(t *testing.T) {
 // A References field of 20000 ids (inside the 256 KiB header limit) built its chain in O(K^2):
 // about 0.25 s per message, for every THREAD of the folder.
 func TestThreadLongReferences(t *testing.T) {
-	t.Parallel()
-	msgs := make([]mail.Message, 10)
+	msgs := make([]mail.Message, 30)
 	for i := range msgs {
 		msgs[i].UID = uint32(i + 1)
 	}
-	load := mail.BytesLoader(func(m mail.Message) ([]byte, error) {
-		var b strings.Builder
-		b.WriteString("References:")
-		for i := range 20000 {
-			b.WriteString(" <" + strconv.Itoa(int(m.UID)) + "." + strconv.Itoa(i) + "@x>")
-		}
-		b.WriteString("\r\n\r\n")
-		return []byte(b.String()), nil
-	})
 	all := mail.SearchExpr{Kind: mail.SearchExprCrit, Crit: mail.SearchCriteria{All: true}}
-	start := time.Now()
-	mail.ThreadReferences(msgs, all, load)
-	if d := time.Since(start); d > time.Second {
-		t.Fatalf("THREAD of 10 messages took %v", d)
-	}
+	// 20000 ids is about the most a header within its 256 KiB limit holds.
+	scaletest.LinearUpTo(t, 5000, 20000, func(n int) func() {
+		raw := map[uint32][]byte{}
+		for _, m := range msgs {
+			var b strings.Builder
+			b.WriteString("References:")
+			for i := range n {
+				b.WriteString(" <" + strconv.Itoa(int(m.UID)) + "." + strconv.Itoa(i) + "@x>")
+			}
+			b.WriteString("\r\n\r\n")
+			raw[m.UID] = []byte(b.String())
+		}
+		load := mail.BytesLoader(func(m mail.Message) ([]byte, error) { return raw[m.UID], nil })
+		return func() { mail.ThreadReferences(msgs, all, load) }
+	})
 }
 
 // A chain far deeper than any real thread, built cheaply by a few large messages, then cited with
 // a root that has children by thousands of small ones: each link walked the whole chain, minutes
 // of CPU per THREAD at full scale. The walk is bounded per message.
 func TestThreadDeepChainWalk(t *testing.T) {
-	t.Parallel()
-	const chains, chainLen, pairs = 5, 20000, 3000
+	// 20000 links per chain message stay within the 256 KiB header limit.
+	scaletest.LinearUpTo(t, 5000, 20000, func(chainLen int) func() { return deepChainThread(t, chainLen) })
+}
+
+// deepChainThread builds the deep-chain mailbox with chains of chainLen links and as many citing
+// pairs as 3/20 of it, and returns the THREAD over it.
+func deepChainThread(t *testing.T, chainLen int) func() {
+	const chains = 5
+	pairs := chainLen * 3 / 20
 	msgs := make([]mail.Message, chains+2*pairs)
 	for i := range msgs {
 		msgs[i].UID = uint32(i + 1)
@@ -299,12 +307,9 @@ func TestThreadDeepChainWalk(t *testing.T) {
 		return []byte(b.String()), nil
 	})
 	all := mail.SearchExpr{Kind: mail.SearchExprCrit, Crit: mail.SearchCriteria{All: true}}
-	start := time.Now()
-	threads := mail.ThreadReferences(msgs, all, load)
-	if d := time.Since(start); d > time.Second {
-		t.Fatalf("THREAD of %d messages took %v", len(msgs), d)
-	}
-	if len(threads) == 0 {
-		t.Fatal("no threads")
+	return func() {
+		if threads := mail.ThreadReferences(msgs, all, load); len(threads) == 0 {
+			t.Fatal("no threads")
+		}
 	}
 }

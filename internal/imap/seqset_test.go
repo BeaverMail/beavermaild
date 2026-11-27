@@ -5,7 +5,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
+
+	"github.com/BeaverMail/beavermaild/internal/scaletest"
 )
 
 func TestParseSeqSetExpand(t *testing.T) {
@@ -80,26 +81,29 @@ func TestParseStatusArg(t *testing.T) {
 }
 
 // A UID set as long as a command line allows (RFC 7162 4 makes long sets normal) must not cost
-// ranges x messages: 10000 single UIDs on 100000 messages took 0.3 s per UID command.
+// ranges x messages: 10000 single UIDs on 100000 messages took 0.3 s per UID command. Both grow
+// here (a UID every 10 messages), so that cost would be quadratic.
 func TestExpandUIDLongSetLinear(t *testing.T) {
-	msgs := make([]messageRef, 100000)
-	for i := range msgs {
-		msgs[i] = messageRef{uid: uint32(i + 1)}
-	}
-	var b strings.Builder
-	for uid := 1; b.Len() < maxLineBytes-100; uid += 10 {
-		if b.Len() > 0 {
-			b.WriteByte(',')
+	scaletest.Linear(t, 100000, func(n int) func() {
+		msgs := make([]messageRef, n)
+		for i := range msgs {
+			msgs[i] = messageRef{uid: uint32(i + 1)}
 		}
-		b.WriteString(strconv.Itoa(uid))
-	}
-	set, err := parseSeqSet(b.String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	within(t, 60*time.Millisecond, func() {
-		if got := set.expandUID(msgs); len(got) != 10000 || msgs[got[9999]].uid != 99991 {
-			t.Fatalf("%d indices", len(got))
+		var b strings.Builder
+		for uid := 1; uid <= n; uid += 10 {
+			if b.Len() > 0 {
+				b.WriteByte(',')
+			}
+			b.WriteString(strconv.Itoa(uid))
+		}
+		set, err := parseSeqSet(b.String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return func() {
+			if got := set.expandUID(msgs); len(got) != n/10 || msgs[got[len(got)-1]].uid != uint32(n-9) {
+				t.Fatalf("%d indices", len(got))
+			}
 		}
 	})
 }
