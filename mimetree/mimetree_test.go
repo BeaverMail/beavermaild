@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/BeaverMail/beavermaild/internal/scaletest"
 )
 
 func TestStructure(t *testing.T) {
@@ -191,4 +193,20 @@ func TestHeaderEndMixedLineEnds(t *testing.T) {
 			t.Errorf("%q: a body line read as a header field", raw)
 		}
 	}
+}
+
+// A field folded over many lines costs linear time: each continuation was appended to the stored
+// value, copying the whole field per line. A part header lies in the body, so it is as large as the
+// message: 20000 lines took 80 ms and 80000 lines 1.1 s, minutes at 10 MB, on every BODYSTRUCTURE
+// and antispam scan of such a message.
+func TestFoldedFieldLinear(t *testing.T) {
+	scaletest.Linear(t, 20000, func(n int) func() {
+		raw := []byte("Subject: a" + strings.Repeat("\r\n a", n) + "\r\nContent-Type: text/plain\r\n\r\nbody\r\n")
+		want := "a" + strings.Repeat(" a", n)
+		return func() {
+			if p := Parse(raw); p.MIME.Get("Subject") != want || p.Type != "text/plain" || p.BadHeader {
+				t.Fatalf("subject of %d octets, type %q, bad %v", len(p.MIME.Get("Subject")), p.Type, p.BadHeader)
+			}
+		}
+	})
 }

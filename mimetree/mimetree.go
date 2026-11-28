@@ -122,35 +122,45 @@ func mediaType(ct string, inDigest bool) (string, map[string]string, bool) {
 func readHeader(h []byte) (textproto.MIMEHeader, bool) {
 	out := textproto.MIMEHeader{}
 	bad := false
-	var last []string
+	// The field being read is built in one buffer and stored once: appending each continuation to
+	// the stored value copied the whole field per line, quadratic in a field folded many times.
+	var key string // "" when no field is open
+	var val strings.Builder
+	flush := func() {
+		if key != "" {
+			out[key] = append(out[key], val.String())
+		}
+	}
 	for _, line := range strings.Split(string(h), "\n") {
 		line = strings.TrimSuffix(line, "\r")
 		if line == "" {
 			break
 		}
 		if line[0] == ' ' || line[0] == '\t' {
-			if last == nil {
+			if key == "" {
 				bad = true
 				continue
 			}
 			if v := strings.TrimSpace(line); v != "" {
-				if last[len(last)-1] != "" {
-					v = " " + v
+				if val.Len() > 0 {
+					val.WriteByte(' ')
 				}
-				last[len(last)-1] += v
+				val.WriteString(v)
 			}
 			continue
 		}
+		flush()
 		name, value, ok := strings.Cut(line, ":")
 		name = strings.TrimRight(name, " \t")
 		if !ok || !validFieldName(name) {
-			bad, last = true, nil
+			bad, key = true, ""
 			continue
 		}
-		key := textproto.CanonicalMIMEHeaderKey(name)
-		out[key] = append(out[key], strings.TrimSpace(value))
-		last = out[key]
+		key = textproto.CanonicalMIMEHeaderKey(name)
+		val.Reset()
+		val.WriteString(strings.TrimSpace(value))
 	}
+	flush()
 	return out, bad
 }
 
