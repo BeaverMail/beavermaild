@@ -137,6 +137,14 @@ func parseMessage(raw []byte) *message {
 
 func parseHeaderBlock(block string) []header {
 	var out []header
+	// Continuations go to one buffer, stored when the field ends: appending them to the stored
+	// value copied the whole field per line, quadratic in a field folded many times.
+	var val strings.Builder
+	flush := func() {
+		if len(out) > 0 {
+			out[len(out)-1].raw = val.String()
+		}
+	}
 	for _, line := range strings.Split(strings.ReplaceAll(block, "\r\n", "\n"), "\n") {
 		if line == "" {
 			continue
@@ -145,15 +153,20 @@ func parseHeaderBlock(block string) []header {
 			if len(out) == 0 {
 				continue
 			}
-			out[len(out)-1].raw += " " + strings.TrimSpace(line)
+			val.WriteByte(' ')
+			val.WriteString(strings.TrimSpace(line))
 			continue
 		}
-		name, val, ok := strings.Cut(line, ":")
+		name, v, ok := strings.Cut(line, ":")
 		if !ok || name == "" || strings.ContainsAny(name, " \t") {
 			continue
 		}
-		out = append(out, header{name: name, raw: strings.TrimSpace(val), emptySep: val != "" && val[0] != ' ' && val[0] != '\t'})
+		flush()
+		val.Reset()
+		val.WriteString(strings.TrimSpace(v))
+		out = append(out, header{name: name, emptySep: v != "" && v[0] != ' ' && v[0] != '\t'})
 	}
+	flush()
 	return out
 }
 

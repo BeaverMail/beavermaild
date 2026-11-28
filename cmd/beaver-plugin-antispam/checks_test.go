@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/BeaverMail/beavermaild/internal/scaletest"
 )
 
 // eml joins header lines and a body into a CRLF message.
@@ -381,4 +383,19 @@ func TestCheckARC(t *testing.T) {
 	if defaultScores["ARC_ALLOW_UNTRUSTED"] != 0 || defaultScores["ARC_REJECT"] != 0 || defaultScores["ARC_ALLOW"] >= 0 {
 		t.Fatalf("scores: untrusted %v reject %v allow %v", defaultScores["ARC_ALLOW_UNTRUSTED"], defaultScores["ARC_REJECT"], defaultScores["ARC_ALLOW"])
 	}
+}
+
+// A field folded over many lines costs linear time (each continuation used to copy the whole
+// field: 80000 lines took 0.74 s, seconds for a 1 MiB header on every scanned message).
+func TestParseHeaderBlockFoldedLinear(t *testing.T) {
+	scaletest.Linear(t, 20000, func(n int) func() {
+		block := "Subject: a" + strings.Repeat("\r\n a", n) + "\r\nFrom: b@example.org\r\n"
+		want := "a" + strings.Repeat(" a", n)
+		return func() {
+			h := parseHeaderBlock(block)
+			if len(h) != 2 || h[0].raw != want || h[1].raw != "b@example.org" {
+				t.Fatalf("%d fields", len(h))
+			}
+		}
+	})
 }
