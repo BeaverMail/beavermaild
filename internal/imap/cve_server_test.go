@@ -138,3 +138,38 @@ func TestPreAuthConnectionsPerIP(t *testing.T) {
 	_, r = dial()
 	expectPrefix(t, r, "* OK")
 }
+
+// The lines between literals count toward the command's limit, not only the literal bytes: before
+// login, empty literals ({0+}) each followed by a 60 KB line made one LOGIN grow without end (22 MB
+// held, then a NO), every line copying the whole command again. Now BYE [TOOBIG] within the
+// pre-login limit, and the server reads no more of it.
+func TestCommandLinesCountTowardLimit(t *testing.T) {
+	t.Parallel()
+	_, _, _, ln, cleanup := startIMAPTestServer(t)
+	defer cleanup()
+	c, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	_ = c.SetDeadline(time.Now().Add(20 * time.Second))
+	r := bufio.NewReader(c)
+	expectPrefix(t, r, "* OK")
+	sent := make(chan int, 1)
+	go func() {
+		n := 0
+		_, _ = c.Write([]byte("a LOGIN {0+}\r\n"))
+		line := []byte(strings.Repeat("x", 60000) + " {0+}\r\n")
+		for range 400 { // 24 MB, never ended
+			if _, err := c.Write(line); err != nil {
+				break
+			}
+			n += len(line)
+		}
+		sent <- n
+	}()
+	expectPrefix(t, r, "* BYE [TOOBIG]")
+	if n := <-sent; n > 4<<20 {
+		t.Errorf("server read %d bytes of one command before stopping it", n)
+	}
+}

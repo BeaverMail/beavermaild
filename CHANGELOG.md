@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Security (IMAP, before login): the lines between the literals of one command now count toward
+  its limit (8 KiB before login, 64 KiB after). Empty literals each followed by a long line let an
+  anonymous client make the server hold one command of any size (22 MB in a test, then more), and
+  every line copied the whole command again.
 - Fix (SMTP, RFC 2045 / RFC 3030 / RFC 6152): a NUL octet in a message is refused (554 5.6.0), by
   DATA and BDAT: it is binary content, which needs BINARYMIME (not offered). The client never
   sends one: such a message (stored with IMAP APPEND) fails for good with a DSN (5.6.0), and

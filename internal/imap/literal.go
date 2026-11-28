@@ -7,9 +7,11 @@ import (
 	"strings"
 )
 
-// maxCommandLiteralBytes caps the literal bytes one command may carry (APPEND reads its messages
-// itself, under MaxAppendBytes). Before login a client only needs room for a user name and a
-// password, so an anonymous connection cannot make the server hold more than a few KiB.
+// maxCommandLiteralBytes caps what one command may carry past its first line: its literals and the
+// lines that follow them (APPEND reads its messages itself, under MaxAppendBytes). Before login a
+// client only needs room for a user name and a password, so an anonymous connection cannot make the
+// server hold more than a few KiB. The lines count too: empty literals ({0+}) each followed by a
+// long line made one command grow without end.
 const (
 	maxCommandLiteralBytes = 64 << 10
 	maxPreAuthLiteralBytes = 8 << 10
@@ -34,16 +36,19 @@ func (s *session) readCommandLiterals(tag, arg string) (out string, ok bool, err
 	if s.principal.AccountID == 0 {
 		limit = maxPreAuthLiteralBytes
 	}
+	var b strings.Builder // one copy of the command, never rebuilt per literal
+	b.WriteString(arg)
 	line, lit8 := arg, false
 	for {
 		n, nonSync, found := literalMarker(line)
 		if !found {
 			// Refused only once every literal is read, so none is taken for a command. No string
 			// holds NUL (RFC 3501 9 CHAR8; CVE-2019-11500, CVE-2007-5740 class).
-			switch {
-			case lit8:
+			if lit8 {
 				return "", false, s.tagged(tag, errLiteral8)
-			case strings.IndexByte(arg, 0) >= 0:
+			}
+			arg = b.String()
+			if strings.IndexByte(arg, 0) >= 0 {
 				return "", false, s.tagged(tag, "BAD NUL in a command")
 			}
 			return arg, true, nil
@@ -76,7 +81,16 @@ func (s *session) readCommandLiterals(tag, arg string) (out string, ok bool, err
 		if line, err = s.readLine(); err != nil {
 			return "", false, err
 		}
-		arg += "\r\n" + string(lit) + line
+		if total += len(line); total > limit {
+			if _, nonSync, found := literalMarker(line); found && nonSync {
+				_ = s.untagged("BYE [TOOBIG] command too large")
+				return "", false, errLiteralTooLarge
+			}
+			return "", false, s.tagged(tag, "BAD command too large")
+		}
+		b.WriteString("\r\n")
+		b.Write(lit)
+		b.WriteString(line)
 	}
 }
 
