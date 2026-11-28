@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BeaverMail/beavermaild/internal/scaletest"
 	"github.com/emersion/go-msgauth/dkim"
 )
 
@@ -20,7 +21,8 @@ import (
 type testDNS struct {
 	pub     ed25519.PublicKey
 	records map[string]string
-	block   bool // wait for the context instead of answering
+	block   bool   // wait for the context instead of answering
+	keyNote string // n= tag padding the key record
 }
 
 func (d *testDNS) lookup(ctx context.Context, name string) ([]string, error) {
@@ -30,7 +32,7 @@ func (d *testDNS) lookup(ctx context.Context, name string) ([]string, error) {
 	}
 	name = strings.TrimSuffix(name, ".")
 	if strings.HasPrefix(name, "sel._domainkey.") {
-		return []string{"v=DKIM1; k=ed25519; p=" + base64.StdEncoding.EncodeToString(d.pub)}, nil
+		return []string{"v=DKIM1; k=ed25519; n=" + d.keyNote + "; p=" + base64.StdEncoding.EncodeToString(d.pub)}, nil
 	}
 	if r, ok := d.records[name]; ok {
 		return []string{r}, nil
@@ -217,4 +219,41 @@ func TestDMARCUnicodeSigningDomain(t *testing.T) {
 	if st := eom(t, dns, time.Second, sign(t, key, "münchen.example", msgFrom("<a@xn--mnchen-3ya.example>"))); st.DMARC != "pass" {
 		t.Fatalf("dkim %q dmarc %q", st.DKIM, st.DMARC)
 	}
+}
+
+// K6 (RFC 6376 8.13): a key record past maxDKIMKeyRecord is not used, however valid the signature:
+// the record is the only bound on an RSA modulus, whose verification cost grows with it.
+func TestDKIMKeyRecordBounded(t *testing.T) {
+	t.Parallel()
+	dns, key := newDNS(t)
+	msg := sign(t, key, "victim.example", msgFrom("<ceo@victim.example>"))
+	dns.keyNote = strings.Repeat("n", 1900) // record within the bound: still used
+	if st := eom(t, dns, time.Second, msg); st.DKIM != "pass" {
+		t.Fatalf("dkim %q with a %d-octet note, want pass", st.DKIM, len(dns.keyNote))
+	}
+	dns.keyNote = strings.Repeat("n", 3000)
+	if st := eom(t, dns, time.Second, msg); st.DKIM != "permerror" {
+		t.Fatalf("dkim %q with an oversized key record, want permerror", st.DKIM)
+	}
+}
+
+// Q1 (go-msgauth readHeader, fixed in the BeaverMail fork named in go.mod): verifying a message with a field
+// folded over many lines costs linear time. Upstream copies the field whole per continuation line:
+// 10000 lines took 24 ms, 40000 lines 0.5 s, seconds within the 1 MiB header any sender may send.
+func TestReadHeaderFoldedLinear(t *testing.T) {
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := "v=DKIM1; k=ed25519; p=" + base64.StdEncoding.EncodeToString(pub)
+	opts := &dkim.VerifyOptions{LookupTXT: func(string) ([]string, error) { return []string{rec}, nil }}
+	scaletest.Linear(t, 10000, func(n int) func() {
+		msg := "DKIM-Signature: v=1; a=ed25519-sha256; d=example.org; s=s; h=from; bh=AAAA; b=AAAA\r\n" +
+			"From: a@example.org" + strings.Repeat("\r\n a", n) + "\r\n\r\nbody\r\n"
+		return func() {
+			if v, err := dkim.VerifyWithOptions(strings.NewReader(msg), opts); err != nil || len(v) != 1 {
+				t.Fatalf("%d verifications, %v", len(v), err)
+			}
+		}
+	})
 }

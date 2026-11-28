@@ -142,14 +142,29 @@ func (v *Verifier) arcLookupTXT() arc.LookupTXT {
 // verifyDKIM verifies bounded signatures using the verifier DNS seam. It returns the result, the
 // signing domain (of the first passing signature, else of the first one) and the domains of every
 // passing signature, which DMARC alignment needs (any of them may align with From).
+// maxDKIMKeyRecord bounds a DKIM key record: an RSA key of 8192 bits with every tag fits (the ARC
+// verifier's limit). Go caps the RSA exponent, not the modulus, and verifying grows with it: a
+// 131072-bit key in the record of a sender's own domain took 40 ms a signature, 8 per message
+// (RFC 6376 8.13).
+const maxDKIMKeyRecord = 2048
+
 func (v *Verifier) verifyDKIM(ctx context.Context, bodyPath string) (result, domain string, passed []string) {
 	f, err := os.Open(bodyPath)
 	if err != nil {
 		return "temperror", "", nil
 	}
 	defer f.Close()
+	lookup := v.lookupTXT(ctx)
 	verifs, err := dkim.VerifyWithOptions(f, &dkim.VerifyOptions{
-		LookupTXT:        v.lookupTXT(ctx),
+		LookupTXT: func(name string) ([]string, error) {
+			txts, err := lookup(name)
+			for _, r := range txts {
+				if len(r) > maxDKIMKeyRecord {
+					return nil, fmt.Errorf("dkim: key record of %d octets, over %d", len(r), maxDKIMKeyRecord) // permerror
+				}
+			}
+			return txts, err
+		},
 		MaxVerifications: 8, // bounds the DNS and hashing work a sender can ask for
 	})
 	// Past 8 signatures the first 8 are still verified (RFC 6376 6.1: one passing is enough).

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Security (MIME, DKIM, ARC, antispam): a header field folded over many lines no longer costs
+  quadratic time. Each continuation line copied the whole field: a MIME part header, as large as
+  the message, could take minutes of CPU on every IMAP BODYSTRUCTURE and antispam scan; DKIM
+  verification (in go-msgauth, used from a fork with the fix until upstream releases it), ARC and the
+  antispam header parser took seconds per message. Any sender could trigger them.
+- Security (DKIM, RFC 6376 8.13): a DKIM key record over 2048 octets (an 8192-bit RSA key with every
+  tag fits) is a permanent error. The RSA modulus had no bound, and its verification cost grows
+  with it (40 ms per signature at 131072 bits, 8 signatures per message).
 - Security (IMAP, before login): the lines between the literals of one command now count toward
   its limit (8 KiB before login, 64 KiB after). Empty literals each followed by a long line let an
   anonymous client make the server hold one command of any size (22 MB in a test, then more), and
