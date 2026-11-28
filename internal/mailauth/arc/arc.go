@@ -184,7 +184,13 @@ func readHeaderLine(br *bufio.Reader, max int) (line []byte, ended bool, err err
 func parseHeaders(block []byte) ([]header, error) {
 	lines := bytes.Split(block, []byte("\r\n"))
 	headers := make([]header, 0, len(lines))
+	// A field is a span of block, cut once at the end: appending each continuation to the field
+	// copied it whole per line, quadratic in a field folded many times.
+	var spans [][2]int
+	end := -2
 	for _, line := range lines {
+		start := end + 2
+		end = start + len(line)
 		if len(line) == 0 {
 			return nil, errors.New("unexpected empty header line")
 		}
@@ -192,7 +198,7 @@ func parseHeaders(block []byte) ([]header, error) {
 			if len(headers) == 0 {
 				return nil, errors.New("orphaned header continuation")
 			}
-			headers[len(headers)-1].raw += "\r\n" + string(line)
+			spans[len(spans)-1][1] = end
 			continue
 		}
 		if len(headers) >= maxHeaderCount {
@@ -208,7 +214,11 @@ func parseHeaders(block []byte) ([]header, error) {
 				return nil, errors.New("invalid header field name")
 			}
 		}
-		headers = append(headers, header{name: name, raw: string(line)})
+		headers = append(headers, header{name: name})
+		spans = append(spans, [2]int{start, end})
+	}
+	for i, sp := range spans {
+		headers[i].raw = string(block[sp[0]:sp[1]])
 	}
 	return headers, nil
 }

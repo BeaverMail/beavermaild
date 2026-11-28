@@ -17,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/BeaverMail/beavermaild/internal/scaletest"
 )
 
 var (
@@ -267,4 +269,21 @@ func TestReadMessageStreamsBody(t *testing.T) {
 	if want := bodyDigestOf(body, "relaxed"); msg.body["relaxed"] != want {
 		t.Fatal("streamed digest differs from the whole-body one")
 	}
+}
+
+// A field folded over many lines costs linear time (each continuation used to copy the whole
+// field: 40000 lines took 0.43 s, about 1 s within the 256 KiB header limit, per verification).
+func TestReadMessageFoldedFieldLinear(t *testing.T) {
+	scaletest.LinearUpTo(t, 5000, 60000, func(n int) func() {
+		raw := "Subject: a" + strings.Repeat("\r\n a", n) + "\r\nFrom: b@example.org\r\n\r\nbody\r\n"
+		want := "Subject: a" + strings.Repeat("\r\n a", n)
+		return func() {
+			for range 20 { // the header limit keeps one read short: repeat it so the timing is not noise
+				msg, err := readMessage(strings.NewReader(raw))
+				if err != nil || len(msg.headers) != 2 || msg.headers[0].raw != want || msg.headers[1].raw != "From: b@example.org" {
+					t.Fatalf("%v, %d fields", err, len(msg.headers))
+				}
+			}
+		}
+	})
 }
