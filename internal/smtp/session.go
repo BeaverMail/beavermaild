@@ -98,11 +98,6 @@ type rcptTarget struct {
 	report    string // dmarc|tls: goes to the domain report store, never an INBOX
 }
 
-type smtpCommand struct {
-	cmd string
-	arg string
-}
-
 func newSession(log *slog.Logger, conn net.Conn, dir *directory.Local, inbox *mail.Inbox, queue *mail.Queue, certs *tlsload.Certs, secure, vrfyEnabled, submission bool, limits DataLimits, filter MessageFilter, filterTmpDir string, filterTimeoutMs int, mailAuth *mailauth.Verifier, gate security.AuthGate, sendGate security.SendGate, greylist *Greylist, asnLookup *ASNLookup, readTimeout time.Duration) *session {
 	if filter == nil {
 		filter = NopFilter{}
@@ -158,47 +153,73 @@ func (s *session) run(ctx context.Context) error {
 		_ = s.writef(reply)
 		return nil
 	}
+	// Commands are read and run one at a time: reading a whole pipelined group first let a client
+	// that never ends one (every TCP segment cut mid-line) grow it without limit.
+	mailBlocked := false
 	for {
-		cmds, err := s.readCommandBatch()
+		// RFC 2920 3.2 (7): held replies go out before a read that would wait for the client (no
+		// whole line buffered, a partial one included); past maxHeldReplies they go out anyway, so
+		// a client that keeps pipelining cannot grow them.
+		if !s.lineBuffered() || (s.held != nil && s.held.Len() >= maxHeldReplies) {
+			if err := s.flushReplies(); err != nil {
+				return err
+			}
+		}
+		line, err := s.readLine()
+		cmd, arg := cmdLineTooLong, ""
+		switch {
+		case errors.Is(err, errLineTooLong):
+		case err != nil:
+			return err
+		case line == "":
+			continue
+		default:
+			cmd, arg = parseCommand(line)
+		}
+		// Never keep other arguments: AUTH carries credentials.
+		s.curCmd = cmd
+		if cmd == "MAIL" || cmd == "RCPT" {
+			s.curCmd = cmd + " " + arg
+		}
+		// RFC 2920 3.2 (2): replies to RSET, MAIL and RCPT inside a group go out together; any
+		// other command sends them first (5)-(6).
+		if s.pipelining && groupedReply(cmd) {
+			s.holdReplies()
+		} else if err := s.flushReplies(); err != nil {
+			return err
+		}
+		stop, blockMail, err := s.dispatch(ctx, cmd, arg, mailBlocked)
+		if blockMail {
+			mailBlocked = true
+		}
+		if err != nil || stop {
+			_ = s.flushReplies() // what was answered still reaches the client
+		}
+		if errors.Is(err, errCloseSession) {
+			return nil
+		}
 		if err != nil {
 			return err
 		}
-		mailBlocked := false
-		for i, c := range cmds {
-			// Never keep other arguments: AUTH carries credentials.
-			s.curCmd = c.cmd
-			if c.cmd == "MAIL" || c.cmd == "RCPT" {
-				s.curCmd = c.cmd + " " + c.arg
-			}
-			// RFC 2920 3.2 (2): replies to RSET, MAIL and RCPT inside a group go out together; any
-			// other command, and the end of the group, sends them first (5)-(7).
-			if groupedReply(c.cmd) && i < len(cmds)-1 {
-				s.holdReplies()
-			} else if err := s.flushReplies(); err != nil {
-				return err
-			}
-			stop, blockMail, err := s.dispatch(ctx, c.cmd, c.arg, mailBlocked)
-			if blockMail {
-				mailBlocked = true
-			}
-			if err != nil || stop {
-				_ = s.flushReplies() // what was answered still reaches the client
-			}
-			if errors.Is(err, errCloseSession) {
-				return nil
-			}
-			if err != nil {
-				return err
-			}
-			if stop {
-				return nil
-			}
+		if stop {
+			return nil
 		}
-		if err := s.flushReplies(); err != nil {
-			return err
+		// A refused MAIL blocks the RCPT and DATA of its own group only: the group ends at a command
+		// that must be its last (RFC 2920 3.1) or where the input runs out.
+		if !s.pipelining || !pipelineContinues(cmd) || !s.lineBuffered() {
+			mailBlocked = false
 		}
 	}
 }
+
+// lineBuffered reports whether a whole command line is already buffered, so reading it does not wait.
+func (s *session) lineBuffered() bool {
+	b, _ := s.r.Peek(s.r.Buffered())
+	return bytes.IndexByte(b, '\n') >= 0
+}
+
+// maxHeldReplies bounds the replies held for one pipelined group (RFC 2920 3.2 (2) is a SHOULD).
+const maxHeldReplies = 4096
 
 // groupedReply reports the commands whose replies RFC 2920 3.2 (2) lets a server hold and send
 // together with the rest of the group.
@@ -221,36 +242,11 @@ func (s *session) flushReplies() error {
 	if held.Len() == 0 {
 		return nil
 	}
-	_, err := s.conn.Write(held.Bytes())
-	return err
+	return s.write(held.String())
 }
 
-func (s *session) readCommandBatch() ([]smtpCommand, error) {
-	var batch []smtpCommand
-	for {
-		line, err := s.readLine()
-		if errors.Is(err, errLineTooLong) {
-			batch = append(batch, smtpCommand{cmd: cmdLineTooLong})
-			break
-		}
-		if err != nil {
-			return batch, err
-		}
-		if line == "" {
-			continue
-		}
-		cmd, arg := parseCommand(line)
-		batch = append(batch, smtpCommand{cmd: cmd, arg: arg})
-		if !s.pipelining || !pipelineContinues(cmd) {
-			break
-		}
-		if s.r.Buffered() == 0 {
-			break
-		}
-	}
-	return batch, nil
-}
-
+// pipelineContinues reports the commands that do not end a pipelined group: those RFC 2920 3.1 allows
+// anywhere in one, plus NOOP, HELP, VRFY, EXPN and the like, tolerated there although 3.1 puts them last.
 func pipelineContinues(cmd string) bool {
 	switch cmd {
 	case "MAIL", "RCPT", "RSET", "NOOP", "HELP", "VRFY", "EXPN", "ETRN", "ATRN", "BURL":
@@ -732,8 +728,7 @@ func (s *session) writeEHLO(extended bool) error {
 	if replyHook != nil {
 		replyHook(s.curCmd, reply)
 	}
-	_, err := io.WriteString(s.conn, reply)
-	return err
+	return s.write(reply)
 }
 
 // cmdAuth handles AUTH on submission listeners after TLS is active (RFC 4954 4).
@@ -1269,7 +1264,16 @@ func (s *session) writef(format string, args ...any) error {
 		s.held.WriteString(line)
 		return nil
 	}
-	_, err := io.WriteString(s.conn, line)
+	return s.write(line)
+}
+
+// write sends to the client under the same timeout as reads (as Postfix's smtpd_timeout): a client
+// that pipelines commands and never reads the replies would otherwise hold its session forever.
+func (s *session) write(p string) error {
+	if s.readTimeout > 0 {
+		_ = s.conn.SetWriteDeadline(time.Now().Add(s.readTimeout))
+	}
+	_, err := io.WriteString(s.conn, p)
 	return err
 }
 

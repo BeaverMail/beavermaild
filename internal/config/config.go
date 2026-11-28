@@ -156,7 +156,7 @@ type SMTPConfig struct {
 	// so ordinary senders never hit it while 10 addresses are needed to fill max_connections;
 	// -1 = unlimited.
 	MaxConnectionsPerIP int    `json:"max_connections_per_ip"`
-	ReadTimeout         string `json:"read_timeout"` // default 5m; "0" = disabled
+	ReadTimeout         string `json:"read_timeout"` // default 5m, also bounds each reply write; "0" = disabled
 }
 
 // SubmissionRateLimitConfig limits accepted messages per authenticated principal.

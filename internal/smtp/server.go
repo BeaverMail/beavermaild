@@ -33,7 +33,7 @@ type Options struct {
 	Greylist        *Greylist
 	ASNLookup       *ASNLookup
 	MaxConnections  int           // 0 = unlimited (tests); positive = per-listener cap
-	ReadTimeout     time.Duration // 0 = no idle read deadline
+	ReadTimeout     time.Duration // bounds each command read and each reply write; 0 = none
 	Status          *servicestatus.Registry
 	Hostname        string // banner and EHLO name (default "localhost")
 	// MaxConnectionsPerIP caps concurrent inbound (port 25) sessions of one client network, IPv4

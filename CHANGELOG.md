@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Security (SMTP, RFC 2920): a pipelined command group is no longer read ahead in full. A client
+  that kept its group open (every TCP segment cut mid-line) made the server hold every command in
+  memory, about 13 times what it sent (200 MiB of NOOP, 2.6 GiB). Commands now run as they are
+  read, and the replies held for a group are bounded.
+- Security (SMTP): `smtp.read_timeout` (default 5 minutes) now also bounds each reply write. A
+  client that pipelined commands and never read the replies held its session forever.
+- Fix (SMTP, RFC 2920 3.2 (7)): held replies go out as soon as no whole command line is buffered;
+  before, a partial line in the buffer kept them back while the server waited for the rest.
 - Security (MIME, DKIM, ARC, antispam): a header field folded over many lines no longer costs
   quadratic time. Each continuation line copied the whole field: a MIME part header, as large as
   the message, could take minutes of CPU on every IMAP BODYSTRUCTURE and antispam scan; DKIM
